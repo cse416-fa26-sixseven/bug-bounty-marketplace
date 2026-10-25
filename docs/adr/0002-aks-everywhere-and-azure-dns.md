@@ -4,6 +4,8 @@
 - **Date:** 2026-10-25
 - **Amended:** 2026-10-25, ingress moved from the app-routing add-on's managed NGINX to its Gateway
   API implementation (section 3), because Azure support for managed NGINX ends in November 2026.
+- **Amended:** 2026-10-25, PR previews get their own identity `gh-bbm-preview` that can push only
+  `bbm-preview/*` (ACR ABAC repository permissions), and `test` becomes main-only (section 4).
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
   interfaces. Everything else in 0001 still holds.
@@ -44,8 +46,10 @@
     Postgres (`postgres.inCluster.enabled=true`, image `<acr>/mirror/postgres:16-alpine`, `emptyDir`)
     and `secrets.provider=plain` with a per-namespace random DB password.
 - **Auto-resume:** before deploying, the ephemeral workflows check the test data RG's `power-state`
-  tag. `paused` → `env-power.sh test resume` (as `gh-bbm-ephemeral`), `running` → continue,
-  `down` → fail with "run env-power test up".
+  tag. `paused` → `env-power.sh test resume` (as `gh-bbm-ephemeral` or `gh-bbm-preview`), `running`
+  → continue, `down` → fail with "run env-power test up". A resume that finds a stop in progress
+  waits for it to finish, then starts. The nightly auto-pause of `test` first waits (up to 30 min)
+  for in-flight `integration-azure` / `preview` runs and skips that night if they are still busy.
 - AKS tier is a `compute` input `aks_sku_tier` (`Free` | `Standard`, default `Free`); only
   `envs/prod/compute.tfvars` sets `Standard`.
 
@@ -105,9 +109,14 @@ Hosts:
 - New per-cluster **platform** layer, installed once per cluster by
   `deploy/platform/install.sh <env> --values <values-infra.yaml> [--issuer letsencrypt-prod|letsencrypt-staging] [--wait]`
   (`values-infra.yaml` is the compute stack's `helm_values` output)
-  (called by `env-power up`, `deploy.yml`, the ephemeral workflows when the platform is missing, and
-  `up.sh`). It is idempotent, waits for the GatewayClass, and with `--wait` waits for the certificate
-  to be Ready and the Gateway to be `Programmed`:
+  (called by `env-power up`, `deploy.yml`, every CI run in environment `test` (`_ephemeral-env.yml`
+  on main, so merged platform changes reach the test cluster like staging/prod), and `up.sh`). PR
+  previews never install or upgrade it: they fail with "platform missing / outdated" when the
+  `bbm-platform` release is not deployed or namespace `bbm-platform`'s `bbm.io/platform-rev`
+  annotation (stamped by `install.sh` after each install: a hash of the cert-manager version and
+  values and the bbm-platform chart) differs from `install.sh --print-rev` of the checkout.
+  It is idempotent, waits for the GatewayClass, and with `--wait` waits for the certificate to be
+  Ready and the Gateway to be `Programmed`:
   1. `cert-manager` (jetstack chart, pinned version, namespace `cert-manager`, CRDs enabled, workload
      identity labels on the controller SA/pod).
   2. `deploy/helm/bbm-platform`, release `bbm-platform`, namespace `bbm-platform`:
@@ -131,7 +140,7 @@ Hosts:
 - **App chart:** an `HTTPRoute` (instead of an Ingress) in the release namespace, `parentRefs` →
   Gateway `bbm-platform/bbm`, `hostnames: [ingress.host]`, rules `/api` (prefix) and `/health`
   (exact) → api, `/` → web. TLS and the HTTP redirect live on the Gateway, so the chart has no TLS
-  settings and no per-namespace or per-PR certificates (no Let's Encrypt rate-limit risk). The value
+  settings and no per-namespace or per-PR certificates: CI runs and previews never issue one. The value
   keys stay `ingress.*` (`ingress.host` from `helm_values`, `ingress.gateway.{name,namespace}`).
   NetworkPolicies admit web/api traffic from pods labelled
   `gateway.networking.k8s.io/gateway-name=bbm` in namespace `bbm-platform` (the label Istio puts on
@@ -141,19 +150,56 @@ Hosts:
   before probing HTTPS. A namespace without the label cannot publish a host on the shared Gateway.
 - **Identity:** `stacks/data` creates UAMI `id-bbm-<env>-certmgr` and grants it **DNS Zone
   Contributor** on each of the env's public zones (zone scope only). `stacks/compute` adds the
-  federated credential `system:serviceaccount:cert-manager:cert-manager`. "DNS Zone Contributor" is
-  added to `env_delegable_roles` in `stacks/bootstrap/identities.tf`.
+  federated credential `system:serviceaccount:cert-manager:cert-manager` (on the test cluster it is
+  the only one: the app's `bbm/*`, `bbm-sandbox` and KEDA credentials exist only on staging/prod,
+  since ephemeral namespaces run without workload identity). "DNS Zone Contributor" is added to
+  `env_delegable_roles` in `stacks/bootstrap/identities.tf`.
+- **Let's Encrypt limits:** every env, test included, uses `letsencrypt-prod`. The limit that
+  matters is 5 certificates per exact set of names per 7 days (refilling one per 34 h;
+  [letsencrypt.org/docs/rate-limits](https://letsencrypt.org/docs/rate-limits/)): each `down`/`up`
+  of an env (compute destroy deletes the cluster and its `bbm-wildcard-tls` Secret) re-issues the
+  same wildcard; pause/resume does not (the Secret survives in etcd), and a routine renewal
+  (every ~60 days) uses at most one. More than about 5 `down`/`up` cycles of one env in a week
+  therefore fail issuance until the window refills; the fix then is `install.sh <env> --values ...
+  --issuer letsencrypt-staging` and back later. We accept that risk rather than defaulting test to `letsencrypt-staging`, because PR
+  previews are opened by people in browsers, and an untrusted certificate would also force every
+  CI client (curl health checks, the Node smoke/integration suites, Playwright e2e, k6) to skip
+  TLS verification for the test env only, so CI would stop exercising the TLS setup prod uses.
 
 ### 4. Identities
 
-- `gh-bbm-ephemeral` (GitHub Environments `test`, `preview`) no longer runs Terraform. On the test
-  cluster it gets: **AKS RBAC Cluster Admin** and **Cluster User** on the test compute RG, **Reader**
-  on the test data RG, **Reader** on the shared RG (`rg-bbm-shared-eus2`: ACR, shared Log
-  Analytics), **BBM Power Operator** on the test data and compute RGs, `BBM tfstate reader` on
-  `test/` (to read `helm_values`) and on `global.tfstate`, plus its existing AcrPush. Its ACA-only roles go.
-- New `gh-bbm-test` for GitHub Environment **`test-infra`** (`main` only, no reviewer): the same role
-  set and state prefix (`test/`) as `gh-bbm-staging`, for `terraform.yml` / `env-power.yml` /
-  platform installs on the test env.
+| Identity            | GitHub Environment (branches)        | Test cluster / test RGs                                                                                                    | Registry (ACR, ABAC mode)                                                  | State (`BBM tfstate reader`) |
+| ------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------- |
+| `gh-bbm-ephemeral`  | `test` (**main only**, no reviewer)  | AKS RBAC Cluster Admin + Cluster User (compute RG), Reader (data RG), BBM Power Operator (both), Reader on the shared RG    | Repository Writer, registry-wide (pushes `bbm/*:sha-*`)                    | `test/`, `global.tfstate`    |
+| `gh-bbm-preview`    | `preview` (any branch, no reviewer)  | same as `gh-bbm-ephemeral`                                                                                                 | Repository Writer, ABAC: write `bbm-preview/*`, read `bbm-preview/*` + `mirror/*` | `test/`, `global.tfstate`    |
+| `gh-bbm-test`       | `test-infra` (main only, no reviewer) | same role set as `gh-bbm-staging` on the test RGs (`terraform.yml`, `env-power.yml`)                                       | Repository Reader (deploy image checks)                                    | writer on `test/`            |
+
+- Neither ephemeral identity runs Terraform; their ACA-only roles are gone. Both need Cluster Admin
+  to create and delete their own `run-*` / `pr-*` namespaces.
+- **Why two identities:** `test` pushes the `bbm/*:sha-*` images that staging and prod deploy, and
+  previews run for every same-repo PR branch. With one identity on both, any PR that edits a
+  workflow could overwrite a `sha-*` tag. `test` is now main-only (integration runs only on main
+  anyway), and previews push `bbm-preview/{api,web}:pr-<n>-sha-<7>` (web `-mocked`) as
+  `gh-bbm-preview`, whose Writer assignment carries the condition
+  `@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase
+  'bbm-preview/'` for writes (and `bbm-preview/` or `mirror/` for reads). The preview install sets
+  `api.image.repository` / `web.image.repository` to `bbm-preview/*`. A preview never installs or
+  upgrades the platform (section 3). Its Cluster Admin role on the test cluster is still broad:
+  a malicious same-repo PR could disturb other namespaces on the **test** cluster, never staging,
+  prod or their images.
+- **Registry mode:** the ACR (Basic) runs in **ABAC repository permissions** mode
+  (`role_assignment_mode = "AbacRepositoryPermissions"`, azurerm >= 4.81; supported on every SKU).
+  In that mode AcrPull/AcrPush/AcrDelete are not honored and Owner/Contributor/Reader grant no
+  data access, so every grant uses the Container Registry Repository roles: kubelets → Reader
+  (registry-wide; the test cluster pulls `bbm-preview/*` too), `gh-bbm-ephemeral` and build
+  identities → Writer, env identities (`deploy.yml` image checks) → Reader, `gh-bbm-global`
+  (janitor purge, `az acr run --source-acr-auth-id [caller]`) → Contributor + Catalog Lister,
+  admins (`up.sh` mirror check, manual cleanup) → Contributor + Catalog Lister on the shared RG.
+  The constrained RBAC admin lists delegate Repository Reader/Writer instead of AcrPull/AcrPush.
+  Fallback if ABAC mode ever has to go: a second Basic registry for previews.
+- `gh-bbm-test` is new, for GitHub Environment **`test-infra`** (`main` only, no reviewer): the
+  same role set and state prefix (`test/`) as `gh-bbm-staging`, for `terraform.yml` /
+  `env-power.yml` / platform installs on the test env.
 - `gh-bbm-plan` keeps read access to `test/` (now the test env's data/compute state; it holds no
   database secrets).
 
@@ -182,7 +228,8 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 - **`infra/up.sh --subscription <id> [--zone <zone>] [--envs test,staging] [--prod] [--skip-github]
   [--yes] [--dry-run]`**, run locally after `az login --use-device-code`. `--envs` defaults to
   `test,staging`; `--prod` adds prod; `--skip-github` leaves the GitHub setup script for later; `--yes`
-  answers every confirmation (and keeps going when the delegation has not propagated yet);
+  answers every confirmation (and keeps going when the delegation has not propagated yet, then
+  installs the platform without `--wait` and prints how to check the certificate later);
   `--dry-run` prints mutating commands and file edits instead of running them. It fills
   `bootstrap.tfvars` (subscription, admin object id, registered providers, zone, and `github_repo`
   from `gh repo view`), applies bootstrap on local state and migrates it to the new state account,
@@ -194,11 +241,15 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   already holds a different (non-placeholder) `subscription_id`, it warns and offers to reset the
   per-tenant fields first (`--yes` resets).
 - **`infra/down.sh --subscription <id> (--envs test,staging,prod | --all) [--keep-github] [--yes]
-  [--dry-run]`** destroys in reverse (`compute`, `data` per env; with `--all` also `global` and
-  `bootstrap`, pulling bootstrap state back to local first), purges soft-deleted Key Vaults so names
-  are reusable, removes the Cloudflare NS records if the token is set, and with `--all` deletes the
-  GitHub repo variables and environments it created (unless `--keep-github`). It asks you to type
-  the subscription name to confirm (`--yes` skips that). After a successful `--all` it resets the
+  [--yes-really-destroy-prod] [--dry-run]`** destroys in reverse (`compute`, `data` per env; with
+  `--all` also `global` and `bootstrap`, pulling bootstrap state back to local first), purges the
+  soft-deleted Key Vaults of the envs it destroyed (names from each data stack's `key_vault_name`
+  output, else `kv-bbm-<short>-<suffix>`; the shared vault only with `--all`) so names are reusable,
+  removes the Cloudflare NS records if the token is set, and with `--all` deletes the GitHub repo
+  variables and environments it created (unless `--keep-github`). It asks you to type the
+  subscription name to confirm (`--yes` skips that). When prod is selected (`--envs ...prod` or
+  `--all`) it also asks you to type `prod`; `--yes` skips that only together with
+  `--yes-really-destroy-prod`, and without a terminal it refuses. After a successful `--all` it resets the
   per-tenant tfvars fields (`subscription_id`, `suffix`, the admin / power-operator / Key Vault
   officer object id lists, the global hint block's principal ids, the backend `.hcl` state account)
   to their placeholders, and keeps `dns_zone_name`, `alert_emails` and `github_reviewer_ids`.
@@ -259,10 +310,15 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   names with the `eus2` suffix (e.g. `rg-bbm-test-data-eus2`, `aks-bbm-test-eus2`). Moving to
   another region means changing `location` / `location_abbr` in the tfvars and those names in the
   workflows (or exporting them as repo variables first). Not refactored now.
-- New delegable role (DNS Zone Contributor) and the test-cluster roles for `gh-bbm-ephemeral` are
-  applied by bootstrap, locally, by an Owner.
+- New delegable roles (DNS Zone Contributor, Container Registry Repository Reader/Writer), the
+  test-cluster roles for `gh-bbm-ephemeral` / `gh-bbm-preview` and the admins' registry roles are
+  applied by bootstrap, locally, by an Owner. The registry is created in ABAC mode from the start
+  (this subscription was never bootstrapped), so there is no AcrPull/AcrPush migration.
 - **Gateway API:** the compute stack adds the `Azure/azapi` provider (`~> 2.0`) for the one setting
-  azurerm lacks; drop it once azurerm exposes the ingress profile's Gateway API fields. The Envoy
+  azurerm lacks; drop it once azurerm exposes the ingress profile's Gateway API fields. Because
+  azurerm PUTs the whole cluster with an older API version, the azapi update is re-applied after
+  every azurerm update of the cluster (`replace_triggered_by` on the cluster resource; to confirm
+  on the first real plan). The Envoy
   data plane runs at least 2 replicas per cluster (add-on floor), slightly more than NGINX's 1 on
   test/staging. App routing Gateway API cannot set request body/header size limits or rate limits
   (no `EnvoyFilter`); the app relies on its own limits. TLSRoute/SNI passthrough and egress are not

@@ -159,7 +159,7 @@ infra/up.sh --help
 | `--envs`         | comma-separated envs (default `test,staging`)                                         |
 | `--prod`         | also bring up prod (same as adding it to `--envs`)                                    |
 | `--skip-github`  | don't run the generated GitHub setup script                                           |
-| `--yes`          | no confirmations; accept defaults; keep going if the DNS delegation isn't visible yet |
+| `--yes`          | no confirmations; accept defaults; keep going if the DNS delegation isn't visible yet (then install the platform without waiting for the certificate) |
 | `--dry-run`      | print mutating commands and file edits; read-only queries still run                   |
 
 Optional environment variables: `CLOUDFLARE_API_TOKEN` (section 5), `BBM_DNS_TIMEOUT` (seconds to
@@ -194,8 +194,10 @@ Notes:
 - The child zones (`prod.<zone>`, `staging.<zone>`, `test.<zone>`, `preview.<zone>`) are delegated
   inside Azure by bootstrap. Only the parent zone needs records at the domain's DNS host.
 - If the delegation isn't visible at `1.1.1.1` before the first platform install, `up.sh` asks
-  whether to continue. cert-manager keeps retrying, so the certificate becomes Ready once the NS
-  records resolve.
+  whether to continue (`--yes` continues). It then installs the platform **without** `--wait` and
+  prints how to check the certificate (`kubectl -n bbm-platform get certificate bbm-wildcard`)
+  later. cert-manager keeps retrying, so the certificate becomes Ready once the NS records resolve;
+  re-running `up.sh` then waits for it.
 
 ## 8. Delegate the zone by hand (DNS hosts other than Cloudflare)
 
@@ -258,7 +260,8 @@ the new version within its 2-minute rotation interval. A 403 means your user isn
 
 | Environment         | Identity            | Required reviewers                              | Deployment branches         |
 | ------------------- | ------------------- | ----------------------------------------------- | --------------------------- |
-| `test`, `preview`   | `gh-bbm-ephemeral`  | none                                            | any (PR branches need them) |
+| `test`              | `gh-bbm-ephemeral`  | none                                            | `main` (pushes `bbm/*:sha-*`) |
+| `preview`           | `gh-bbm-preview`    | none                                            | any (PR branches need it; pushes only `bbm-preview/*`) |
 | `test-infra`        | `gh-bbm-test`       | none                                            | `main`                      |
 | `infra-global`      | `gh-bbm-global`     | 1                                               | `main`                      |
 | `contracts-sepolia` | `gh-bbm-global`     | 1                                               | any                         |
@@ -325,8 +328,10 @@ also covers them.
 - [ ] `az lock list -g rg-bbm-tfstate-eus2 -o table` shows `lock-bbm-tfstate`.
 - [ ] `infra/terraform/scripts/tf.sh bootstrap global plan` reports **No changes**.
 - [ ] `az ad app list --display-name gh-bbm- --query "[].displayName" -o tsv` lists `gh-bbm-plan`,
-      `gh-bbm-ephemeral`, `gh-bbm-global`, `gh-bbm-test`, `gh-bbm-staging`, `gh-bbm-prod` and
-      `gh-bbm-prod-power`.
+      `gh-bbm-ephemeral`, `gh-bbm-preview`, `gh-bbm-global`, `gh-bbm-test`, `gh-bbm-staging`,
+      `gh-bbm-prod` and `gh-bbm-prod-power`.
+- [ ] `az acr show -n <acr> --query roleAssignmentMode -o tsv` prints `AbacRepositoryPermissions`
+      (only the Container Registry Repository roles grant image access; AcrPull/AcrPush do not).
 - [ ] `gh variable list --repo cse416-fa26-sixseven/bug-bounty-marketplace` shows the six repo variables.
 - [ ] `gh api repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments --jq '.environments[].name'`
       lists all eight Environments.
@@ -346,11 +351,15 @@ infra/down.sh --subscription <guid> --all                   # everything, includ
 infra/down.sh --subscription <guid> --all --dry-run         # show what would go
 ```
 
-`down.sh` asks you to type the subscription name. Order: per env (test, staging, prod) `compute`
+`down.sh` asks you to type the subscription name. When prod is included (`--envs ...,prod` or
+`--all`) it also asks you to type `prod`; `--yes` skips that only together with
+`--yes-really-destroy-prod`, and without a terminal it refuses. Order: per env (test, staging, prod) `compute`
 then `data`; with `--all` also `global`, the Cloudflare NS records (if `CLOUDFLARE_API_TOKEN` is
 set), the GitHub variables and Environments (unless `--keep-github`), and bootstrap last. It pulls
 the bootstrap state back to local first, because that state lives in the account being deleted.
-Finally it purges soft-deleted `kv-bbm-*` vaults so the names can be reused.
+Finally it purges the soft-deleted Key Vaults of the envs it destroyed (`kv-bbm-<tst|stg|prd>-<suffix>`,
+and `kv-bbm-shared-<suffix>` only with `--all`) so the names can be reused; vaults of envs it kept
+are left alone.
 
 With `--all`, after a successful teardown it resets the per-tenant fields in the tfvars and
 backend files (subscription, suffix, object-id lists, state account) to their placeholders and
@@ -412,7 +421,10 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
    ```
 
    CI-run and preview namespaces pull Postgres from the mirror, and `helm test` pulls curl from it.
-   The ephemeral identity can't import images, so a missing mirror fails those runs.
+   The ephemeral identities can't import images, so a missing mirror fails those runs. The registry
+   is in ABAC repository-permissions mode, where Owner grants no image access: bootstrap gives each
+   `admin_object_ids` user Container Registry Repository Contributor + Catalog Lister on the shared
+   RG, which `az acr repository show` / `show-tags` need (the import itself is control plane).
 9. **Per env** (`test`, `staging`, `prod`):
 
    ```sh

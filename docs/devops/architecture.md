@@ -127,7 +127,7 @@ flowchart TB
     Compute -- remote state --> Data
     Data -- remote state --> Global
     Compute -- remote state --> Global
-    AKS -- kubelet AcrPull --> ACR
+    AKS -- "kubelet: Repository Reader" --> ACR
     AKS -- binds --> PIP
     AKS -- nodes in --> VNET
     Platform -. runs on .-> AKS
@@ -179,13 +179,14 @@ flowchart LR
     end
     JOB -- "OIDC token<br/>sub=repo:...:environment:ENV" --> ENTRA["Entra ID"]
     PR -- "sub=pull_request or ref:refs/heads/main" --> ENTRA
-    ENTRA --> EPH["gh-bbm-ephemeral<br/>AKS Cluster Admin + User on the test cluster,<br/>Power Operator on test RGs, AcrPush"]
+    ENTRA --> EPH["gh-bbm-ephemeral (test, main only)<br/>AKS Cluster Admin + User on the test cluster,<br/>Power Operator on test RGs, ACR Repository Writer"]
+    ENTRA --> PRV["gh-bbm-preview (preview, PR branches)<br/>same test-cluster roles,<br/>ACR Repository Writer on bbm-preview/* only (ABAC)"]
     ENTRA --> STG["gh-bbm-test / gh-bbm-staging / gh-bbm-prod<br/>Contributor on own data+compute RGs,<br/>AKS RBAC Cluster Admin, constrained RBAC admin"]
     ENTRA --> PWR["gh-bbm-prod-power<br/>BBM Power Operator only"]
     ENTRA --> GLB["gh-bbm-global<br/>Contributor on shared RG, budgets,<br/>KV Secrets Officer (shared vault)"]
     ENTRA --> PLAN["gh-bbm-plan<br/>Reader + BBM tfstate reader"]
     STG & GLB -- "BBM tfstate writer,<br/>ABAC per state prefix" --> TFS[("tfstate")]
-    EPH & PLAN -- "BBM tfstate reader<br/>(ephemeral: global + test/)" --> TFS
+    EPH & PRV & PLAN -- "BBM tfstate reader<br/>(ephemeral/preview: global + test/)" --> TFS
 
     subgraph K8s["AKS cluster"]
         SA["Pod with ServiceAccount<br/>bbm-api, bbm-analysis, bbm-migrations"]
@@ -214,8 +215,13 @@ flowchart LR
   Zone Contributor on the env's public zones only.
 - In CI-run and preview namespaces, `secrets.provider=plain` is used: the in-cluster Postgres
   password is random per namespace and passed to Helm in a file.
-- `gh-bbm-ephemeral` no longer runs Terraform. It reads `helm_values` from `test/` state, deploys
-  into namespaces on the test cluster and can resume it.
+- `gh-bbm-ephemeral` (CI runs, main only) and `gh-bbm-preview` (PR previews) don't run Terraform.
+  They read `helm_values` from `test/` state, deploy into namespaces on the test cluster and can
+  resume it. Only `gh-bbm-ephemeral` pushes `bbm/*` and installs the test cluster's platform;
+  `gh-bbm-preview` can push only `bbm-preview/*`.
+- The ACR runs in ABAC repository-permissions mode: image access comes only from the Container
+  Registry Repository Reader/Writer/Contributor roles (AcrPull/AcrPush are not honored), which
+  lets the preview identity's Writer role carry a repository-name condition.
 
 ## CI/CD pipeline
 

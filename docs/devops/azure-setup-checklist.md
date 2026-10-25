@@ -91,6 +91,12 @@ Full details are in [env-lifecycle.md](env-lifecycle.md). Cost estimates are in 
   - the weekly image purge runs as `gh-bbm-global` in `infra-global` and **waits for a reviewer**
     each Sunday;
   - if you'd rather automate both, that role needs your explicit OK.
+- **ACR in ABAC repository-permissions mode; previews get their own identity.** `gh-bbm-preview`
+  (Environment `preview`) may push only `bbm-preview/*`, and `test` (`gh-bbm-ephemeral`, which
+  pushes the `bbm/*:sha-*` images staging/prod deploy) is main-only. In ABAC mode AcrPull/AcrPush
+  and Owner/Contributor/Reader grant no image access, so bootstrap/global use the built-in
+  Container Registry Repository Reader/Writer/Contributor/Catalog Lister roles instead (kubelets,
+  CI identities, `gh-bbm-global` for the purge, and your admin user for `up.sh`'s mirror check).
 - **PR plans for staging stacks are unrefreshed** (`-refresh=false`). The read-only plan identity
   can't read Key Vault secrets or AKS credentials. Refreshed plans run via `terraform` dispatch in
   `staging` or `prod`.

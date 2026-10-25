@@ -115,7 +115,7 @@ is the test cluster's running time (above), plus extra nodes when the autoscaler
 | One CI run or preview on a running node | nothing extra while it fits on the existing node(s)                                       |
 | Several open previews at once           | the system pool scales up to 3 nodes: each extra node ~$0.05/h (~$1.20/day) with its disk |
 | First run after the nightly pause       | resumes the test cluster, which then bills as `running` until the next pause              |
-| Image builds pushed to ACR              | storage within the 10 GB included; the weekly janitor purges old `pr-*` / `sha-*` tags    |
+| Image builds pushed to ACR              | storage within the 10 GB included; the weekly janitor purges old `pr-*` / `sha-*` tags (incl. `bbm-preview/*`) |
 | TLS                                     | one wildcard certificate per env zone, so previews never request their own                |
 
 A preview lives at most 168 hours after its last push. The janitor deletes any ephemeral namespace

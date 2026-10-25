@@ -121,8 +121,8 @@ name, which `infra/up.sh` writes into `github_repo`):
 
 | GitHub Environment  | Protection                                      | App registration    |
 | ------------------- | ----------------------------------------------- | ------------------- |
-| `test`              | none                                            | `gh-bbm-ephemeral`  |
-| `preview`           | none                                            | `gh-bbm-ephemeral`  |
+| `test`              | none (_ADR 0002: `main` only_)                  | `gh-bbm-ephemeral`  |
+| `preview`           | none                                            | `gh-bbm-ephemeral` (_ADR 0002: `gh-bbm-preview`_) |
 | `infra-global`      | 1 required reviewer, `main` only                | `gh-bbm-global`     |
 | `staging`           | `main` only                                     | `gh-bbm-staging`    |
 | `prod`              | 1 required reviewer, `main` only                | `gh-bbm-prod`       |
@@ -139,8 +139,10 @@ can read them. Staging holds no real user data and those secrets are rotatable, 
 let PRs plan staging; `prod/` is excluded precisely so prod secrets never reach PR jobs.
 
 > **Superseded in part by [ADR 0002](0002-aks-everywhere-and-azure-dns.md) §4.** A `test-infra` Environment (`main` only, no reviewer)
-> with identity `gh-bbm-test` is added. `gh-bbm-ephemeral` no longer runs Terraform, and
-> `gh-bbm-plan` reads `test/` (now the test env's data/compute state) and no longer `preview/`.
+> with identity `gh-bbm-test` is added. `gh-bbm-ephemeral` no longer runs Terraform and serves
+> only the now main-only `test` Environment; PR previews (`preview`) use the new `gh-bbm-preview`,
+> which can push only `bbm-preview/*`. `gh-bbm-plan` reads `test/` (now the test env's
+> data/compute state) and no longer `preview/`.
 
 Least privilege per identity:
 
@@ -148,14 +150,20 @@ Least privilege per identity:
   Identity Operator on `id-bbm-aca-pull` and Log Analytics Contributor on the shared LAW.
   _Superseded by ADR 0002 §4: AKS RBAC Cluster Admin and Cluster User on the test compute RG,
   Reader on the test data RG, BBM Power Operator on both test RGs, `BBM tfstate reader` on
-  `global.tfstate` and `test/`, Reader on the shared RG and AcrPush._
+  `global.tfstate` and `test/`, Reader on the shared RG and (the registry now being in ABAC mode)
+  Container Registry Repository Writer instead of AcrPush. `gh-bbm-preview` gets the same
+  test-cluster roles with a Writer ABAC-scoped to `bbm-preview/*`._
 - `gh-bbm-global`: Contributor on the shared RG, a constrained RBAC Administrator on the shared RG
   (AcrPull, AcrPush, Managed Identity Operator, Log Analytics Contributor, Key Vault Secrets
   Officer/User), Key Vault Secrets Officer on the shared RG (contracts-sepolia reads the Sepolia
-  secrets) and Cost Management Contributor on the subscription.
+  secrets) and Cost Management Contributor on the subscription. _ADR 0002 §4: the delegable ACR
+  roles are Container Registry Repository Reader/Writer (ABAC-mode registry), and it also holds
+  Repository Contributor + Catalog Lister for the janitor's image purge._
 - `gh-bbm-staging` and `gh-bbm-prod`: Contributor on their env's data and compute RGs, a constrained
   RBAC Administrator on both, AKS RBAC Cluster Admin on compute, Key Vault Secrets Officer on data,
   Reader on the shared RG plus a constrained RBAC Administrator there that may only grant AcrPull.
+  _ADR 0002 §4: Container Registry Repository Reader instead of AcrPull (kubelet), plus Repository
+  Reader for themselves (deploy image checks)._
 - `gh-bbm-prod-power`: only `BBM Power Operator` on the prod data and compute RGs. No Contributor, no
   RBAC admin and no state access, so the reviewer-free `prod-power` environment can pause and resume
   prod but cannot change it. (Staging's scheduled pause uses `gh-bbm-staging`, which has no reviewer
@@ -183,6 +191,7 @@ Least privilege per identity:
   | ------------------------------ | -------------------- | ------------------- | ------------------------------------------------- |
   | `gh-bbm-ephemeral`             | `BBM tfstate writer` | `test/`, `preview/` | `global.tfstate`                                  |
   | _ADR 0002:_ `gh-bbm-ephemeral` | `BBM tfstate reader` | none                | `global.tfstate`, `test/`                         |
+  | _ADR 0002:_ `gh-bbm-preview`   | `BBM tfstate reader` | none                | `global.tfstate`, `test/`                         |
   | _ADR 0002:_ `gh-bbm-test`      | `BBM tfstate writer` | `test/`             | `global.tfstate`                                  |
   | `gh-bbm-global`                | `BBM tfstate writer` | `global.tfstate`    | none                                              |
   | `gh-bbm-staging`               | `BBM tfstate writer` | `staging/`          | `global.tfstate`                                  |
@@ -433,7 +442,7 @@ and `infra/lib/` drive bring-up and teardown._
     _ADR 0002 removes the ACA naming and adds DNS names._
 - **CI env identities may only assign the roles in `env_delegable_roles`**
   (`stacks/bootstrap/identities.tf`):
-  - AcrPull
+  - AcrPull (_ADR 0002: Container Registry Repository Reader; the registry is in ABAC mode_)
   - AKS RBAC Cluster Admin and Writer
   - Key Vault Secrets Officer and User
   - Managed Identity Operator

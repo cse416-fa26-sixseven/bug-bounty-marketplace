@@ -31,9 +31,11 @@ infra/down.sh --subscription <old-guid> --all --dry-run    # review
 infra/down.sh --subscription <old-guid> --all
 ```
 
-`down.sh` asks you to type the subscription name. It destroys `compute` and `data` per env,
+`down.sh` asks you to type the subscription name, and `prod` as well (`--all` includes prod; with
+`--yes` you also need `--yes-really-destroy-prod`). It destroys `compute` and `data` per env,
 `global`, the Cloudflare NS records (with the token), the GitHub repo variables and Environments,
-and bootstrap last. Then it purges soft-deleted `kv-bbm-*` vaults. Pass `--keep-github` to leave
+and bootstrap last. Then it purges the soft-deleted Key Vaults of what it destroyed (env vaults
+and the shared vault). Pass `--keep-github` to leave
 the GitHub side alone; the next `up.sh` overwrites it anyway.
 
 If the old account is already gone (for example, an expired student subscription), skip this step.
@@ -51,7 +53,7 @@ that don't exist there.
 | File                           | Reset                                                                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `envs/global/bootstrap.tfvars` | `subscription_id`, `admin_object_ids`, `power_operator_object_ids`, `preregistered_resource_providers`                                |
-| `envs/global/global.tfvars`    | hint block `subscription_id`, `suffix`, `ephemeral_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
+| `envs/global/global.tfvars`    | hint block `subscription_id`, `suffix`, `ephemeral_ci_principal_id`, `preview_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
 | `envs/<env>/*.tfvars`          | `subscription_id`, `suffix`, and `secret_officer_user_object_ids` in `data.tfvars`                                                    |
 | `envs/**/backend*.hcl`         | `resource_group_name`, `storage_account_name` (`stbbmtfstate0000`)                                                                    |
 
