@@ -388,3 +388,18 @@ run "rejects_bad_sku_tier" {
 
   expect_failures = [var.aks_sku_tier]
 }
+
+# Student-quota setting: upgrades off must plan (azurerm has no "none" value).
+run "upgrades_off" {
+  command = plan
+
+  variables {
+    automatic_upgrade_channel = "none"
+    node_os_upgrade_channel   = "None"
+  }
+
+  assert {
+    condition     = module.aks.name != ""
+    error_message = "compute must plan with automatic upgrades off"
+  }
+}

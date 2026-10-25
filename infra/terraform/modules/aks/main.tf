@@ -63,25 +63,34 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   # Patch channel moves only the patch level within var.kubernetes_version,
   # which is a minor alias, so it never drifts from config.
-  automatic_upgrade_channel = var.automatic_upgrade_channel
+  # azurerm has no "none" value: auto-upgrade is off when the argument is unset.
+  automatic_upgrade_channel = var.automatic_upgrade_channel == "none" ? null : var.automatic_upgrade_channel
   node_os_upgrade_channel   = var.node_os_upgrade_channel
 
-  maintenance_window_auto_upgrade {
-    frequency   = "Weekly"
-    interval    = 1
-    duration    = 4
-    day_of_week = "Sunday"
-    start_time  = "06:00"
-    utc_offset  = "+00:00"
+  # The maintenance windows only matter while the matching upgrade channel is
+  # on, so they are dropped together with it.
+  dynamic "maintenance_window_auto_upgrade" {
+    for_each = var.automatic_upgrade_channel == "none" ? [] : [1]
+    content {
+      frequency   = "Weekly"
+      interval    = 1
+      duration    = 4
+      day_of_week = "Sunday"
+      start_time  = "06:00"
+      utc_offset  = "+00:00"
+    }
   }
 
-  maintenance_window_node_os {
-    frequency   = "Weekly"
-    interval    = 1
-    duration    = 4
-    day_of_week = "Sunday"
-    start_time  = "06:00"
-    utc_offset  = "+00:00"
+  dynamic "maintenance_window_node_os" {
+    for_each = var.node_os_upgrade_channel == "None" ? [] : [1]
+    content {
+      frequency   = "Weekly"
+      interval    = 1
+      duration    = 4
+      day_of_week = "Sunday"
+      start_time  = "06:00"
+      utc_offset  = "+00:00"
+    }
   }
 
   identity {
