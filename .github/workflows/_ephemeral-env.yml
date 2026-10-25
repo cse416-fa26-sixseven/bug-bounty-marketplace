@@ -177,7 +177,7 @@ jobs:
           set -euo pipefail
           ps=$(az group show -n "$DATA_RG" --query 'tags."power-state"' -o tsv 2>/dev/null || true)
           aks=$(az aks list -g "$COMPUTE_RG" \
-            --query "[?name=='$CLUSTER'] | [0].[powerState.code, provisioningState]" -o tsv 2>/dev/null | tr '\t' ' ' || true)
+            --query "[?name=='$CLUSTER'] | [0].join(' ', [powerState.code, provisioningState])" -o tsv 2>/dev/null || true)
           echo "power-state tag: ${ps:-unset}; $CLUSTER: ${aks:-not found}"
           if [[ "$ACTION" == delete ]]; then
             if [[ "$aks" == "Running Succeeded" ]]; then

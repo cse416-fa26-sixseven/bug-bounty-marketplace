@@ -86,9 +86,8 @@ if [[ "$(az group exists --name "$compute_rg" --only-show-errors)" != "true" ]];
   exit 0
 fi
 state=$(az aks list -g "$compute_rg" \
-  --query "[?name=='$cluster'] | [0].[powerState.code, provisioningState]" -o tsv --only-show-errors) ||
+  --query "[?name=='$cluster'] | [0].join(' ', [powerState.code, provisioningState])" -o tsv --only-show-errors) ||
   die "reading $cluster state failed"
-state=$(tr '\t' ' ' <<<"$state")
 if [[ "$state" != "Running Succeeded" ]]; then
   log "$cluster is '${state:-not found}', not 'Running Succeeded'; skipping (nothing billed per namespace)"
   exit 0

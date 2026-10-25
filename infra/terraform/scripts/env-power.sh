@@ -124,13 +124,13 @@ output() {
 # `list` (not `show`) so "not found" is an empty result, never a parsed error.
 aks_state() {
   az aks list -g "$compute_rg" \
-    --query "[?name=='$cluster'] | [0].[powerState.code, provisioningState]" -o tsv | tr '\t' ' '
+    --query "[?name=='$cluster'] | [0].join(' ', [powerState.code, provisioningState])" -o tsv
 }
 
 aks_pools() {
   az aks list -g "$compute_rg" \
-    --query "[?name=='$cluster'] | [0].agentPoolProfiles[].[name, to_string(count), powerState.code]" \
-    -o tsv | awk -F'\t' '{ printf "%s%s=%s(%s)", (NR > 1 ? ", " : ""), $1, $2, $3 }'
+    --query "[?name=='$cluster'] | [0].agentPoolProfiles[].join(' ', [name, to_string(count), powerState.code])" \
+    -o tsv | awk '{ printf "%s%s=%s(%s)", (NR > 1 ? ", " : ""), $1, $2, $3 }'
 }
 
 # Ready | Stopped | Starting | Stopping | Updating | ..., or empty when missing.
