@@ -80,19 +80,23 @@ Nothing else in the repo names a domain.
 restricted for the subscription in that env's region, and prints warnings for quota and versions;
 it can't raise quota. Check early, because quota requests can take time.
 
-Each env has its own region (ADR 0002 §8): test `northcentralus`, staging `francecentral`, prod
-`canadacentral`, each cluster on one `Standard_B4as_v2` node (4 vCPU / 16 GiB).
+Each env has its own region (ADR 0002 §8), each cluster on one 4 vCPU / 16 GiB node: test
+`canadacentral` on `Standard_B4ps_v2` (arm64), staging `denmarkeast` and prod `northcentralus` on
+`Standard_B4as_v2` (x86). On Azure for Students only northcentralus and denmarkeast offer an x86
+4 vCPU B-series size; canadacentral offers only arm64 (Bpsv2), francecentral lists no B-series sizes
+and belgiumcentral marks them `NotAvailableForSubscription`.
 
 ### vCPU quota
 
 ```sh
-for r in northcentralus francecentral canadacentral; do az vm list-usage -l "$r" -o table; done
+for r in canadacentral denmarkeast northcentralus; do az vm list-usage -l "$r" -o table; done
 ```
 
 | Row                         | Needed for                              | Rough need (per region)                                       |
 | --------------------------- | --------------------------------------- | ------------------------------------------------------------- |
-| Total Regional vCPUs        | everything                              | 4 for the env's one B4as_v2 node (Azure for Students: 6)      |
-| Standard BASv2 Family vCPUs | `Standard_B4as_v2` (node size)          | 4 (Azure for Students: 10)                                    |
+| Total Regional vCPUs        | everything                              | 4 for the env's one node (Azure for Students: 6)              |
+| Standard BASv2 Family vCPUs | `Standard_B4as_v2` (staging, prod)      | 4 (Azure for Students: 10)                                    |
+| Standard BPSv2 Family vCPUs | `Standard_B4ps_v2` (test, arm64)        | 4                                                             |
 | Standard DSv5 Family vCPUs  | Kata sandbox pool (disabled by default) | 0 until the sandbox is enabled (Azure for Students: 0)        |
 
 `up.sh` compares each region's free quota with the needs of the envs brought up there (clusters
@@ -100,18 +104,19 @@ that already exist are already in the usage). New subscriptions often show a low
 (sometimes 4–10) and 0 for some families. To ask for more: **Portal → Quotas → Compute**, filter
 by the region, pick the family, **New quota request**. Small B-series increases are usually
 approved within minutes. To check that the node size is offered in a region:
-`az vm list-skus -l francecentral --size Standard_B4as_v2 -o table` (no `Restrictions`).
+`az vm list-skus -l denmarkeast --size Standard_B4as_v2 -o table` (no `Restrictions`; test:
+`-l canadacentral --size Standard_B4ps_v2`).
 
 ### PostgreSQL Flexible Server SKU
 
 ```sh
-az postgres flexible-server list-skus -l francecentral -o json \
+az postgres flexible-server list-skus -l denmarkeast -o json \
   | jq -r '.[].supportedServerEditions[] | select(.name=="Burstable") | .supportedServerSkus[].name' \
   | grep -i b1ms
 ```
 
 If `Standard_B1ms` isn't listed, PG Flexible is restricted for this subscription in the region. Only
-staging (`francecentral`) and prod (`canadacentral`) use it (test runs Postgres in each namespace).
+staging (`denmarkeast`) and prod (`northcentralus`) use it (test runs Postgres in each namespace).
 
 ### AKS versions
 
@@ -128,14 +133,14 @@ Two kinds of region (ADR 0002 §7, §8):
   shared RG (`rg-bbm-shared-ncus`: ACR, shared Log Analytics and Key Vault, parent DNS zone).
 - **Env regions:** `location` / `location_abbr` in `envs/<env>/data.tfvars` and `compute.tfvars`,
   copied into the `env_locations` map of `bootstrap.tfvars` and `global.tfvars`: test
-  `northcentralus` (`ncus`), staging `francecentral` (`frc`), prod `canadacentral` (`cac`). Env
-  names embed the env's code: `rg-bbm-staging-data-frc`, `aks-bbm-prod-cac`, ...
+  `canadacentral` (`cac`), staging `denmarkeast` (`dke`), prod `northcentralus` (`ncus`). Env
+  names embed the env's code: `rg-bbm-staging-data-dke`, `aks-bbm-prod-ncus`, ...
 
 To change them, pass them to `up.sh`:
 
 ```sh
 infra/up.sh --subscription <id> --location canadacentral          # home region: bootstrap/global tfvars + backend .hcl
-infra/up.sh --subscription <id> --env-location staging=belgiumcentral --env-location prod=denmarkeast
+infra/up.sh --subscription <id> --env-location test=canadacentral --env-location staging=denmarkeast
 infra/up.sh --subscription <id> --env-location all=northcentralus  # every env in one region (bigger subscription)
 ```
 
@@ -367,8 +372,8 @@ also covers them.
 - [ ] `up.sh` ended with `done` and no warnings you haven't dealt with.
 - [ ] `dig +short NS <zone> @1.1.1.1` prints the four Azure name servers.
 - [ ] `az group list --query "[?tags.project=='bbm'].name" -o tsv` lists the tfstate and shared
-      RGs and `rg-bbm-test-{data,compute}-ncus`, `rg-bbm-staging-{data,compute}-frc`,
-      `rg-bbm-prod-{data,compute}-cac` (`infra/terraform/scripts/env-region.sh <env>` prints each
+      RGs and `rg-bbm-test-{data,compute}-cac`, `rg-bbm-staging-{data,compute}-dke`,
+      `rg-bbm-prod-{data,compute}-ncus` (`infra/terraform/scripts/env-region.sh <env>` prints each
       env's names).
 - [ ] `az network dns zone list --query "[].name" -o tsv` lists `<zone>`, `test.<zone>`,
       `preview.<zone>`, `staging.<zone>` and `prod.<zone>`.

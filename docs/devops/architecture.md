@@ -53,14 +53,16 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 | ------------- | ----------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | Local compose | Docker Compose (`pnpm stack:up`)                                  | until `pnpm stack:down`                                       | named volumes; `stack:down` removes them                                   | a developer                                                                          |
 | CI compose    | Compose on a GitHub-hosted runner (`ci.yml` `containers`)         | one job                                                       | none (`down -v` always)                                                    | every push and PR, path-filtered                                                     |
-| CI run        | namespace `run-<id>-<attempt>` on `aks-bbm-test-ncus`             | one `integration-azure.yml` run; TTL 6 h as a fallback        | in-cluster Postgres (`emptyDir`), discarded                                | push to `main`, nightly 07:00 UTC, manual dispatch                                   |
-| PR preview    | namespace `pr-<n>` on `aks-bbm-test-ncus`                         | PR opened → PR closed; TTL 168 h, re-stamped on every push    | in-cluster Postgres (`emptyDir`), discarded                                | `preview.yml` on PR events (same-repo, not docs-only)                                |
-| AKS test      | `aks-bbm-test-ncus` (Free tier, `northcentralus`) + data stack (no Postgres server) | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                            | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
-| AKS staging   | `aks-bbm-staging-frc` (Free tier, `francecentral`) + data stack   | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob, Queue, Key Vault: persistent across power states | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
-| AKS prod      | `aks-bbm-prod-cac` (Standard tier, `canadacentral`) + data stack  | long-lived, `running` / `paused` / `down`                     | same as staging                                                            | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
+| CI run        | namespace `run-<id>-<attempt>` on `aks-bbm-test-cac`              | one `integration-azure.yml` run; TTL 6 h as a fallback        | in-cluster Postgres (`emptyDir`), discarded                                | push to `main`, nightly 07:00 UTC, manual dispatch                                   |
+| PR preview    | namespace `pr-<n>` on `aks-bbm-test-cac`                          | PR opened → PR closed; TTL 168 h, re-stamped on every push    | in-cluster Postgres (`emptyDir`), discarded                                | `preview.yml` on PR events (same-repo, not docs-only)                                |
+| AKS test      | `aks-bbm-test-cac` (Free tier, `canadacentral`, arm64) + data stack (no Postgres server) | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                            | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
+| AKS staging   | `aks-bbm-staging-dke` (Free tier, `denmarkeast`) + data stack     | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob, Queue, Key Vault: persistent across power states | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
+| AKS prod      | `aks-bbm-prod-ncus` (Standard tier, `northcentralus`) + data stack | long-lived, `running` / `paused` / `down`                     | same as staging                                                            | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
 
-Each AKS environment has its own region and one `Standard_B4as_v2` node (Azure for Students allows
-6 vCPUs per region; ADR 0002 §8). The shared resources and tfstate live in the home region
+Each AKS environment has its own region and one 4 vCPU node (Azure for Students allows 6 vCPUs per
+region; ADR 0002 §8): test runs on `Standard_B4ps_v2` (arm64), because canadacentral offers no x86
+4 vCPU B-series size to this subscription; staging and prod run on `Standard_B4as_v2` (x86), so
+staging rehearses prod exactly. `_build-push.yml` builds api and web for `linux/amd64,linux/arm64`. The shared resources and tfstate live in the home region
 `northcentralus`.
 
 All three AKS environments are paused nightly at 06:00 UTC unless their data resource group is
@@ -108,7 +110,7 @@ flowchart TB
 
     subgraph Compute["Per env compute: rg-bbm-ENV-compute-ABBR (stack compute, disposable)"]
         AKS["AKS aks-bbm-ENV-ABBR (Free; prod Standard)<br/>CNI Overlay + Cilium, OIDC issuer, workload identity"]
-        POOLS["Node pools: system 1 x Standard_B4as_v2; apps, sandbox (Kata) off"]
+        POOLS["Node pools: system 1 x Standard_B4as_v2 (test: B4ps_v2, arm64); apps, sandbox (Kata) off"]
         ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI,<br/>KEDA (keda_enabled, off while analysis is off), Container Insights (prod only)"]
         FIC["Federated credentials for bbm-api, bbm-analysis,<br/>bbm-migrations, bbm-sandbox-runner, keda-operator, cert-manager"]
         AKS --- POOLS

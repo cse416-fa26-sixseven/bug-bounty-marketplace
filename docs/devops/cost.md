@@ -1,8 +1,8 @@
 # Cost estimates
 
 > **A typical month is ~$85–95, well over the $50 subscription budget alert.** Each cluster now
-> runs one `Standard_B4as_v2` node (4 vCPU / 16 GiB, ADR 0002 §8), about 4× the old B2als_v2 per
-> hour. With staging and prod down and the test env running ~10 hours on working days for CI, the
+> runs one 4 vCPU / 16 GiB node (ADR 0002 §8: `Standard_B4ps_v2` arm64 in test, `Standard_B4as_v2`
+> in staging and prod), about 4× the old B2als_v2 per hour. With staging and prod down and the test env running ~10 hours on working days for CI, the
 > estimate below is about $85–95, so expect the 100% alert every month. The budgets stay as they
 > are (they only notify). The levers that matter:
 >
@@ -24,8 +24,8 @@
 
 > **Rough estimates only.** Figures are approximate pay-as-you-go list prices in USD (730 hours per
 > month), rounded, before taxes, credits or free grants unless stated. Node prices are per region
-> (each env has its own, ADR 0002 §8); the other items differ little between `northcentralus`,
-> `francecentral` and `canadacentral` and use one approximate figure. Check them
+> (each env has its own, ADR 0002 §8); the other items differ little between `canadacentral`,
+> `denmarkeast` and `northcentralus` and use one approximate figure. Check them
 > against the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the
 > subscription's Cost Management view before relying on them. Prices change.
 
@@ -38,9 +38,18 @@ prod) can be paused or torn down without losing data. See [architecture.md](arch
 <!-- B4as_v2 prices: Azure Retail Prices API (prices.azure.com, armSkuName Standard_B4as_v2,
      "Virtual Machines Basv2 Series", Consumption), October 2026. -->
 
+> **Node figures predate the final region layout; verify current pricing.** They were taken for
+> B4as_v2 in test `northcentralus`, staging `francecentral` and prod `canadacentral`. The deployed
+> layout is test `canadacentral` on `Standard_B4ps_v2` (arm64, Bpsv2), staging `denmarkeast` and
+> prod `northcentralus` on `Standard_B4as_v2`. Prod's node is now the northcentralus price below
+> ($0.150/h); the test (B4ps_v2 in canadacentral) and staging (B4as_v2 in denmarkeast) prices were
+> not re-measured, so the per-env figures in this file keep the old numbers. Check them with the
+> [Azure Retail Prices API](https://prices.azure.com/api/retail/prices) or the pricing calculator.
+
 | Item                                    | Approx. price                                                                         | Where it's used                                             |
 | --------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| VM `Standard_B4as_v2` (4 vCPU, 16 GiB), Linux | test `northcentralus` $0.150/h (~$110/month); staging `francecentral` $0.170/h (~$124/month); prod `canadacentral` $0.167/h (~$122/month) | the one node of every AKS cluster |
+| VM `Standard_B4as_v2` (4 vCPU, 16 GiB), Linux | `northcentralus` $0.150/h (~$110/month, prod); measured before the move: `francecentral` $0.170/h (~$124/month), `canadacentral` $0.167/h (~$122/month); `denmarkeast` (staging): verify | the node of staging and prod |
+| VM `Standard_B4ps_v2` (4 vCPU, 16 GiB, arm64), Linux | `canadacentral` (test): verify current pricing; the test figures below use the old B4as_v2 ~$0.150/h | the node of the test cluster |
 | VM `Standard_B2als_v2` (2 vCPU, 4 GiB)  | ~$0.038/h, ~$27/month                                                                 | optional `apps` pool (off)                                  |
 | Managed OS disk, 64 GB Premium SSD (P6) | ~$10/month per node                                                                   | AKS node OS disks (exist only while nodes exist)            |
 | Standard Load Balancer                  | ~$0.025/h for the first 5 rules, ~$18/month                                           | AKS: Gateway `bbm` (rules for 80, 443 and 15021) + outbound |
@@ -79,12 +88,13 @@ state and is included in the next table.
 ## Environments by power state
 
 Per environment, per month if left in that state the whole month. Every cluster runs everything on
-one `Standard_B4as_v2` system node in its own region (min = max = 1: test `northcentralus`, staging
-`francecentral`, prod `canadacentral`). Test has no Postgres server (each namespace runs its own
+one 4 vCPU system node in its own region (min = max = 1: test `canadacentral` on
+`Standard_B4ps_v2` (arm64), staging `denmarkeast` and prod `northcentralus` on `Standard_B4as_v2`).
+The figures keep the pre-move node prices (see the note above); verify current pricing. Test has no Postgres server (each namespace runs its own
 Postgres pod). Staging and prod have Postgres B1ms; prod adds Container Insights and the AKS
 Standard tier. No `apps` pool anywhere.
 
-| State       | What is billed                                                                                                      | Test (ncus)                       | Staging (frc)          | Prod (cac)                         |
+| State       | What is billed                                                                                                      | Test (cac)                        | Staging (dke)          | Prod (ncus)                        |
 | ----------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ---------------------- | ---------------------------------- |
 | **running** | node + OS disk, LB, 2 public IPs, PG compute + storage (not test), Log Analytics, KV, storage, prod control plane | ~$145–150 (~$4.90/day, ~$0.20/h) | ~$175–185 (~$6/day)   | ~$250–280 (~$8.50–9/day)           |
 | **paused**  | LB, 2 public IPs, PG storage, KV, storage, idle Log Analytics. Node and PG compute stop                              | ~$25–28 (~$0.85/day)             | ~$28–32 (~$1/day)     | ~$28–32 (~$1/day), see the Standard-tier note |
@@ -101,8 +111,8 @@ add no node cost: the node pool is pinned to one node (no autoscaling while the 
 
 How the running figures break down (staging): node ~$124, OS disk ~$10, LB ~$18, two public IPs
 ~$7, PG B1ms ~$12.50, PG storage ~$3.70, logs and the rest ~$0–5. Test is the same without
-Postgres and with the cheaper `northcentralus` node (~$110). Prod adds Container Insights and the
-Standard-tier control plane (~$73 if it runs all month). Its workspace is capped at 0.5 GB/day, so
+Postgres and with a node estimated at ~$110 (B4ps_v2 in canadacentral: verify). Prod adds
+Container Insights and the Standard-tier control plane (~$73 if it runs all month). Its workspace is capped at 0.5 GB/day, so
 ingestion is at most ~15 GB/month (~$35) and usually far less.
 
 Notes:
@@ -146,7 +156,7 @@ preview only holds pod resources on the test cluster.
 | Budget                             | Amount         | Scope                                                              | Notifications                        |
 | ---------------------------------- | -------------- | ------------------------------------------------------------------ | ------------------------------------ |
 | `budget-bbm-subscription`          | $50/month      | the whole subscription (`stacks/bootstrap`)                        | 50%, 80%, 100% actual; 100% forecast |
-| `budget-rg-bbm-<env>-<layer>-<abbr>` | $20/month each | `rg-bbm-test-{data,compute}-ncus`, `rg-bbm-staging-{data,compute}-frc`, `rg-bbm-prod-{data,compute}-cac` (`stacks/global`) | same thresholds |
+| `budget-rg-bbm-<env>-<layer>-<abbr>` | $20/month each | `rg-bbm-test-{data,compute}-cac`, `rg-bbm-staging-{data,compute}-dke`, `rg-bbm-prod-{data,compute}-ncus` (`stacks/global`) | same thresholds |
 
 Alerts go to `alert_emails` in `envs/global/*.tfvars`. Budgets only notify; they never stop
 anything.
@@ -166,7 +176,7 @@ budget today. A filtered subscription budget (by `env` tag or by node RG) would 
 | **Daily PG re-pause** (06:30 UTC)      | undoes Azure's 7-day auto-start of a stopped server                                                     | `env-power.yml` schedule                                      |
 | **Log Analytics daily caps**           | worst-case ingestion bounded: shared 0.25 GB/day, each env 0.5 GB/day                                   | `law_daily_quota_gb` in tfvars                                |
 | **Container Insights off in staging**  | avoids most per-node log ingestion                                                                      | `container_insights = false` in `envs/staging/compute.tfvars` |
-| **One node per cluster, no `apps` pool** | one B4as_v2 per env (4 of the 6 vCPUs of its region)                                                 | `system_min_count = system_max_count = 1`, `apps_pool_enabled = false` |
+| **One node per cluster, no `apps` pool** | one 4 vCPU node per env (B4ps_v2 in test, B4as_v2 elsewhere; 4 of the 6 vCPUs of its region)        | `system_min_count = system_max_count = 1`, `apps_pool_enabled = false` |
 | **KEDA add-on off**                    | ~0.4 CPU of requests freed on the one node while analysis is disabled                                   | `keda_enabled = false` in `envs/<env>/compute.tfvars`         |
 | **Sandbox pool off**                   | no Dsv5 node until PoC execution is needed (DSv5 quota is 0 on Azure for Students)                      | `sandbox_pool_enabled = false`                                |
 | **Burstable SKUs**                     | B-series nodes and PG B1ms are the cheapest that run the stack                                          | `*_vm_size`, `postgres_sku_name`                              |

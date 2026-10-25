@@ -2,8 +2,8 @@
 
 Terraform for the BBM Azure deployment (project code `bbm`). Home region
 `northcentralus` (tfstate, shared RG); each env has its own region (ADR 0002
-section 8): test `northcentralus`, staging `francecentral`, prod
-`canadacentral`.
+section 8): test `canadacentral` (arm64), staging `denmarkeast`, prod
+`northcentralus` (both x86).
 Three AKS environments (`test`, `staging`, `prod`) behind Azure DNS, per
 [ADR 0002](../../docs/adr/0002-aks-everywhere-and-azure-dns.md) (which
 supersedes the ACA parts of ADR 0001). `infra/up.sh` / `infra/down.sh` drive
@@ -174,21 +174,23 @@ instead of registering it. You can also import it by hand:
 
 ## Environments and DNS
 
-| env       | region (code)           | AKS tier | system pool          | PG server | public zones (in the env data RG) | VNet           |
-| --------- | ----------------------- | -------- | -------------------- | --------- | --------------------------------- | -------------- |
-| `test`    | `northcentralus` (ncus) | Free     | 1 × B4as_v2, no KEDA | no        | `test.<zone>`, `preview.<zone>`   | `10.10.0.0/16` |
-| `staging` | `francecentral` (frc)   | Free     | 1 × B4as_v2, no KEDA | yes       | `staging.<zone>`                  | `10.20.0.0/16` |
-| `prod`    | `canadacentral` (cac)   | Standard | 1 × B4as_v2, no KEDA | yes       | `prod.<zone>`                     | `10.30.0.0/16` |
+| env       | region (code)           | AKS tier | system pool                  | PG server | public zones (in the env data RG) | VNet           |
+| --------- | ----------------------- | -------- | ---------------------------- | --------- | --------------------------------- | -------------- |
+| `test`    | `canadacentral` (cac)   | Free     | 1 × B4ps_v2 (arm64), no KEDA | no        | `test.<zone>`, `preview.<zone>`   | `10.10.0.0/16` |
+| `staging` | `denmarkeast` (dke)     | Free     | 1 × B4as_v2, no KEDA         | yes       | `staging.<zone>`                  | `10.20.0.0/16` |
+| `prod`    | `northcentralus` (ncus) | Standard | 1 × B4as_v2, no KEDA         | yes       | `prod.<zone>`                     | `10.30.0.0/16` |
 
 - **Regions.** Each env's `location` / `location_abbr` lives in
   `envs/<env>/{data,compute}.tfvars`; bootstrap and global get the same values
   as `env_locations` (one line per env in `bootstrap.tfvars` /
   `global.tfvars`, kept in sync by `infra/up.sh --env-location`). Every
-  env-scoped name embeds the env's code (`rg-bbm-staging-data-frc`,
-  `aks-bbm-prod-cac`); shared names and `rg-bbm-tfstate-<abbr>` use the home
+  env-scoped name embeds the env's code (`rg-bbm-staging-data-dke`,
+  `aks-bbm-prod-ncus`); shared names and `rg-bbm-tfstate-<abbr>` use the home
   code. `scripts/env-region.sh <env>` prints an env's region and names for
-  scripts and workflows. One B4as_v2 node (4 vCPU) per region fits the Azure
-  for Students quota of 6 vCPUs per region; `keda_enabled = false` saves ~0.4
+  scripts and workflows. One 4 vCPU node per region (B4ps_v2 arm64 in test:
+  canadacentral offers no x86 4 vCPU B-series size to this subscription;
+  B4as_v2 x86 in staging and prod) fits the Azure for Students quota of 6
+  vCPUs per region; `keda_enabled = false` saves ~0.4
   CPU while analysis is off.
 
 - **Bootstrap** (`dns.tf`) creates the parent zone `dns_zone_name` in

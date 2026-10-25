@@ -1,15 +1,15 @@
 # Environment lifecycle: turning environments on and off
 
 There are three AKS environments, each on its own cluster in its own region (ADR 0002 §8), on one
-`Standard_B4as_v2` node:
+4 vCPU / 16 GiB node:
 
-| Env       | Region           | Cluster               | Runs                                                                 |
-| --------- | ---------------- | --------------------- | -------------------------------------------------------------------- |
-| `test`    | `northcentralus` | `aks-bbm-test-ncus`   | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
-| `staging` | `francecentral`  | `aks-bbm-staging-frc` | one release in namespace `bbm`                                       |
-| `prod`    | `canadacentral`  | `aks-bbm-prod-cac`    | one release in namespace `bbm`                                       |
+| Env       | Region           | Node                        | Cluster                | Runs                                                                 |
+| --------- | ---------------- | --------------------------- | ---------------------- | -------------------------------------------------------------------- |
+| `test`    | `canadacentral`  | `Standard_B4ps_v2` (arm64)  | `aks-bbm-test-cac`     | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
+| `staging` | `denmarkeast`    | `Standard_B4as_v2` (x86)    | `aks-bbm-staging-dke`  | one release in namespace `bbm`                                       |
+| `prod`    | `northcentralus` | `Standard_B4as_v2` (x86)    | `aks-bbm-prod-ncus`    | one release in namespace `bbm`                                       |
 
-Below, `<abbr>` is the env's region code (`ncus`, `frc`, `cac`).
+Below, `<abbr>` is the env's region code (test `cac`, staging `dke`, prod `ncus`).
 `infra/terraform/scripts/env-region.sh <env>` prints the env's region and its `DATA_RG`,
 `COMPUTE_RG` and `CLUSTER` names from `envs/<env>/data.tfvars`.
 
@@ -76,7 +76,7 @@ What each state still bills (see [cost.md](cost.md) for estimates):
 
 | state     | still billed                                                                                                                                |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `running` | the node (one B4as_v2 per env), Postgres B1ms compute (not test), prod's Standard-tier control plane, plus everything below |
+| `running` | the node (one B4ps_v2 / B4as_v2 per env), Postgres B1ms compute (not test), prod's Standard-tier control plane, plus everything below |
 | `paused`  | the Standard load balancer and its frontend IP, the static public IP, Postgres storage, managed disks, Key Vault, storage, logs             |
 | `down`    | the static public IP, Postgres storage, Key Vault, storage, logs                                                                            |
 
@@ -89,8 +89,8 @@ tomorrow" and `down` for "off for a week or more".
 
 ## The test env
 
-`test` is a normal `data` + `compute` env (VNet `10.10.0.0/16`, Free tier, `northcentralus`, one
-`Standard_B4as_v2` system node) with no Postgres server. It has no app release of its own. Instead, CI runs and PR
+`test` is a normal `data` + `compute` env (VNet `10.10.0.0/16`, Free tier, `canadacentral`, one
+`Standard_B4ps_v2` arm64 system node) with no Postgres server. It has no app release of its own. Instead, CI runs and PR
 previews each get a namespace on its cluster:
 
 | Kind       | Namespace                | Host                                         | TTL                             | Created by              |
@@ -114,7 +114,7 @@ overwrite the `bbm/*` images staging and prod deploy. Each namespace gets:
   namespace's HTTPRoute (set it by hand for a manual `helm install`).
 
 **Auto-resume.** Before deploying, `_ephemeral-env.yml` reads the `power-state` tag on
-`rg-bbm-test-data-ncus`:
+`rg-bbm-test-data-cac`:
 
 | Tag / cluster state           | What the workflow does                                          |
 | ----------------------------- | --------------------------------------------------------------- |
@@ -153,7 +153,7 @@ paused or down, and catches up after the next resume. Weekly (Sunday 03:30 UTC) 
 To see what runs on the test cluster:
 
 ```sh
-az aks get-credentials -g rg-bbm-test-compute-ncus -n aks-bbm-test-ncus --overwrite-existing
+az aks get-credentials -g rg-bbm-test-compute-cac -n aks-bbm-test-cac --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl get ns -l bbm.io/ephemeral=true \
   -o custom-columns='NAME:.metadata.name,KIND:.metadata.labels.bbm\.io/kind,EXPIRES:.metadata.annotations.bbm\.io/expires-on'

@@ -9,9 +9,9 @@
 - **Amended:** 2026-10-25, the region becomes one setting and moves to `northcentralus` (`ncus`)
   (section 7), because the Azure for Students subscription's allowed-regions policy blocks
   `eastus2` and `centralus`.
-- **Amended:** 2026-10-25, one region per environment (test `northcentralus`, staging
-  `francecentral`, prod `canadacentral`) with one `Standard_B4as_v2` node per cluster and the KEDA
-  add-on off (section 8), because the app routing Gateway API's `istiod` does not fit a 2-vCPU node
+- **Amended:** 2026-10-25, one region per environment (test `canadacentral` on an arm64
+  `Standard_B4ps_v2` node, staging `denmarkeast` and prod `northcentralus` on an x86
+  `Standard_B4as_v2` node, one node per cluster) and the KEDA add-on off (section 8), because the app routing Gateway API's `istiod` does not fit a 2-vCPU node
   and Azure for Students allows 6 vCPUs per region. The home region (tfstate, shared RG) stays
   `northcentralus`; section 7 now describes the home region.
 - **Amended:** 2026-10-25, continuous deployment (section 9): green `main` builds deploy to staging
@@ -42,9 +42,9 @@
 
 | Env       | Cluster                  | AKS tier     | Hosts                                       | Database                    |
 | --------- | ------------------------ | ------------ | ------------------------------------------- | --------------------------- |
-| `test`    | `aks-bbm-test-ncus`      | Free         | CI runs and PR previews, a namespace each   | in-cluster Postgres per ns  |
-| `staging` | `aks-bbm-staging-frc`    | Free         | one release in namespace `bbm`              | PG Flexible Server          |
-| `prod`    | `aks-bbm-prod-cac`       | **Standard** | one release in namespace `bbm`              | PG Flexible Server          |
+| `test`    | `aks-bbm-test-cac`       | Free         | CI runs and PR previews, a namespace each   | in-cluster Postgres per ns  |
+| `staging` | `aks-bbm-staging-dke`    | Free         | one release in namespace `bbm`              | PG Flexible Server          |
+| `prod`    | `aks-bbm-prod-ncus`      | **Standard** | one release in namespace `bbm`              | PG Flexible Server          |
 
 - `test` is a normal `data` + `compute` env (short code `tst`, VNet `10.10.0.0/16`) with
   `postgres_enabled = false`. It can be paused like the others, and is part of the nightly auto-pause.
@@ -76,10 +76,10 @@ Owner, so no CI identity needs rights outside its own resource groups):
 | Zone                 | Resource group           | Purpose                                  |
 | -------------------- | ------------------------ | ---------------------------------------- |
 | `<zone>`             | `rg-bbm-shared-ncus`     | parent; delegated from the domain's DNS  |
-| `prod.<zone>`        | `rg-bbm-prod-data-cac`   | prod hosts                               |
-| `staging.<zone>`     | `rg-bbm-staging-data-frc` | staging hosts                           |
-| `test.<zone>`        | `rg-bbm-test-data-ncus`  | CI run hosts                             |
-| `preview.<zone>`     | `rg-bbm-test-data-ncus`  | PR preview hosts                         |
+| `prod.<zone>`        | `rg-bbm-prod-data-ncus`  | prod hosts                               |
+| `staging.<zone>`     | `rg-bbm-staging-data-dke` | staging hosts                           |
+| `test.<zone>`        | `rg-bbm-test-data-cac`   | CI run hosts                             |
+| `preview.<zone>`     | `rg-bbm-test-data-cac`   | PR preview hosts                         |
 
 Bootstrap also writes the NS delegation records for the four child zones into the parent zone.
 
@@ -226,7 +226,7 @@ dns:
   internalZone: prod.internal.<zone>
 platform:
   subscriptionId: ...
-  dnsResourceGroup: rg-bbm-<env>-data-<env abbr>   # e.g. rg-bbm-staging-data-frc
+  dnsResourceGroup: rg-bbm-<env>-data-<env abbr>   # e.g. rg-bbm-staging-data-dke
   certManagerClientId: ... # id-bbm-<env>-certmgr client id
 ```
 
@@ -309,19 +309,42 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   already request about 1.67 CPU / 1.7 GiB of it, so `istiod` stayed Pending and no Gateway was
   ever programmed. Azure for Students allows **6 vCPUs per region** ("Total Regional vCPUs"; 10 for
   BASv2), and DASv5 / DSv5 are 0, so three bigger nodes do not fit in one region.
-- **Decision.** Each env gets its own allowed region and one **`Standard_B4as_v2`** node (BASv2,
-  4 vCPU / 16 GiB, min = max = 1): 4 of the 6 vCPUs in each region.
+- **SKU availability.** Not every allowed region offers a 4 vCPU B-series size to this
+  subscription. Measured with `az vm list-skus` on the Azure for Students subscription:
+  - only **`northcentralus`** and **`denmarkeast`** offer an x86 4 vCPU B-series size
+    (`Standard_B4as_v2`, BASv2);
+  - **`canadacentral`** offers only arm64 (`Standard_B4ps_v2`, family Bpsv2);
+  - **`francecentral`** lists no B-series sizes at all;
+  - **`belgiumcentral`** has its B-series sizes marked `NotAvailableForSubscription`.
 
-  | Env       | Region           | Code   | Cluster                | Data RG                    |
-  | --------- | ---------------- | ------ | ---------------------- | -------------------------- |
-  | `test`    | `northcentralus` | `ncus` | `aks-bbm-test-ncus`    | `rg-bbm-test-data-ncus`    |
-  | `staging` | `francecentral`  | `frc`  | `aks-bbm-staging-frc`  | `rg-bbm-staging-data-frc`  |
-  | `prod`    | `canadacentral`  | `cac`  | `aks-bbm-prod-cac`     | `rg-bbm-prod-data-cac`     |
+  So at most two envs can run x86 nodes, and the third has to be arm64 in canadacentral.
+- **Decision.** Each env gets its own allowed region and one 4 vCPU / 16 GiB node (min = max =
+  1): 4 of the 6 vCPUs in each region.
 
-  test keeps the home region, so its already-applied data stack and every shared name
-  (`rg-bbm-tfstate-ncus`, `rg-bbm-shared-ncus`, `acrbbm<sfx>`, `kv-bbm-shared-<sfx>`) are
-  unchanged. francecentral and canadacentral have availability zones (zone-redundant ingress
-  PIPs); northcentralus has none.
+  | Env       | Region           | Code   | Node                        | Cluster                | Data RG                    |
+  | --------- | ---------------- | ------ | --------------------------- | ---------------------- | -------------------------- |
+  | `test`    | `canadacentral`  | `cac`  | `Standard_B4ps_v2` (arm64)  | `aks-bbm-test-cac`     | `rg-bbm-test-data-cac`     |
+  | `staging` | `denmarkeast`    | `dke`  | `Standard_B4as_v2` (x86)    | `aks-bbm-staging-dke`  | `rg-bbm-staging-data-dke`  |
+  | `prod`    | `northcentralus` | `ncus` | `Standard_B4as_v2` (x86)    | `aks-bbm-prod-ncus`    | `rg-bbm-prod-data-ncus`    |
+
+  **Test runs on arm64.** It hosts only CI-run and PR-preview namespaces, so it can take the one
+  region without an x86 size. `.github/workflows/_build-push.yml` builds the api and web images for
+  `linux/amd64,linux/arm64`; analysis and contracts stay amd64 (analysis is off everywhere, and the
+  chart deploys no contracts image).
+  **Staging and prod get the two x86 regions,** so staging rehearses prod exactly: same
+  architecture, same node size, same images. Prod is in `northcentralus` to stay in North America
+  with the home region (tfstate, shared RG and ACR, so prod's image pulls stay in-region). The
+  shared names (`rg-bbm-tfstate-ncus`, `rg-bbm-shared-ncus`, `acrbbm<sfx>`,
+  `kv-bbm-shared-<sfx>`) are unchanged. canadacentral and denmarkeast have availability zones
+  (zone-redundant ingress PIPs); northcentralus has none, so prod's ingress IP has no zones
+  (`ingress_pip_zones = []`).
+- **Rejected: prod in canadacentral on arm64** (test or staging in northcentralus). Prod would run
+  a different architecture from staging, so staging would no longer rehearse prod (arm64-only bugs,
+  multi-arch builds of every prod image, including analysis once it is on).
+- **Rejected: two clusters** (one shared test/staging cluster in one x86 region, prod in the other).
+  It avoids arm64, but puts CI and PR previews next to staging on one 4 vCPU node and one Gateway,
+  so staging could not be paused while PRs are open and preview load would distort staging; it
+  also loses the isolation argued for under "Why not one shared cluster" below.
 - **Automatic upgrades stay off** (`automatic_upgrade_channel = "none"`, `node_os_upgrade_channel
   = "None"`): a 4-vCPU surge node does not fit in the 2 vCPUs left, and AKS does not allow max
   unavailable (an in-place upgrade without surge) on a system node pool, which is the only pool.
@@ -452,8 +475,9 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 - **Cost:** five public DNS zones (~$0.50 each per month) plus private zones; prod's Standard tier
   adds about $0.10 per cluster-hour while the cluster runs; the test cluster adds one more paused/LB
   footprint (static PIP and load balancer while paused). Updated in `docs/devops/cost.md`.
-- **Quota:** each cluster's one B4as_v2 node uses 4 of its region's 6 vCPUs (section 8); `up.sh`
-  checks each region's quota against that region's needs.
+- **Quota:** each cluster's one 4 vCPU node (B4ps_v2 in test, B4as_v2 in staging and prod) uses 4
+  of its region's 6 vCPUs (section 8); `up.sh` checks each region's quota against that region's
+  needs.
 - **CI latency:** the first Azure CI run after a nightly pause waits for the test cluster to start
   (~5–10 min).
 - **Account or domain switch:** `down.sh --all` on the old subscription, `up.sh` on the new one,
