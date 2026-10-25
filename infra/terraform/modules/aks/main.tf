@@ -7,7 +7,7 @@ locals {
   ci_streams = ["Microsoft-ContainerInsights-Group-Default"]
 }
 
-# Kubelet (node) identity, created here rather than by AKS so AcrPull exists
+# Kubelet (node) identity, created here rather than by AKS so its registry pull grant exists
 # before the first node pulls an image. It lives in the compute RG and goes
 # away with the cluster on `down`.
 resource "azurerm_user_assigned_identity" "kubelet" {
@@ -27,11 +27,14 @@ resource "azurerm_role_assignment" "cluster_kubelet_operator" {
   skip_service_principal_aad_check = true
 }
 
-# Env CI identities may assign only AcrPull in the shared RG (bootstrap ABAC
-# condition `shared_acr_pull_only`).
+# Env CI identities may assign only Container Registry Repository Reader in
+# the shared RG (bootstrap ABAC condition `shared_acr_reader_only`). The
+# registry is in ABAC repository-permissions mode, where AcrPull is not
+# honored. Registry-wide (no condition): the test cluster also pulls
+# bbm-preview/* and every cluster pulls mirror/*.
 resource "azurerm_role_assignment" "kubelet_acr_pull" {
   scope                            = var.acr_id
-  role_definition_name             = "AcrPull"
+  role_definition_name             = "Container Registry Repository Reader"
   principal_id                     = azurerm_user_assigned_identity.kubelet.principal_id
   principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
@@ -215,9 +218,21 @@ resource "azapi_update_resource" "app_routing_gateway_api" {
 
   response_export_values = ["properties.ingressProfile"]
 
+  # API version: managedClusters@2026-03-01 is in azapi 2.13.0's embedded
+  # schema (checked in the provider binary; it also carries the
+  # ingressProfile.gatewayAPI / gatewayAPIImplementations properties), so
+  # schema validation stays on.
   lifecycle {
-    # A replaced cluster keeps its resource ID; the OIDC issuer URL is new.
-    replace_triggered_by = [azurerm_kubernetes_cluster.this.oidc_issuer_url]
+    # azurerm PUTs the whole managedCluster with its own (older) API version,
+    # which does not know these fields, so any in-place update of the cluster
+    # (version upgrade, tags, autoscaler profile, ...) may drop them. A
+    # reference to the whole resource re-runs this PATCH after every azurerm
+    # update or replacement of the cluster (a replacement also covers the new
+    # OIDC issuer URL, the trigger this used before).
+    # TODO(confirm on a real plan): a cluster update should show this
+    # resource as "must be replaced" in the same plan, and the Gateway API
+    # settings should survive it (`az aks show --query ingressProfile`).
+    replace_triggered_by = [azurerm_kubernetes_cluster.this]
   }
 }
 

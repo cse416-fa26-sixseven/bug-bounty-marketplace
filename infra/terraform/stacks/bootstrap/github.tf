@@ -4,9 +4,12 @@
 
 locals {
   # GitHub Environment => OIDC identity, reviewer requirement, main-only.
+  # `test` (CI runs, janitor sweep) pushes the sha-* images staging/prod
+  # deploy, so it is main-only; `preview` runs for every same-repo PR branch
+  # with its own identity that can only push bbm-preview/*.
   github_environments = {
-    "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = false }
-    "preview"           = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = false }
+    "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = true }
+    "preview"           = { identity = "gh-bbm-preview", reviewers = false, main_only = false }
     "test-infra"        = { identity = "gh-bbm-test", reviewers = false, main_only = true }
     "infra-global"      = { identity = "gh-bbm-global", reviewers = true, main_only = true }
     "contracts-sepolia" = { identity = "gh-bbm-global", reviewers = true, main_only = false }

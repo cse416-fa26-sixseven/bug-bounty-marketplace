@@ -29,7 +29,7 @@ output "node_resource_group" {
 }
 
 output "kubelet_identity_principal_id" {
-  description = "Principal ID of the kubelet identity (has AcrPull on the ACR)."
+  description = "Principal ID of the kubelet identity (has Container Registry Repository Reader on the ACR)."
   value       = azurerm_user_assigned_identity.kubelet.principal_id
 }
 

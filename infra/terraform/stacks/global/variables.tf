@@ -66,13 +66,19 @@ variable "secret_officer_user_object_ids" {
 }
 
 variable "ephemeral_ci_principal_id" {
-  description = "Object ID of the gh-bbm-ephemeral service principal (bootstrap output github_principal_ids). Gets AcrPush on the registry. Null skips the grant."
+  description = "Object ID of the gh-bbm-ephemeral service principal (bootstrap output github_principal_ids). Gets Container Registry Repository Writer on the whole registry. Null skips the grant."
+  type        = string
+  default     = null
+}
+
+variable "preview_ci_principal_id" {
+  description = "Object ID of the gh-bbm-preview service principal (bootstrap output github_principal_ids). Gets Container Registry Repository Writer ABAC-scoped to bbm-preview/* (plus read on mirror/*). Null skips the grant."
   type        = string
   default     = null
 }
 
 variable "acr_push_principal_ids" {
-  description = "Additional service principal / managed identity object IDs (image build identities) granted AcrPush on the registry. Assigned with principal_type ServicePrincipal; users and groups are not supported."
+  description = "Additional service principal / managed identity object IDs (image build identities) granted Container Registry Repository Writer on the registry. Assigned with principal_type ServicePrincipal; users and groups are not supported."
   type        = list(string)
   default     = []
 }

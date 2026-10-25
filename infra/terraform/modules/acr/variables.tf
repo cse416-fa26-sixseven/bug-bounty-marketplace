@@ -24,6 +24,17 @@ variable "sku" {
   default     = "Basic"
 }
 
+variable "role_assignment_mode" {
+  description = "Role assignment permissions mode. AbacRepositoryPermissions (all SKUs, Basic included) honors only the Container Registry Repository Reader/Writer/Contributor/Catalog Lister data roles, optionally repository-scoped by ABAC conditions; LegacyRegistryPermissions honors AcrPull/AcrPush."
+  type        = string
+  default     = "AbacRepositoryPermissions"
+
+  validation {
+    condition     = contains(["AbacRepositoryPermissions", "LegacyRegistryPermissions"], var.role_assignment_mode)
+    error_message = "role_assignment_mode must be AbacRepositoryPermissions or LegacyRegistryPermissions."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to the registry."
   type        = map(string)

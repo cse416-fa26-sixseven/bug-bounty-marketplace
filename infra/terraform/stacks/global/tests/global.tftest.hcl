@@ -39,6 +39,7 @@ variables {
   dns_zone_name                  = "bbm.example.com"
   alert_emails                   = ["admin@example.com"]
   ephemeral_ci_principal_id      = "77777777-7777-7777-7777-777777777777"
+  preview_ci_principal_id        = "88888888-8888-8888-8888-888888888888"
   secret_officer_sp_object_ids   = ["99999999-9999-9999-9999-999999999999"]
   secret_officer_user_object_ids = ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
   acr_push_principal_ids         = ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
@@ -77,8 +78,16 @@ run "plan_names" {
   }
 
   assert {
-    condition     = alltrue([for ra in azurerm_role_assignment.acr_push : ra.principal_type == "ServicePrincipal"]) && length(azurerm_role_assignment.acr_push) == 1
-    error_message = "AcrPush grants must be typed ServicePrincipal (ABAC on gh-bbm-global)"
+    condition = (
+      alltrue([for ra in azurerm_role_assignment.acr_push : ra.principal_type == "ServicePrincipal" && ra.role_definition_name == "Container Registry Repository Writer"]) &&
+      length(azurerm_role_assignment.acr_push) == 1
+    )
+    error_message = "build identity grants must be Repository Writer typed ServicePrincipal (ABAC on gh-bbm-global)"
+  }
+
+  assert {
+    condition     = module.acr.role_assignment_mode == "AbacRepositoryPermissions" && module.acr.sku == "Basic"
+    error_message = "the registry must be Basic in ABAC repository-permissions mode"
   }
 }
 
@@ -86,8 +95,36 @@ run "apply_with_mocks" {
   command = apply
 
   assert {
-    condition     = length(azurerm_role_assignment.ephemeral_ci_acr_push) == 1 && azurerm_role_assignment.ephemeral_ci_acr_push[0].role_definition_name == "AcrPush"
-    error_message = "the ephemeral identity needs exactly AcrPush"
+    condition = (
+      length(azurerm_role_assignment.ephemeral_ci_acr_writer) == 1 &&
+      azurerm_role_assignment.ephemeral_ci_acr_writer[0].role_definition_name == "Container Registry Repository Writer" &&
+      azurerm_role_assignment.ephemeral_ci_acr_writer[0].condition == null
+    )
+    error_message = "the (main-only) ephemeral identity needs registry-wide Repository Writer"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_assignment.preview_ci_acr_writer) == 1 &&
+      azurerm_role_assignment.preview_ci_acr_writer[0].principal_id == "88888888-8888-8888-8888-888888888888" &&
+      azurerm_role_assignment.preview_ci_acr_writer[0].role_definition_name == "Container Registry Repository Writer" &&
+      azurerm_role_assignment.preview_ci_acr_writer[0].condition_version == "2.0"
+    )
+    error_message = "the preview identity needs a conditioned Repository Writer"
+  }
+
+  # Writes only under bbm-preview/; reads under bbm-preview/ or mirror/; bbm/ never.
+  assert {
+    condition = (
+      strcontains(local.preview_acr_condition, "ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/write'}") &&
+      strcontains(local.preview_acr_condition, "ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/metadata/write'}") &&
+      strcontains(local.preview_acr_condition, "ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/read'}") &&
+      strcontains(local.preview_acr_condition, "@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase 'bbm-preview/'))") &&
+      strcontains(local.preview_acr_condition, "StringStartsWithIgnoreCase 'mirror/'") &&
+      !strcontains(local.preview_acr_condition, "'bbm/'") &&
+      length(regexall("StringStartsWithIgnoreCase 'mirror/'", local.preview_acr_condition)) == 1
+    )
+    error_message = "preview ACR condition must limit writes to bbm-preview/ and reads to bbm-preview/ + mirror/"
   }
 
   assert {

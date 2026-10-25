@@ -5,9 +5,14 @@ locals {
   # Built-in role definition GUIDs that CI identities may hand out through the
   # ABAC-constrained "Role Based Access Control Administrator" role. Never
   # include Owner / User Access Administrator / RBAC Administrator here.
+  # The registry runs in ABAC repository-permissions mode
+  # (modules/acr role_assignment_mode), where AcrPull / AcrPush / AcrDelete
+  # are not honored: data-plane access uses the Container Registry Repository
+  # Reader / Writer / Contributor roles (optionally repository-scoped by an
+  # ABAC condition) plus Catalog Lister for listing repositories.
   role_guids = {
-    acr_pull                    = "7f951dda-4ed3-4680-a7ca-43fe172d538d"
-    acr_push                    = "8311e382-0749-4cb8-b61a-304f252e45ec"
+    acr_repo_reader             = "b93aa761-3e63-49ed-ac28-beffa264f7ac"
+    acr_repo_writer             = "2a1e307c-b015-4ebd-883e-5b7698a07328"
     aks_rbac_cluster_admin      = "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b"
     aks_rbac_writer             = "a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb"
     dns_zone_contributor        = "befefa01-2a29-4197-83a8-272ff33ce314"
@@ -29,20 +34,21 @@ locals {
   # RGs: workload identities -> KV/storage/queue, AKS identity -> network/DNS/MI,
   # cert-manager identity -> DNS Zone Contributor on the env's public zones.
   env_delegable_roles = [for k in [
-    "acr_pull", "aks_rbac_cluster_admin", "aks_rbac_writer", "dns_zone_contributor", "kv_secrets_officer", "kv_secrets_user",
+    "acr_repo_reader", "aks_rbac_cluster_admin", "aks_rbac_writer", "dns_zone_contributor", "kv_secrets_officer", "kv_secrets_user",
     "managed_identity_operator", "monitoring_metrics_pub", "network_contributor", "private_dns_zone_contrib",
     "storage_blob_data_contrib", "storage_blob_data_reader", "storage_queue_data_contrib",
     "storage_queue_data_reader", "storage_queue_msg_processor", "storage_queue_msg_sender",
   ] : local.role_guids[k]]
 
-  # Roles the global identity may assign inside the shared RG (ephemeral CI and
-  # build identities -> AcrPush, shared KV officers/readers).
+  # Roles the global identity may assign inside the shared RG (CI push
+  # identities -> Repository Writer, the preview identity's repository-scoped
+  # Writer, shared KV officers/readers).
   global_delegable_roles = [for k in [
-    "acr_push", "kv_secrets_officer", "kv_secrets_user",
+    "acr_repo_reader", "acr_repo_writer", "kv_secrets_officer", "kv_secrets_user",
   ] : local.role_guids[k]]
 
-  # Env identities may only grant AcrPull (kubelet identity) in the shared RG.
-  shared_acr_pull_only = [local.role_guids.acr_pull]
+  # Env identities may only grant Repository Reader (kubelet identity) in the shared RG.
+  shared_acr_reader_only = [local.role_guids.acr_repo_reader]
 
   # ABAC condition: role assignment writes are only allowed for the listed role
   # definitions AND service-principal assignees (workload/managed identities),
@@ -51,7 +57,7 @@ locals {
   rbac_condition = { for k, guids in {
     env    = local.env_delegable_roles
     global = local.global_delegable_roles
-    shared = local.shared_acr_pull_only
+    shared = local.shared_acr_reader_only
     } : k => join(" ", [
       "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR",
       "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${join(", ", guids)}}",
@@ -72,8 +78,10 @@ locals {
   blob_path_attr = "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path]"
 
   state_access = {
-    # Ephemeral namespaces only read helm_values from the test env's state.
+    # Ephemeral namespaces (CI runs, PR previews) only read helm_values from
+    # the test env's state.
     ephemeral = { write = [], read_only = ["global.tfstate", "test/"] }
+    preview   = { write = [], read_only = ["global.tfstate", "test/"] }
     global    = { write = ["global.tfstate"], read_only = [] }
     test      = { write = ["test/"], read_only = ["global.tfstate"] }
     staging   = { write = ["staging/"], read_only = ["global.tfstate"] }
@@ -144,10 +152,14 @@ locals {
     { key = "compute-aks-admin", scope = azurerm_resource_group.env_compute[env].id, role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin" },
     # Data stack creates the env Key Vault and its TF-generated secrets.
     { key = "data-kv-secrets", scope = azurerm_resource_group.env_data[env].id, role_definition_name = "Key Vault Secrets Officer" },
-    # Read ACR / LAW / UAMIs in the shared RG and grant the kubelet AcrPull.
+    # Read ACR / LAW / UAMIs in the shared RG and grant the kubelet
+    # Repository Reader.
     { key = "shared-reader", scope = local.rg_ids.shared, role_definition_name = "Reader" },
+    # deploy.yml checks that every image exists and reads its revision label
+    # (ABAC mode: Reader on the RG no longer covers registry data).
+    { key = "shared-acr-repo-reader", scope = local.rg_ids.shared, role_definition_name = "Container Registry Repository Reader" },
     {
-      key                  = "shared-acrpull-admin"
+      key                  = "shared-acr-reader-admin"
       scope                = local.rg_ids.shared
       role_definition_name = "Role Based Access Control Administrator"
       condition            = local.rbac_condition.shared
@@ -218,6 +230,20 @@ resource "azurerm_role_definition" "tfstate" {
 }
 
 locals {
+  # Test-cluster grants shared by gh-bbm-ephemeral (CI runs) and
+  # gh-bbm-preview (PR previews): create/delete their namespaces (AKS RBAC
+  # Cluster Admin + Cluster User for credentials), read and auto-resume the
+  # test env, read the shared RG (ACR, Log Analytics). Registry data access is
+  # granted per identity in stacks/global.
+  test_cluster_ci_roles = [
+    { key = "test-compute-aks-admin", scope = azurerm_resource_group.env_compute["test"].id, role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin" },
+    { key = "test-compute-aks-user", scope = azurerm_resource_group.env_compute["test"].id, role_definition_name = "Azure Kubernetes Service Cluster User Role" },
+    { key = "test-data-reader", scope = azurerm_resource_group.env_data["test"].id, role_definition_name = "Reader" },
+    { key = "test-data-power-operator", scope = azurerm_resource_group.env_data["test"].id, role_definition_id = azurerm_role_definition.power_operator.role_definition_resource_id },
+    { key = "test-compute-power-operator", scope = azurerm_resource_group.env_compute["test"].id, role_definition_id = azurerm_role_definition.power_operator.role_definition_resource_id },
+    { key = "shared-reader", scope = local.rg_ids.shared, role_definition_name = "Reader" },
+  ]
+
   # Kept as a local (not inline in the module call) so tests can assert on it.
   oidc_identities = {
     # Read-only plan identity for PRs and main. It only READS state (global,
@@ -235,21 +261,24 @@ locals {
       ]
     }
 
-    # CI-run / PR-preview namespaces on the test cluster (no Terraform): helm
-    # installs into its own namespaces, resumes a paused test env, reads
-    # helm_values from test/ state. AcrPush is granted by stacks/global (the
-    # registry does not exist yet at bootstrap time).
+    # CI-run namespaces on the test cluster (no Terraform), main only
+    # (environment `test`): helm installs into its own namespaces, resumes a
+    # paused test env, reads helm_values from test/ state, installs/upgrades
+    # the test cluster's platform. Repository Writer on the whole registry
+    # (it pushes the sha-* images staging/prod deploy) is granted by
+    # stacks/global (the registry does not exist yet at bootstrap time).
     "gh-bbm-ephemeral" = {
-      environments = ["test", "preview"]
-      role_assignments = [
-        { key = "test-compute-aks-admin", scope = azurerm_resource_group.env_compute["test"].id, role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin" },
-        { key = "test-compute-aks-user", scope = azurerm_resource_group.env_compute["test"].id, role_definition_name = "Azure Kubernetes Service Cluster User Role" },
-        { key = "test-data-reader", scope = azurerm_resource_group.env_data["test"].id, role_definition_name = "Reader" },
-        { key = "test-data-power-operator", scope = azurerm_resource_group.env_data["test"].id, role_definition_id = azurerm_role_definition.power_operator.role_definition_resource_id },
-        { key = "test-compute-power-operator", scope = azurerm_resource_group.env_compute["test"].id, role_definition_id = azurerm_role_definition.power_operator.role_definition_resource_id },
-        { key = "shared-reader", scope = local.rg_ids.shared, role_definition_name = "Reader" },
-        local.state_role.ephemeral,
-      ]
+      environments     = ["test"]
+      role_assignments = concat(local.test_cluster_ci_roles, [local.state_role.ephemeral])
+    }
+
+    # PR previews (environment `preview`, any branch, no reviewer): the same
+    # test-cluster roles, but in stacks/global its Repository Writer is
+    # ABAC-scoped to bbm-preview/* (it cannot touch bbm/*), and
+    # _ephemeral-env.yml never lets it install or upgrade the platform.
+    "gh-bbm-preview" = {
+      environments     = ["preview"]
+      role_assignments = concat(local.test_cluster_ci_roles, [local.state_role.preview])
     }
 
     "gh-bbm-global" = {
@@ -268,6 +297,11 @@ locals {
         { key = "shared-kv-secrets", scope = local.rg_ids.shared, role_definition_name = "Key Vault Secrets Officer" },
         # Budgets (subscription + RG) live in stacks/global.
         { key = "sub-cost-mgmt", scope = local.subscription_scope, role_definition_name = "Cost Management Contributor" },
+        # infra-janitor.yml ACR purge (ABAC mode: Contributor is control plane
+        # only): delete-lock/unlock deployed tags, `acr purge` in a quick run
+        # with the caller's identity, list repositories.
+        { key = "shared-acr-repo-contributor", scope = local.rg_ids.shared, role_definition_name = "Container Registry Repository Contributor" },
+        { key = "shared-acr-catalog-lister", scope = local.rg_ids.shared, role_definition_name = "Container Registry Repository Catalog Lister" },
         local.state_role.global,
       ]
     }
@@ -323,6 +357,21 @@ resource "azurerm_role_assignment" "admin_aks" {
 
   scope                = azurerm_resource_group.env_compute[each.value.env].id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
+  principal_id         = each.value.oid
+}
+
+# Admins' registry data access (ABAC mode: Owner is control plane only):
+# infra/up.sh lists mirror tags before `az acr import`, and admins inspect or
+# delete images by hand. Shared RG scope, so it exists before the registry.
+resource "azurerm_role_assignment" "admin_acr" {
+  for_each = merge([
+    for role in ["Container Registry Repository Contributor", "Container Registry Repository Catalog Lister"] : {
+      for oid in var.admin_object_ids : "${role}/${oid}" => { role = role, oid = oid }
+    }
+  ]...)
+
+  scope                = azurerm_resource_group.shared.id
+  role_definition_name = each.value.role
   principal_id         = each.value.oid
 }
 

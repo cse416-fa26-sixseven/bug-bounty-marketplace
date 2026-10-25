@@ -2,7 +2,7 @@
 # Tear down what infra/up.sh created (ADR 0002 §6), in reverse order.
 #
 #   infra/down.sh --subscription <id> (--envs test,staging,prod | --all)
-#                 [--keep-github] [--yes] [--dry-run]
+#                 [--keep-github] [--yes] [--yes-really-destroy-prod] [--dry-run]
 #
 #   --subscription  target subscription GUID (required)
 #   --envs          envs whose compute + data stacks are destroyed
@@ -11,14 +11,21 @@
 #                   CLOUDFLARE_API_TOKEN is set) and finally bootstrap
 #                   (state account, RGs, identities, DNS zones)
 #   --keep-github   with --all: leave the GitHub variables/Environments alone
-#   --yes           skip the typed confirmation (destroys without asking!)
+#   --yes           skip the typed subscription-name confirmation (destroys
+#                   without asking!), except for prod: see below
+#   --yes-really-destroy-prod
+#                   with --yes: also skip typing `prod`. Without it, destroying
+#                   prod (--envs ...prod... or --all) always asks you to type
+#                   `prod`, and fails when there is no terminal to ask on
 #   --dry-run       print what would be destroyed/deleted, change nothing
 #
 # Order: per env (test, staging, prod — prod last) compute, then data; then
 # with --all: global, Cloudflare NS, GitHub, bootstrap (its state is pulled
 # back to local first, because it lives in the account being deleted).
-# Afterwards soft-deleted Key Vaults named kv-bbm-* in this subscription are
-# purged so the names can be reused at once.
+# Afterwards the soft-deleted Key Vaults of the envs destroyed in this run
+# (kv-bbm-<tst|stg|prd>-<suffix>, plus kv-bbm-shared-<suffix> with --all) are
+# purged so the names can be reused at once; other soft-deleted vaults are
+# left alone.
 #
 # With --all, after a successful teardown the per-tenant tfvars/backend fields
 # up.sh wrote (subscription_id, suffix, admin/power-operator/Key Vault officer
@@ -38,7 +45,7 @@ usage() {
   exit "${1:-2}"
 }
 
-SUB="" ENVS_ARG="" ALL=0 KEEP_GH=0
+SUB="" ENVS_ARG="" ALL=0 KEEP_GH=0 REALLY_PROD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --subscription) SUB=${2:?--subscription needs a value}; shift 2 ;;
@@ -48,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --all) ALL=1; shift ;;
     --keep-github) KEEP_GH=1; shift ;;
     --yes | -y) ASSUME_YES=1; shift ;;
+    --yes-really-destroy-prod) REALLY_PROD=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h | --help) usage 0 ;;
     *) echo "down.sh: unknown argument '$1'" >&2; usage 2 ;;
@@ -115,7 +123,11 @@ if [[ $ALL == 1 ]]; then
   [[ $KEEP_GH == 0 ]] && info "  GitHub repo variables and Environments of $REPO created by gh_setup_commands"
   info "  bootstrap stack (state account, every bbm resource group, OIDC apps, DNS zones${ZONE:+ for $ZONE})"
 fi
-info "  then purge soft-deleted kv-bbm-* Key Vaults"
+if [[ $ALL == 1 ]]; then
+  info "  then purge the soft-deleted Key Vaults of those envs and the shared vault"
+else
+  info "  then purge the soft-deleted Key Vaults of those envs (no others)"
+fi
 [[ $ALL == 1 ]] && info "  finally reset the per-tenant fields in infra/terraform/envs/** to placeholders"
 if [[ "$DRY_RUN" == 0 && "$ASSUME_YES" == 0 ]]; then
   _tty_ok || die "no terminal for the confirmation: pass --yes"
@@ -123,7 +135,23 @@ if [[ "$DRY_RUN" == 0 && "$ASSUME_YES" == 0 ]]; then
   IFS= read -r typed </dev/tty || typed=""
   [[ "$typed" == "$SUB_NAME" ]] || die "confirmation did not match; nothing destroyed"
 fi
-ASSUME_YES=1 # confirmed once; the per-stack plans run unattended
+# prod gets its own typed confirmation, which plain --yes does not skip.
+HAS_PROD=0
+for e in "${ENVS[@]}"; do [[ "$e" == prod ]] && HAS_PROD=1; done
+if [[ $HAS_PROD == 1 ]]; then
+  warn "prod is selected: its cluster, database (all data) and Key Vault are destroyed"
+  if [[ "$ASSUME_YES" == 1 && $REALLY_PROD == 1 ]]; then
+    info "prod confirmation skipped (--yes --yes-really-destroy-prod)"
+  elif [[ "$DRY_RUN" == 1 ]]; then
+    info "dry run: a real run asks you to type 'prod' (or needs --yes --yes-really-destroy-prod)"
+  else
+    _tty_ok || die "destroying prod needs you to type 'prod', and there is no terminal: pass --yes --yes-really-destroy-prod to skip it; nothing destroyed"
+    printf "Type 'prod' to confirm destroying prod: " >/dev/tty
+    IFS= read -r typed </dev/tty || typed=""
+    [[ "$typed" == prod ]] || die "prod confirmation did not match; nothing destroyed"
+  fi
+fi
+ASSUME_YES=1 # confirmed; the per-stack plans run unattended
 
 # Capture bootstrap outputs needed after bootstrap is gone.
 GH_SCRIPT="$WORK/gh-setup.sh"
@@ -138,6 +166,34 @@ fi
 # ---- 3. envs ----------------------------------------------------------------
 step 3 "Environments: ${ENVS[*]}"
 
+# Key Vaults to purge after the destroy: only the vaults of the stacks this
+# run destroys. Read from the stack's output before destroying it; when that
+# is unavailable (state gone, dry run), the modules/naming pattern
+# kv-bbm-<short>-<suffix> with the suffix from the env's tfvars.
+PURGE_VAULTS=()
+env_short() { case "$1" in test) echo tst ;; staging) echo stg ;; prod) echo prd ;; global) echo shared ;; esac; }
+note_vault() { # note_vault <stack> <env>
+  local s=$1 e=$2 out=key_vault_name vars kv="" sfx
+  if [[ "$s" == global ]]; then
+    out=shared_key_vault_name
+    vars="$ENVS_DIR/global/global.tfvars"
+  else
+    vars="$ENVS_DIR/$e/data.tfvars"
+  fi
+  if [[ -n "$TFSTATE_ACCOUNT" ]]; then
+    kv=$("$TF_SH" "$s" "$e" output -raw "$out" 2>/dev/null) || kv=""
+  fi
+  if [[ ! "$kv" =~ ^kv-bbm-[a-z0-9-]+$ ]]; then
+    sfx=$(tfvars_get_string "$vars" suffix 2>/dev/null || true)
+    kv="kv-bbm-$(env_short "$e")-$sfx"
+    [[ "$sfx" =~ ^[a-z0-9]{4}$ ]] || {
+      warn "$s/$e: no key_vault_name output and no suffix in ${vars#"$BBM_REPO_ROOT/"}; its soft-deleted vault is not purged"
+      return 0
+    }
+  fi
+  PURGE_VAULTS+=("$kv")
+}
+
 destroy_stack() { # destroy_stack <stack> <env>
   local s=$1 e=$2
   if [[ -z "$TFSTATE_ACCOUNT" ]]; then
@@ -145,6 +201,7 @@ destroy_stack() { # destroy_stack <stack> <env>
     return 0
   fi
   retry 3 20 run "$TF_SH" "$s" "$e" init -reconfigure || die "$s/$e init failed"
+  [[ "$s" == data || "$s" == global ]] && note_vault "$s" "$e"
   if [[ "$DRY_RUN" == 0 && -z "$("$TF_SH" "$s" "$e" state list 2>/dev/null)" ]]; then
     info "$s/$e: state is empty; nothing to destroy"
     return 0
@@ -162,11 +219,18 @@ for e in "${ENVS[@]}"; do
   destroy_stack data "$e"
 done
 
+# purge_vaults: purge the soft-deleted vaults named in PURGE_VAULTS (other
+# soft-deleted kv-bbm-* vaults, e.g. of envs kept, are left alone).
 purge_vaults() {
-  local n l
+  local n l want
+  info "vaults to purge if soft-deleted: ${PURGE_VAULTS[*]:-none}"
+  [[ ${#PURGE_VAULTS[@]} -gt 0 ]] || return 0
   while read -r n l; do
     [[ -n "$n" ]] || continue
-    run az keyvault purge -n "$n" -l "$l" || warn "could not purge $n (purge protection?); the name stays reserved until it expires"
+    for want in "${PURGE_VAULTS[@]}"; do
+      [[ "$n" == "$want" ]] || continue
+      run az keyvault purge -n "$n" -l "$l" || warn "could not purge $n (purge protection?); the name stays reserved until it expires"
+    done
   done < <(az keyvault list-deleted --resource-type vault \
     --query "[?starts_with(name, 'kv-bbm-')].[name, properties.location]" -o tsv 2>/dev/null || true)
 }

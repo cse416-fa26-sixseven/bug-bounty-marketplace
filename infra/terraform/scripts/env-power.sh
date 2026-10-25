@@ -345,6 +345,14 @@ do_resume() {
   fi
   db_start
   read -r power prov <<<"$aks"
+  if [[ "$prov" == "Stopping" ]]; then
+    # A stop in flight (e.g. the nightly auto-pause) can still report power
+    # Running; waiting for "Running Succeeded" would time out. Let the stop
+    # finish, then start.
+    log "a stop is in progress ($power/$prov): waiting for it to finish before starting"
+    wait_for "AKS power/provisioning" aks_state "Stopped Succeeded"
+    power=Stopped prov=Succeeded
+  fi
   if [[ "$power" == "Running" || "$prov" == "Starting" ]]; then
     # Running, or a start already in flight (another caller): just wait.
     log "cluster is $power/$prov"

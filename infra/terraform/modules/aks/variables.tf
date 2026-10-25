@@ -88,7 +88,7 @@ variable "dns_service_ip" {
 }
 
 variable "acr_id" {
-  description = "Container registry ID; the kubelet identity gets AcrPull on it."
+  description = "Container registry ID; the kubelet identity gets Container Registry Repository Reader on it."
   type        = string
 }
 
@@ -167,7 +167,7 @@ variable "tags" {
 }
 
 variable "rbac_propagation_wait" {
-  description = "How long to wait after the Managed Identity Operator / AcrPull grants before creating the cluster (RBAC propagation)."
+  description = "How long to wait after the Managed Identity Operator / registry pull grants before creating the cluster (RBAC propagation)."
   type        = string
   default     = "90s"
 }

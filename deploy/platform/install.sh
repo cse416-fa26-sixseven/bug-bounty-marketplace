@@ -12,6 +12,12 @@
 #
 # Idempotent: safe to re-run. Assumes the current kubectl context already
 # points at the env's cluster (az aks get-credentials + kubelogin).
+#
+# After a successful install it stamps namespace bbm-platform with
+# bbm.io/platform-rev, a hash of what it installed (cert-manager version and
+# values, the bbm-platform chart minus README/ci). `install.sh --print-rev`
+# prints the hash of the current checkout, so PR previews (which never
+# install the platform) can tell a missing or outdated platform apart.
 set -euo pipefail
 
 CERT_MANAGER_VERSION="v1.21.3"
@@ -29,6 +35,7 @@ CM_VALUES="$SCRIPT_DIR/cert-manager-values.yaml"
 usage() {
   cat <<EOF
 Usage: deploy/platform/install.sh <env> --values <values-infra.yaml> [--issuer letsencrypt-prod|letsencrypt-staging] [--wait]
+       deploy/platform/install.sh --print-rev
 
 Installs cert-manager ${CERT_MANAGER_VERSION} and the bbm-platform chart into the
 cluster of the current kubectl context.
@@ -38,8 +45,32 @@ cluster of the current kubectl context.
   --issuer NAME       ClusterIssuer for the wildcard certificate (default letsencrypt-prod)
   --wait              wait up to ${CERT_TIMEOUT} for Certificate bbm-platform/bbm-wildcard to be Ready
                       and up to ${GATEWAY_TIMEOUT} for Gateway bbm-platform/bbm to be Programmed
+  --print-rev         print the platform revision of this checkout (the bbm.io/platform-rev
+                      annotation an install stamps) and exit; needs only python3
   -h, --help          show this help
 EOF
+}
+
+# platform_rev: sha256 over the cert-manager version and values and every
+# bbm-platform chart file except README.md and ci/ (paths relative to the
+# repo root, sorted), so it is the same on every machine for one commit.
+platform_rev() {
+  python3 -I - "$REPO_ROOT" "$CERT_MANAGER_VERSION" <<'PYREV'
+import hashlib, os, sys
+root, cm_version = sys.argv[1], sys.argv[2]
+chart = os.path.join("deploy", "helm", "bbm-platform")
+files = [os.path.join("deploy", "platform", "cert-manager-values.yaml")]
+for d, dirs, names in os.walk(os.path.join(root, chart)):
+    rel = os.path.relpath(d, root)
+    dirs[:] = [x for x in dirs if not (rel == chart and x == "ci")]
+    files += [os.path.join(rel, n) for n in names if not (rel == chart and n == "README.md")]
+h = hashlib.sha256(("cert-manager " + cm_version + "\n").encode())
+for f in sorted(p.replace(os.sep, "/") for p in files):
+    h.update(f.encode() + b"\0")
+    with open(os.path.join(root, f), "rb") as fh:
+        h.update(hashlib.sha256(fh.read()).hexdigest().encode() + b"\n")
+print(h.hexdigest()[:16])
+PYREV
 }
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -52,6 +83,7 @@ wait_cert=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h | --help) usage; exit 0 ;;
+    --print-rev) platform_rev; exit 0 ;;
     --values) [[ $# -ge 2 ]] || die "--values needs a file"; values_file="$2"; shift 2 ;;
     --values=*) values_file="${1#*=}"; shift ;;
     --issuer) [[ $# -ge 2 ]] || die "--issuer needs a name"; issuer="$2"; shift 2 ;;
@@ -178,6 +210,8 @@ if [[ "$wait_cert" == true ]]; then
   fi
 fi
 
-echo "==> platform ready on $context"
+rev="$(platform_rev)"
+kubectl annotate namespace bbm-platform --overwrite "bbm.io/platform-rev=$rev" >/dev/null
+echo "==> platform ready on $context (bbm.io/platform-rev=$rev)"
 kubectl -n bbm-platform get certificate bbm-wildcard 2>/dev/null || true
 kubectl -n bbm-platform get "$GATEWAY" 2>/dev/null || true

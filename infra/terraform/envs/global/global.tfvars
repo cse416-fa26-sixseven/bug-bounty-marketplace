@@ -5,6 +5,7 @@
 subscription_id              = "00000000-0000-0000-0000-000000000000"
 suffix                       = "0000"
 ephemeral_ci_principal_id    = null # gh-bbm-ephemeral SP object ID
+preview_ci_principal_id      = null # gh-bbm-preview SP object ID
 secret_officer_sp_object_ids = []   # gh-bbm-global SP (CI can apply)
 dns_zone_name                = ""   # parent zone, e.g. bug-bounty.example.com
 # <<< bootstrap hint

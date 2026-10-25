@@ -48,7 +48,7 @@ output "github_client_ids" {
 }
 
 output "github_principal_ids" {
-  description = "Service principal object ID per OIDC identity (stacks/global needs gh-bbm-global and gh-bbm-ephemeral)."
+  description = "Service principal object ID per OIDC identity (stacks/global needs gh-bbm-global, gh-bbm-ephemeral and gh-bbm-preview)."
   value       = module.github_oidc.principal_ids
 }
 
@@ -84,6 +84,7 @@ output "global_tfvars_hint" {
     subscription_id              = "${var.subscription_id}"
     suffix                       = "${random_string.suffix.result}"
     ephemeral_ci_principal_id    = "${module.github_oidc.principal_ids["gh-bbm-ephemeral"]}"
+    preview_ci_principal_id      = "${module.github_oidc.principal_ids["gh-bbm-preview"]}"
     secret_officer_sp_object_ids = ["${module.github_oidc.principal_ids["gh-bbm-global"]}"]
     dns_zone_name                = "${var.dns_zone_name}"
   EOT

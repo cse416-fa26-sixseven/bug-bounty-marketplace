@@ -83,8 +83,8 @@ run "apply_with_mocks" {
   command = apply
 
   assert {
-    condition     = length(module.github_oidc.client_ids) == 7
-    error_message = "expected 7 OIDC identities"
+    condition     = length(module.github_oidc.client_ids) == 8
+    error_message = "expected 8 OIDC identities"
   }
 
   assert {
@@ -180,7 +180,7 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      local.state_role_kind == { ephemeral = "reader", global = "writer", test = "writer", staging = "writer", prod = "writer", plan = "reader" } &&
+      local.state_role_kind == { ephemeral = "reader", preview = "reader", global = "writer", test = "writer", staging = "writer", prod = "writer", plan = "reader" } &&
       alltrue([for k, r in local.state_role : r.role_definition_id == azurerm_role_definition.tfstate[local.state_role_kind[k]].role_definition_resource_id])
     )
     error_message = "CI state grants must use the custom BBM tfstate writer/reader roles (plan: reader)"
@@ -238,9 +238,34 @@ run "apply_with_mocks" {
   assert {
     condition = (
       !contains(local.global_delegable_roles, local.role_guids.managed_identity_operator) &&
-      contains(local.global_delegable_roles, local.role_guids.acr_push)
+      contains(local.global_delegable_roles, local.role_guids.acr_repo_writer) &&
+      contains(local.global_delegable_roles, local.role_guids.acr_repo_reader)
     )
-    error_message = "global identity no longer needs Managed Identity Operator (ACA pull identity is gone)"
+    error_message = "global identity must delegate the ACR Repository Writer/Reader roles (and no longer Managed Identity Operator)"
+  }
+
+  # ABAC-mode registry: the legacy AcrPull/AcrPush GUIDs are not honored and
+  # must not be delegable anywhere.
+  assert {
+    condition = alltrue([for c in values(local.rbac_condition) :
+      !strcontains(c, "7f951dda-4ed3-4680-a7ca-43fe172d538d") && !strcontains(c, "8311e382-0749-4cb8-b61a-304f252e45ec")
+    ]) && local.shared_acr_reader_only == ["b93aa761-3e63-49ed-ac28-beffa264f7ac"]
+    error_message = "constrained RBAC must delegate Repository Reader (kubelet), never AcrPull/AcrPush"
+  }
+
+  assert {
+    condition = (
+      contains([for ra in local.oidc_identities["gh-bbm-global"].role_assignments : try(ra.role_definition_name, "-")], "Container Registry Repository Contributor") &&
+      contains([for ra in local.oidc_identities["gh-bbm-global"].role_assignments : try(ra.role_definition_name, "-")], "Container Registry Repository Catalog Lister") &&
+      alltrue([for env in ["test", "staging", "prod"] :
+      contains([for ra in local.oidc_identities["gh-bbm-${env}"].role_assignments : ra.key], "shared-acr-repo-reader")])
+    )
+    error_message = "gh-bbm-global needs Repository Contributor + Catalog Lister (janitor purge); env identities need Repository Reader (deploy image checks)"
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.admin_acr) == 2
+    error_message = "each admin needs Repository Contributor + Catalog Lister on the shared RG (ABAC-mode registry)"
   }
 
   # ---- test env + ephemeral namespaces -----------------------------------------
@@ -254,17 +279,45 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition = toset([for ra in local.oidc_identities["gh-bbm-ephemeral"].role_assignments : ra.key]) == toset([
-      "test-compute-aks-admin", "test-compute-aks-user", "test-data-reader",
-      "test-data-power-operator", "test-compute-power-operator", "shared-reader", "tfstate",
+    condition = alltrue([for id in ["gh-bbm-ephemeral", "gh-bbm-preview"] :
+      toset([for ra in local.oidc_identities[id].role_assignments : ra.key]) == toset([
+        "test-compute-aks-admin", "test-compute-aks-user", "test-data-reader",
+        "test-data-power-operator", "test-compute-power-operator", "shared-reader", "tfstate",
+      ])
     ])
-    error_message = "gh-bbm-ephemeral role set wrong"
+    error_message = "gh-bbm-ephemeral / gh-bbm-preview role set wrong"
   }
 
   assert {
-    condition = alltrue([for ra in local.oidc_identities["gh-bbm-ephemeral"].role_assignments :
-    !contains(["Contributor", "Owner", "Role Based Access Control Administrator", "Managed Identity Operator"], try(ra.role_definition_name, "-"))])
-    error_message = "gh-bbm-ephemeral must not hold Contributor / RBAC admin / MI Operator"
+    condition = alltrue(flatten([for id in ["gh-bbm-ephemeral", "gh-bbm-preview"] : [
+      for ra in local.oidc_identities[id].role_assignments :
+      !contains(["Contributor", "Owner", "Role Based Access Control Administrator", "Managed Identity Operator"], try(ra.role_definition_name, "-")) &&
+      !startswith(try(ra.role_definition_name, "-"), "Container Registry")
+    ]]))
+    error_message = "gh-bbm-ephemeral / gh-bbm-preview must not hold Contributor / RBAC admin / MI Operator (registry grants come from stacks/global)"
+  }
+
+  # `test` (sha-* pushes) is main-only; `preview` has its own identity.
+  assert {
+    condition = (
+      module.github_oidc.subjects["gh-bbm-ephemeral"] == ["repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:test"] &&
+      module.github_oidc.subjects["gh-bbm-preview"] == ["repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:preview"] &&
+      local.github_environments["test"].main_only &&
+      !local.github_environments["preview"].main_only &&
+      jsondecode(local.env_payload["test"]).deployment_branch_policy.custom_branch_policies &&
+      jsondecode(local.env_payload["preview"]).deployment_branch_policy == null &&
+      jsondecode(local.env_payload["preview"]).reviewers == [] &&
+      strcontains(output.gh_setup_commands, "repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments/test/deployment-branch-policies") &&
+      !strcontains(output.gh_setup_commands, "environments/preview/deployment-branch-policies") &&
+      strcontains(output.gh_setup_commands, "# --- environment: preview (gh-bbm-preview)") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo cse416-fa26-sixseven/bug-bounty-marketplace --env preview")
+    )
+    error_message = "test must be main-only (gh-bbm-ephemeral); preview must map to gh-bbm-preview, any branch, no reviewer"
+  }
+
+  assert {
+    condition     = strcontains(output.global_tfvars_hint, "preview_ci_principal_id      = \"77777777-7777-7777-7777-777777777777\"")
+    error_message = "global_tfvars_hint must emit preview_ci_principal_id"
   }
 
   assert {

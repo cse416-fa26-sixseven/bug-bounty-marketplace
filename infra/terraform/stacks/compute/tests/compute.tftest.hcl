@@ -359,6 +359,12 @@ run "test_env" {
     error_message = "test cluster must be Free tier with only the system pool"
   }
 
+  # Ephemeral namespaces run without workload identity; only cert-manager federates.
+  assert {
+    condition     = length(output.federated_subjects) == 1 && output.federated_subjects[0] == "system:serviceaccount:cert-manager:cert-manager"
+    error_message = "the test cluster must federate only cert-manager (no bbm/bbm-sandbox/KEDA credentials)"
+  }
+
   assert {
     condition = alltrue([
       yamldecode(output.helm_values).ingress.host == "test.bbm.example.com",

@@ -439,17 +439,20 @@ ensure_llm_key() { # ensure_llm_key <vault>
 }
 
 dns_checked=0
+DELEGATED=1 # 0: continuing without a visible delegation (install without --wait)
 check_delegation() {
   [[ $dns_checked == 1 || "$DRY_RUN" == 1 ]] && return 0
   dns_checked=1
   if wait_for_delegation "$ZONE" "${BBM_DNS_TIMEOUT:-900}" "${NS[@]}"; then return 0; fi
-  if [[ "$ASSUME_YES" == 1 ]] || confirm "Delegation of $ZONE is not visible yet. Install the platform anyway (certificates will wait)?"; then
-    warn "continuing without delegation: cert-manager retries DNS-01 until the NS records resolve"
+  if [[ "$ASSUME_YES" == 1 ]] || confirm "Delegation of $ZONE is not visible yet. Install the platform anyway, without waiting for the certificate?"; then
+    warn "continuing without delegation: the platform is installed without --wait; cert-manager retries DNS-01 until the NS records resolve"
+    DELEGATED=0
     return 0
   fi
   die "delegation of $ZONE not visible at 1.1.1.1; add the NS records above and re-run (completed steps are skipped)"
 }
 
+PENDING_CERTS=()
 for e in "${ENVS[@]}"; do
   info "---- env $e"
   retry 3 30 run "$TF_SH" data "$e" init -reconfigure || die "data/$e init failed"
@@ -475,9 +478,25 @@ for e in "${ENVS[@]}"; do
   tf_out compute "$e" helm_values >"$WORK/values-infra-$e.yaml"
 
   check_delegation
-  KUBECONFIG=$kubeconfig run "$BBM_REPO_ROOT/deploy/platform/install.sh" "$e" --values "$WORK/values-infra-$e.yaml" --wait
-  ok "env $e is up"
+  if [[ $DELEGATED == 1 ]]; then
+    KUBECONFIG=$kubeconfig run "$BBM_REPO_ROOT/deploy/platform/install.sh" "$e" --values "$WORK/values-infra-$e.yaml" --wait
+    ok "env $e is up"
+  else
+    # --wait would time out on the certificate (DNS-01 cannot pass before
+    # the delegation resolves) and fail the run.
+    KUBECONFIG=$kubeconfig run "$BBM_REPO_ROOT/deploy/platform/install.sh" "$e" --values "$WORK/values-infra-$e.yaml"
+    PENDING_CERTS+=("$e")
+    warn "env $e is up, but its wildcard certificate is not issued yet (delegation of $ZONE not visible)"
+  fi
 done
+if [[ ${#PENDING_CERTS[@]} -gt 0 ]]; then
+  info "Check the certificates once the NS records resolve (dig NS $ZONE @1.1.1.1), per env:"
+  for e in "${PENDING_CERTS[@]}"; do
+    info "  az aks get-credentials -g rg-bbm-$e-compute-$LOC_ABBR -n aks-bbm-$e-$LOC_ABBR && kubelogin convert-kubeconfig -l azurecli"
+    info "  kubectl -n bbm-platform get certificate bbm-wildcard   # READY=True; kubectl get challenges -A while pending"
+  done
+  info "  or re-run infra/up.sh with the same arguments: it waits for the certificate once the delegation is visible."
+fi
 
 # ---- 11. summary ------------------------------------------------------------
 step 11 "Summary"

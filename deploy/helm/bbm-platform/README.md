@@ -72,6 +72,13 @@ Certificate, Orders and Challenges if it is not) and up to 10 minutes for
 Gateway `bbm` to be `Programmed` (printing the Gateway, its pods/Service and
 Service events if it is not).
 
+After a successful install it annotates namespace `bbm-platform` with
+`bbm.io/platform-rev`, a hash of the cert-manager version and values and this
+chart (minus `README.md` and `ci/`). `install.sh --print-rev` prints the hash of
+the current checkout; PR previews, which never install the platform, compare
+the two and fail when the platform is missing or outdated. CI runs on `main`
+(environment `test`) re-run `install.sh` on every deploy.
+
 Use `--issuer letsencrypt-staging` while a new zone's delegation is being
 debugged: it avoids Let's Encrypt rate limits, but browsers don't trust it.
 Re-run without `--issuer` to switch back to `letsencrypt-prod`.

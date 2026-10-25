@@ -385,6 +385,7 @@ reset_tenant_fields() {
     tfvars_set_if_present "$f" suffix "$(hcl_quote "$PLACEHOLDER_SUFFIX")"
   done < <(find "$envs" -name '*.tfvars' | sort)
   tfvars_set_if_present "$glob" ephemeral_ci_principal_id null
+  tfvars_set_if_present "$glob" preview_ci_principal_id null
   tfvars_set_if_present "$glob" secret_officer_sp_object_ids "$empty"
   tfvars_set_if_present "$glob" secret_officer_user_object_ids "$empty"
   while IFS= read -r f; do

@@ -45,7 +45,7 @@ make_tree() {
   local b="$dst/envs/global/bootstrap.tfvars" g="$dst/envs/global/global.tfvars"
   grep -q '^dns_zone_name' "$b" || printf '\ndns_zone_name = "" # set by infra/up.sh\n' >>"$b"
   if ! grep -qF '# >>> bootstrap hint' "$g"; then
-    grep -vE '^(subscription_id|suffix|ephemeral_ci_principal_id|secret_officer_sp_object_ids)[[:space:]]*=' "$g" >"$g.tmp"
+    grep -vE '^(subscription_id|suffix|ephemeral_ci_principal_id|preview_ci_principal_id|secret_officer_sp_object_ids)[[:space:]]*=' "$g" >"$g.tmp"
     {
       echo '# >>> bootstrap hint (written by infra/up.sh)'
       echo 'subscription_id = "00000000-0000-0000-0000-000000000000"'
@@ -117,6 +117,7 @@ cat >"$T/hint" <<'EOF'
 subscription_id           = "11111111-2222-3333-4444-555555555555"
 suffix                    = "ab12"
 ephemeral_ci_principal_id = "eeeeeeee-0000-0000-0000-000000000000"
+preview_ci_principal_id = "dddddddd-0000-0000-0000-000000000000"
 secret_officer_sp_object_ids = ["ffffffff-0000-0000-0000-000000000000"]
 # Add admin users to secret_officer_user_object_ids and apply locally as an Owner.
 EOF
@@ -171,6 +172,7 @@ eq "reset: power_operator_object_ids" "$(tfvars_get "$RB" power_operator_object_
 eq "reset: preregistered providers" "$(tfvars_get "$RB" preregistered_resource_providers)" "[]"
 eq "reset: global suffix" "$(tfvars_get_string "$RG_" suffix)" "$PLACEHOLDER_SUFFIX"
 eq "reset: global ephemeral principal" "$(tfvars_get "$RG_" ephemeral_ci_principal_id)" "null"
+eq "reset: global preview principal" "$(tfvars_get "$RG_" preview_ci_principal_id)" "null"
 eq "reset: global sp officers" "$(tfvars_get "$RG_" secret_officer_sp_object_ids)" "[]"
 eq "reset: global user officers" "$(tfvars_get "$RG_" secret_officer_user_object_ids)" "[]"
 for e in test staging prod; do
@@ -261,7 +263,7 @@ case "$1 $2" in
   "vm list-usage") echo '[{"name":{"value":"cores"},"currentValue":0,"limit":10},{"name":{"value":"standardBASv2Family"},"currentValue":0,"limit":2}]' ;;
   "postgres flexible-server") echo '[{"supportedServerEditions":[{"name":"Burstable","supportedServerSkus":[{"name":"Standard_B1ms"}]}]}]' ;;
   "aks get-versions") echo '{"values":[{"version":"1.32","isPreview":null},{"version":"1.33","isPreview":null,"isDefault":true},{"version":"1.35","isPreview":true}]}' ;;
-  "keyvault list-deleted") printf 'kv-bbm-stg-ab12\teastus2\n' ;;
+  "keyvault list-deleted") printf 'kv-bbm-stg-ab12\teastus2\nkv-bbm-shared-ab12\teastus2\nkv-bbm-stg-zz99\teastus2\nkv-bbm-prd-ab12\teastus2\n' ;;
   *) exit 1 ;;
 esac
 EOF
@@ -311,6 +313,12 @@ EOF
 for t in kubectl kubelogin helm; do
   # shellcheck disable=SC2016 # $* / $BBM_TEST_LOG expand inside the shim
   printf '#!/usr/bin/env bash\necho "%s $*" >>"$BBM_TEST_LOG"\n' "$t" >"$SHIM/$t"
+done
+# No network: anything that would reach the internet is a failing shim
+# (asserted unused at the end), so the suite runs on an offline runner.
+for t in curl dig nslookup wget; do
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\necho "NETWORK %s $*" >>"$BBM_TEST_LOG.net"\nexit 1\n' "$t" >"$SHIM/$t"
 done
 chmod +x "$SHIM"/*
 
@@ -401,6 +409,10 @@ if grep -qi 'one-command' "$T/out"; then ok_ "up: --help prints usage"; else bad
   BBM_TF_ROOT="$TREE2" tfvars_list_add "$TREE2/envs/test/data.tfvars" secret_officer_user_object_ids aaaaaaaa-0000-0000-0000-000000000001
   BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/backend.hcl" storage_account_name '"stbbmtfstateab12"'
   BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/bootstrap.tfvars" dns_zone_name '"bbm.example.com"'
+  BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/global.tfvars" suffix '"ab12"'
+  for e in test staging prod; do
+    BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/$e/data.tfvars" suffix '"ab12"'
+  done
 } 2>/dev/null
 snap0=$(snapshot)
 if run_script down.sh --subscription "$SUB" --all --yes --dry-run; then
@@ -417,6 +429,11 @@ has "down: gh env delete parsed" 'repos/cse416-fa26-sixseven/bug-bounty-marketpl
 has "down: bootstrap state pull" 'tf.sh bootstrap global state pull'
 has "down: bootstrap destroy" 'tf.sh bootstrap global plan -destroy'
 has "down: purge vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l eastus2'
+has "down --all: purge shared vault" 'az keyvault purge -n kv-bbm-shared-ab12 -l eastus2'
+has "down --all: purge prod vault" 'az keyvault purge -n kv-bbm-prd-ab12 -l eastus2'
+hasnt() { if grep -qF -- "$2" <<<"$out"; then bad "$1 (unexpected: $2)"; else ok_ "$1"; fi; }
+hasnt "down --all: other tenant's/suffix's vault kept" 'kv-bbm-stg-zz99'
+has "down --all: prod confirmation noted in dry run" "a real run asks you to type 'prod'"
 has "down: resets admin ids" 'bootstrap.tfvars: admin_object_ids = [] (was ["aaaaaaaa-0000-0000-0000-000000000001"])'
 has "down: resets subscription" "bootstrap.tfvars: subscription_id = \"$PLACEHOLDER_GUID\" (was \"$SUB\")"
 has "down: resets data officers" 'test/data.tfvars: secret_officer_user_object_ids = [] (was'
@@ -433,6 +450,51 @@ eq "down: dry-run left the tree untouched" "$(snapshot)" "$snap0"
 mut=$(grep -E '^az .*(purge|delete( |$))|^gh (variable|api -X)|^terraform .*(apply|destroy|init|plan|state)' "$LOG" || true)
 eq "down: no mutating CLI calls" "$mut" ""
 check_fails "down: needs --envs or --all" run_script down.sh --subscription "$SUB" --dry-run
+
+# --envs: purge only the destroyed envs' vaults (never the shared one)
+if run_script down.sh --subscription "$SUB" --envs staging --yes --dry-run; then
+  ok_ "down --envs staging --dry-run exits 0"
+else
+  bad "down --envs staging --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "down --envs staging: purges its vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l eastus2'
+hasnt "down --envs staging: keeps the shared vault" 'purge -n kv-bbm-shared-ab12'
+hasnt "down --envs staging: keeps prod's vault" 'purge -n kv-bbm-prd-ab12'
+hasnt "down --envs staging: keeps other suffixes" 'purge -n kv-bbm-stg-zz99'
+hasnt "down --envs staging: no prod confirmation" "type 'prod'"
+run_script down.sh --subscription "$SUB" --envs test --yes --dry-run || true
+out=$(cat "$T/out")
+hasnt "down --envs test: purges no other env's vault" 'az keyvault purge'
+
+# prod: --yes alone never skips typing `prod`
+run_script down.sh --subscription "$SUB" --envs prod --yes --yes-really-destroy-prod --dry-run || true
+out=$(cat "$T/out")
+has "down prod: --yes-really-destroy-prod skips the prod prompt" 'prod confirmation skipped (--yes --yes-really-destroy-prod)'
+if setsid -w true 2>/dev/null; then # no controlling terminal: --yes without the prod flag must refuse
+  : >"$LOG"
+  for envs in prod staging,prod; do
+    if RUN_WRAP="setsid -w" run_script down.sh --subscription "$SUB" --envs "$envs" --yes; then
+      bad "down --envs $envs --yes without a tty dies"
+    else
+      ok_ "down --envs $envs --yes without a tty dies"
+    fi
+    if grep -qF 'pass --yes --yes-really-destroy-prod' "$T/out"; then ok_ "down --envs $envs: refusal explains"; else bad "down --envs $envs: refusal explains"; fi
+  done
+  if RUN_WRAP="setsid -w" run_script down.sh --subscription "$SUB" --all --yes; then
+    bad "down --all --yes without a tty dies (prod)"
+  else
+    ok_ "down --all --yes without a tty dies (prod)"
+  fi
+  mut=$(grep -E '^terraform |^az .*(purge|delete( |$))|^gh ' "$LOG" || true)
+  eq "down prod refusal: nothing ran" "$mut" ""
+else
+  echo "  skip prod no-tty checks (no setsid -w)"
+fi
+
+net_calls=$(cat "$LOG.net" 2>/dev/null || true)
+eq "no network calls (curl/dig/nslookup/wget)" "$net_calls" ""
 
 echo
 echo "passed: $pass, failed: $failed"

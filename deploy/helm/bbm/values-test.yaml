@@ -1,21 +1,25 @@
 # Ephemeral namespaces on the test cluster (aks-bbm-test-eus2): CI runs
 # (run-<run_id>-<attempt>) and PR previews (pr-<n>). See ADR 0002 section 1.
-# Layer on top of values.yaml, then the test env's values-infra.yaml (for the
-# ACR registry), then the per-namespace values:
+# Layered after the test env's values-infra.yaml (registry, dns, ...), then the
+# per-namespace values, exactly as .github/workflows/_ephemeral-env.yml does:
 #
-#   # Reuse the namespace's password on upgrades (a new one re-creates the
+#   # Reuse the release's password on upgrades (a new one re-creates the
 #   # database and rolls the api); generate one on first install.
-#   pw=$(kubectl -n "$NS" get secret bbm-postgres -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+#   pw=$(helm get values bbm -n "$NS" -o json 2>/dev/null | jq -r '.postgres.inCluster.password // empty')
 #   [ -n "$pw" ] || pw=$(openssl rand -hex 24)
+#   printf 'postgres:\n  inCluster:\n    enabled: true\n    password: "%s"\n' "$pw" > values-db.yaml
 #   # Lets the namespace's HTTPRoute attach to the bbm-platform Gateway.
 #   kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
 #   kubectl label namespace "$NS" --overwrite bbm.io/gateway-access=true
 #   helm upgrade --install bbm deploy/helm/bbm -n "$NS" \
-#     -f deploy/helm/bbm/values-test.yaml -f values-infra.yaml \
-#     --set global.image.tag=sha-xxxxxxx \
+#     -f values-infra.yaml -f deploy/helm/bbm/values-test.yaml -f values-db.yaml \
 #     --set ingress.host="$NS.test.<zone>" \
-#     --set-string postgres.inCluster.password="$pw" \
-#     --atomic --wait --timeout 10m
+#     --set global.image.tag=sha-xxxxxxx \
+#     --wait --atomic --timeout 15m
+#
+# PR previews also set --set api.image.repository=bbm-preview/api
+# --set web.image.repository=bbm-preview/web (the preview identity can only
+# push bbm-preview/*) and host pr-<n>.preview.<zone>.
 #
 # Optional: --set web.image.tag=<tag> for the mocked web image,
 # --set-string secrets.plain.llmApiKey=... .
@@ -48,7 +52,7 @@ azure:
 postgres:
   inCluster:
     enabled: true
-    # password: REQUIRED, per namespace via --set-string.
+    # password: REQUIRED, per namespace (values-db.yaml above).
 
 web:
   replicaCount: 1

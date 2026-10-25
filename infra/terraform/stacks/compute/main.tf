@@ -1,5 +1,5 @@
 # Disposable compute layer for test/staging/prod: the AKS cluster, its node pools,
-# kubelet AcrPull and the workload-identity federated credentials. Everything
+# kubelet registry pull grant and the workload-identity federated credentials. Everything
 # durable lives in stacks/data (read through remote state), so `down`
 # (terraform destroy of this stack) and `up` (apply) lose no data, IP or DNS.
 
@@ -94,12 +94,12 @@ module "aks" {
 
 # Service accounts (deploy/helm/bbm) -> user-assigned identities from the data
 # stack. These live here because the issuer URL changes on cluster recreate.
-module "workload_identity" {
-  source = "../../modules/workload-identity-federation"
-
-  issuer_url = module.aks.oidc_issuer_url
-
-  identities = {
+locals {
+  # The app's identities, for release `bbm` in namespace `bbm` (staging/prod).
+  # The test cluster has no such release: its ephemeral namespaces run with
+  # azure.workloadIdentity.enabled=false (values-test.yaml), so only the
+  # cert-manager credential is created there.
+  app_workload_identities = {
     api = {
       user_assigned_identity_id = local.d.uami.api.id
       credentials = {
@@ -121,7 +121,10 @@ module "workload_identity" {
         "bbm-sandbox-bbm-sandbox-runner" = "system:serviceaccount:bbm-sandbox:bbm-sandbox-runner"
       }
     }
-    # cert-manager DNS-01 solver (deploy/platform), DNS Zone Contributor on the env zones.
+  }
+
+  # cert-manager DNS-01 solver (deploy/platform), DNS Zone Contributor on the env zones.
+  platform_workload_identities = {
     certmgr = {
       user_assigned_identity_id = local.d.uami.certmgr.id
       credentials = {
@@ -129,6 +132,17 @@ module "workload_identity" {
       }
     }
   }
+}
+
+module "workload_identity" {
+  source = "../../modules/workload-identity-federation"
+
+  issuer_url = module.aks.oidc_issuer_url
+
+  identities = merge(
+    { for k, v in local.app_workload_identities : k => v if var.env != "test" },
+    local.platform_workload_identities,
+  )
 }
 
 locals {

@@ -110,6 +110,7 @@ TFSTATE_ACCOUNT=stbbmtfstate<sfx> ./scripts/tf.sh data test plan
   | identity            | role (on `tfstate`)  | read + write     | read only                               |
   | ------------------- | -------------------- | ---------------- | --------------------------------------- |
   | `gh-bbm-ephemeral`  | `BBM tfstate reader` | —                | `global.tfstate`, `test/*`              |
+  | `gh-bbm-preview`    | `BBM tfstate reader` | —                | `global.tfstate`, `test/*`              |
   | `gh-bbm-global`     | `BBM tfstate writer` | `global.tfstate` | —                                       |
   | `gh-bbm-test`       | `BBM tfstate writer` | `test/*`         | `global.tfstate`                        |
   | `gh-bbm-staging`    | `BBM tfstate writer` | `staging/*`      | `global.tfstate`                        |
@@ -229,11 +230,16 @@ platform:
 
 **Ephemeral namespaces** (CI runs `run-<id>-<attempt>`, PR previews `pr-<n>`)
 live on the test cluster and are not Terraform-managed. `gh-bbm-ephemeral`
-(GitHub Environments `test`, `preview`) has AKS RBAC Cluster Admin + Cluster
-User on the test compute RG, Reader on the test data RG, BBM Power Operator on
-both test RGs, read access to `test/*` state (for `helm_values`) and AcrPush.
-Terraform for the test env runs as `gh-bbm-test` (GitHub Environment
-`test-infra`, `main` only).
+(GitHub Environment `test`, `main` only: CI runs) and `gh-bbm-preview`
+(Environment `preview`, any PR branch) both have AKS RBAC Cluster Admin +
+Cluster User on the test compute RG, Reader on the test data RG, BBM Power
+Operator on both test RGs and read access to `test/*` state (for
+`helm_values`). In the registry (ABAC repository-permissions mode, see ADR 0002
+§4) `gh-bbm-ephemeral` has Container Registry Repository Writer on everything
+(it pushes the `bbm/*:sha-*` images staging/prod deploy), while
+`gh-bbm-preview`'s Writer is conditioned to `bbm-preview/*` (plus reads of
+`mirror/*`), so a PR cannot overwrite `bbm/*`. Terraform for the test env runs
+as `gh-bbm-test` (GitHub Environment `test-infra`, `main` only).
 
 ## Static checks (no Azure credentials needed)
 
