@@ -129,3 +129,15 @@ variable "container_insights" {
   type        = bool
   default     = false
 }
+
+variable "automatic_upgrade_channel" {
+  description = "AKS auto-upgrade channel (modules/aks). Set \"none\" while the subscription's vCPU quota is full."
+  type        = string
+  default     = "patch"
+}
+
+variable "node_os_upgrade_channel" {
+  description = "Node OS upgrade channel (modules/aks). Set \"None\" while the subscription's vCPU quota is full."
+  type        = string
+  default     = "NodeImage"
+}

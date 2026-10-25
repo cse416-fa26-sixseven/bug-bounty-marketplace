@@ -13,16 +13,24 @@ kubernetes_version = "1.34"
 # Uptime SLA for prod only (ADR 0002); test and staging stay on Free.
 aks_sku_tier = "Standard"
 
-# System pool reserved for critical add-ons; workloads go to the apps pool.
+# One system pool runs everything while the vCPU quota is 6 (see below).
+# With more quota: system_only_critical_addons = true, apps pool on (min 1, max 3).
 system_vm_size              = "Standard_B2als_v2"
 system_min_count            = 1
-system_max_count            = 2
-system_only_critical_addons = true
+system_max_count            = 1
+system_only_critical_addons = false
 
-apps_pool_enabled = true
+apps_pool_enabled = false
 apps_vm_size      = "Standard_B2als_v2"
 apps_min_count    = 1
 apps_max_count    = 3
 
 sandbox_pool_enabled = false # Kata sandbox; needs Dsv5 quota
 container_insights   = true
+
+# Azure for Students: 6 vCPUs per region and three clusters, so each cluster is
+# pinned to one B2als_v2 node (6/6). No surge node fits, so automatic upgrades
+# are off; upgrade by hand after pausing another env, or restore the defaults
+# (min 1/max 2-3, patch/NodeImage) on a subscription with more quota.
+automatic_upgrade_channel = "none"
+node_os_upgrade_channel   = "None"

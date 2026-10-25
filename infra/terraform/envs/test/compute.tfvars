@@ -10,12 +10,19 @@ location_abbr   = "ncus"
 # before the first apply: az aks get-versions -l <location> -o table (infra/up.sh checks it)
 kubernetes_version = "1.34"
 
-# One system pool runs everything; up to 3 nodes for concurrent CI namespaces.
+# One system pool runs everything (one node; see the quota note below).
 system_vm_size              = "Standard_B2als_v2"
 system_min_count            = 1
-system_max_count            = 3
+system_max_count            = 1
 system_only_critical_addons = false
 
 apps_pool_enabled    = false
 sandbox_pool_enabled = false
 container_insights   = false
+
+# Azure for Students: 6 vCPUs per region and three clusters, so each cluster is
+# pinned to one B2als_v2 node (6/6). No surge node fits, so automatic upgrades
+# are off; upgrade by hand after pausing another env, or restore the defaults
+# (min 1/max 2-3, patch/NodeImage) on a subscription with more quota.
+automatic_upgrade_channel = "none"
+node_os_upgrade_channel   = "None"

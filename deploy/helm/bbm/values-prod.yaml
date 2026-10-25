@@ -9,10 +9,10 @@
 # Postgres CIDR come from values-infra.yaml; never hardcode them here.
 
 global:
-  # Workloads land on the autoscaled `apps` node pool (system pool stays
-  # for system pods).
-  nodeSelector:
-    bbm.io/pool: apps
+  # Prod runs on its single system node while the subscription's vCPU quota
+  # is 6 (envs/prod/compute.tfvars has no apps pool). With the apps pool back
+  # on, restore: nodeSelector: { bbm.io/pool: apps }
+  nodeSelector: {}
 
 config:
   logLevel: info

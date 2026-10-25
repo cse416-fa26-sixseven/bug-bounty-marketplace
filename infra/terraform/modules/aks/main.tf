@@ -63,8 +63,8 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   # Patch channel moves only the patch level within var.kubernetes_version,
   # which is a minor alias, so it never drifts from config.
-  automatic_upgrade_channel = "patch"
-  node_os_upgrade_channel   = "NodeImage"
+  automatic_upgrade_channel = var.automatic_upgrade_channel
+  node_os_upgrade_channel   = var.node_os_upgrade_channel
 
   maintenance_window_auto_upgrade {
     frequency   = "Weekly"
