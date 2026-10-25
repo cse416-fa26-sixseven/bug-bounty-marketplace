@@ -55,7 +55,8 @@ sandbox:
   enabled: false
 ingress:
   enabled: false
-  appRouting:
+postgres:
+  inCluster:
     enabled: false
 networkPolicy:
   enabled: false

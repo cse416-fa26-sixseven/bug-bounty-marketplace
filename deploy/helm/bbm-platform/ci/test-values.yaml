@@ -1,0 +1,21 @@
+# Fake values-infra.yaml for the test env (two env zones: CI runs and PR
+# previews), unquoted style.
+global:
+  image:
+    registry: acrbbmfake0000.azurecr.io
+ingress:
+  host: test.bbm.example.com
+  publicIpName: pip-bbm-test-ingress
+  publicIpResourceGroup: rg-bbm-test-data-eus2
+networkPolicy:
+  postgresCidr: ""
+dns:
+  zone: bbm.example.com
+  envZones:
+    - test.bbm.example.com
+    - preview.bbm.example.com
+  internalZone: test.internal.bbm.example.com
+platform:
+  subscriptionId: 44444444-4444-4444-4444-444444444444
+  dnsResourceGroup: rg-bbm-test-data-eus2
+  certManagerClientId: 66666666-6666-6666-6666-666666666666

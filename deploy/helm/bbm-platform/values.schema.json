@@ -1,0 +1,210 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bbm-platform chart values",
+  "description": "Top-level keys other than these are allowed: the whole values-infra.yaml (terraform helm_values) is passed in, and its app-chart keys are ignored.",
+  "type": "object",
+  "required": [
+    "dns",
+    "platform",
+    "ingress",
+    "acme",
+    "certificate",
+    "controller"
+  ],
+  "properties": {
+    "dns": {
+      "type": "object",
+      "required": [
+        "zone",
+        "envZones"
+      ],
+      "properties": {
+        "zone": {
+          "type": "string",
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Parent zone (values-infra.yaml)."
+        },
+        "envZones": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          },
+          "description": "Env public zones (values-infra.yaml)."
+        },
+        "internalZone": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "platform": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "dnsResourceGroup",
+        "certManagerClientId"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "dnsResourceGroup": {
+          "type": "string",
+          "minLength": 1
+        },
+        "certManagerClientId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ingress": {
+      "type": "object",
+      "required": [
+        "publicIpName",
+        "publicIpResourceGroup"
+      ],
+      "properties": {
+        "publicIpName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publicIpResourceGroup": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "acme": {
+      "type": "object",
+      "required": [
+        "issuers"
+      ],
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string",
+          "enum": [
+            "AzurePublicCloud",
+            "AzureChinaCloud",
+            "AzureGermanCloud",
+            "AzureUSGovernmentCloud"
+          ]
+        },
+        "issuers": {
+          "type": "object",
+          "required": [
+            "letsencrypt-staging",
+            "letsencrypt-prod"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "server"
+            ],
+            "properties": {
+              "server": {
+                "type": "string",
+                "pattern": "^https://"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "certificate": {
+      "type": "object",
+      "required": [
+        "name",
+        "secretName",
+        "issuer"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "secretName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "issuer": {
+          "type": "string",
+          "enum": [
+            "letsencrypt-prod",
+            "letsencrypt-staging"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "controller": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "name",
+        "ingressClassName",
+        "controllerNamePrefix"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "ingressClassName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "controllerNamePrefix": {
+          "type": "string",
+          "pattern": "^[a-z0-9][-a-z0-9]*[a-z0-9]$",
+          "maxLength": 60
+        },
+        "forceSSLRedirect": {
+          "type": "boolean"
+        },
+        "scaling": {
+          "type": "object",
+          "properties": {
+            "minReplicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxReplicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "threshold": {
+              "type": "string",
+              "enum": [
+                "rapid",
+                "balanced",
+                "steady"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

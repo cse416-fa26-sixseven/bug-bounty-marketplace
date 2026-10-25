@@ -1,0 +1,72 @@
+# Default values for bbm-platform. Release `bbm-platform`, namespace
+# `bbm-platform`, one per cluster. Layering (deploy/platform/install.sh):
+#
+#   values.yaml -> values-<env>.yaml -> values-infra.yaml -> [--set certificate.issuer=...]
+#
+# values-infra.yaml is the compute stack's `helm_values` output (the same file
+# the app chart gets). This chart reads dns.*, platform.* and
+# ingress.publicIpName / ingress.publicIpResourceGroup from it and ignores the
+# other keys. The infra keys are REQUIRED (values.schema.json): rendering
+# without them fails.
+
+# ---- from values-infra.yaml (ADR 0002 section 5) ----
+dns:
+  # -- Parent zone, e.g. bug-bounty.example.com (informational).
+  zone: ""
+  # -- The env's public zones: one solver per zone, and the wildcard
+  # certificate covers <z> and *.<z> for each. test: [test.<zone>, preview.<zone>].
+  envZones: []
+  # -- Private zone <env>.internal.<zone> (unused here).
+  internalZone: ""
+
+platform:
+  # -- Subscription holding the env zones.
+  subscriptionId: ""
+  # -- Resource group of the env zones (rg-bbm-<env>-data-eus2).
+  dnsResourceGroup: ""
+  # -- Client ID of id-bbm-<env>-certmgr (DNS Zone Contributor on the env
+  # zones, federated with system:serviceaccount:cert-manager:cert-manager).
+  certManagerClientId: ""
+
+ingress:
+  # -- Static public IP the controller's LoadBalancer binds (pip-bbm-<env>-ingress).
+  publicIpName: ""
+  # -- Resource group of that IP (rg-bbm-<env>-data-eus2).
+  publicIpResourceGroup: ""
+
+# ---- chart settings ----
+acme:
+  # -- Optional ACME account e-mail (expiry notices). Empty = no e-mail.
+  email: ""
+  # -- Azure cloud of the DNS zones.
+  environment: AzurePublicCloud
+  issuers:
+    letsencrypt-staging:
+      server: https://acme-staging-v02.api.letsencrypt.org/directory
+    letsencrypt-prod:
+      server: https://acme-v02.api.letsencrypt.org/directory
+
+certificate:
+  # -- Certificate (and Secret) used as the controller's default certificate.
+  name: bbm-wildcard
+  secretName: bbm-wildcard-tls
+  # -- ClusterIssuer that signs it: letsencrypt-prod | letsencrypt-staging
+  # (install.sh --issuer). Use staging while testing a new zone to stay
+  # clear of Let's Encrypt rate limits; browsers will not trust it.
+  issuer: letsencrypt-prod
+
+controller:
+  # -- Render the AKS app-routing NginxIngressController (CLUSTER-SCOPED;
+  # needs the app-routing add-on CRD).
+  enabled: true
+  name: bbm
+  # -- IngressClass it creates; the app chart's ingress.className.
+  ingressClassName: bbm-nginx
+  controllerNamePrefix: nginx-bbm
+  # -- Redirect HTTP to HTTPS for every Ingress on this class. Ingresses
+  # with a TLS block (app chart tls.mode defaultCert / certManager) are
+  # redirected by NGINX anyway.
+  forceSSLRedirect: false
+  scaling:
+    minReplicas: 1
+    maxReplicas: 2

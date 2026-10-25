@@ -1,0 +1,38 @@
+{{- /*
+AKS application routing add-on: a dedicated NGINX controller (IngressClass
+bbm-nginx) whose LoadBalancer Service binds the static public IP that the
+data stack owns (pip-bbm-<env>-ingress in rg-bbm-<env>-data-eus2), with the
+env wildcard as its default certificate.
+
+CLUSTER-SCOPED. The controller pods run in app-routing-system. The AKS
+cluster identity needs Network Contributor on the PIP's resource group for
+the azure-pip-name binding to work.
+*/ -}}
+{{- if .Values.controller.enabled }}
+{{- $c := .Values.controller -}}
+{{- $pip := include "bbm-platform.requireInfra" (dict "key" "ingress.publicIpName" "value" .Values.ingress.publicIpName) -}}
+{{- $pipRg := include "bbm-platform.requireInfra" (dict "key" "ingress.publicIpResourceGroup" "value" .Values.ingress.publicIpResourceGroup) -}}
+apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: NginxIngressController
+metadata:
+  name: {{ $c.name }}
+  labels:
+    {{- include "bbm-platform.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ $c.ingressClassName }}
+  controllerNamePrefix: {{ $c.controllerNamePrefix }}
+  loadBalancerAnnotations:
+    service.beta.kubernetes.io/azure-pip-name: {{ $pip | quote }}
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ $pipRg | quote }}
+  defaultSSLCertificate:
+    secret:
+      name: {{ .Values.certificate.secretName }}
+      namespace: {{ .Release.Namespace }}
+    {{- if $c.forceSSLRedirect }}
+    forceSSLRedirect: true
+    {{- end }}
+  {{- with $c.scaling }}
+  scaling:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

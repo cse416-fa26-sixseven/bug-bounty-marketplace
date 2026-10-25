@@ -7,6 +7,9 @@ Components:
 {{- if .Values.analysis.enabled }}
   analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}
 {{- end }}
+{{- if .Values.postgres.inCluster.enabled }}
+  postgres  {{ include "bbm.fullname" . }}-postgres:5432   (in-cluster, emptyDir: data is lost on restart; test/preview only)
+{{- end }}
 {{- if .Values.sandbox.enabled }}
   sandbox   namespace {{ .Values.sandbox.namespace }} (stub: RBAC, quota, deny-all, Job template)
 {{- end }}
@@ -22,10 +25,13 @@ Migrations: {{ if .Values.migrations.enabled }}pre-install/pre-upgrade hook Job 
 {{- if .Values.ingress.enabled }}
 
 Ingress (class {{ .Values.ingress.className }}):
-  {{ if eq .Values.ingress.tls.mode "certManager" }}https{{ else }}http{{ end }}://{{ .Values.ingress.host | default "<any host>" }}/
-{{- if .Values.ingress.appRouting.enabled }}
-  NginxIngressController "{{ .Values.ingress.appRouting.name }}" (cluster-scoped) binds public IP {{ .Values.ingress.publicIpName | default "<unset>" }}.
+  {{ if eq .Values.ingress.tls.mode "none" }}http{{ else }}https{{ end }}://{{ .Values.ingress.host | default "<any host>" }}/
+{{- if eq .Values.ingress.tls.mode "defaultCert" }}
+  TLS: the controller's default certificate (bbm-platform wildcard bbm-platform/bbm-wildcard-tls).
+{{- else if eq .Values.ingress.tls.mode "certManager" }}
+  TLS: Secret {{ .Values.ingress.tls.secretName }} issued by ClusterIssuer {{ .Values.ingress.tls.clusterIssuer }}.
 {{- end }}
+  The IngressClass and its NginxIngressController come from the bbm-platform chart (deploy/platform/install.sh).
 {{- else }}
 
 No Ingress. Reach the app with:
@@ -39,7 +45,7 @@ No Ingress. Reach the app with:
 {{- end }}
 {{- end }}
 {{- if and .Values.ingress.enabled (not .Values.ingress.host) }}{{ $missing = append $missing "ingress.host" }}{{ end }}
-{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.restrictEgress (not .Values.networkPolicy.postgresCidr) }}{{ $missing = append $missing "networkPolicy.postgresCidr (api cannot reach Postgres)" }}{{ end }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.restrictEgress (not .Values.networkPolicy.postgresCidr) (not .Values.postgres.inCluster.enabled) }}{{ $missing = append $missing "networkPolicy.postgresCidr (api cannot reach Postgres)" }}{{ end }}
 {{- with $missing }}
 
 WARNING: values normally provided by values-infra.yaml are missing:

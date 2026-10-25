@@ -1,0 +1,15 @@
+# Patterns to ignore when building packages.
+.DS_Store
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.idea/
+.vscode/
+# Never package a locally generated terraform output.
+values-infra.yaml
+# ct / CI fixtures (fake values-infra.yaml); not part of the packaged chart.
+ci/

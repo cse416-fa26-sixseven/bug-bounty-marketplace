@@ -25,6 +25,14 @@ spec:
     - secretName: {{ $i.tls.secretName }}
       hosts:
         - {{ required "ingress.host is required when ingress.tls.mode=certManager" $i.host | quote }}
+  {{- else if and (eq $i.tls.mode "defaultCert") $i.host }}
+  # No secretName: NGINX serves the controller's default certificate (the
+  # bbm-platform wildcard), so no per-namespace certificate is issued.
+  # Without a host (lint/kind only; deploys require it through
+  # global.requireInfraValues) there is nothing to list, so no TLS block.
+  tls:
+    - hosts:
+        - {{ $i.host | quote }}
   {{- end }}
   rules:
     {{- if $i.host }}

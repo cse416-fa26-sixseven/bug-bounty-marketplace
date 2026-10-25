@@ -1,0 +1,5 @@
+# Prod cluster (aks-bbm-prod-eus2).
+controller:
+  scaling:
+    minReplicas: 2
+    maxReplicas: 3

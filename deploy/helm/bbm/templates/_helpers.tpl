@@ -199,3 +199,45 @@ checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha
 checksum/secret: {{ include (print .Template.BasePath "/secret.yaml") . | sha256sum }}
 {{- end }}
 {{- end -}}
+
+{{/*
+DATABASE_URL for secrets.provider=plain: secrets.plain.databaseUrl when set,
+else the in-cluster Postgres Service when postgres.inCluster.enabled, else
+the kind/CI dummy.
+*/}}
+{{- define "bbm.databaseUrl" -}}
+{{- $pg := .Values.postgres.inCluster -}}
+{{- if .Values.secrets.plain.databaseUrl -}}
+{{- .Values.secrets.plain.databaseUrl -}}
+{{- else if $pg.enabled -}}
+{{- printf "postgres://%s:%s@%s:5432/%s" $pg.user (include "bbm.postgresPassword" .) (include "bbm.componentName" (dict "root" . "component" "postgres")) $pg.database -}}
+{{- else -}}
+postgres://bbm:bbm@postgres:5432/bbm
+{{- end -}}
+{{- end -}}
+
+{{/* In-cluster Postgres password (required when postgres.inCluster.enabled). */}}
+{{- define "bbm.postgresPassword" -}}
+{{- required "postgres.inCluster.password is required when postgres.inCluster.enabled=true" .Values.postgres.inCluster.password -}}
+{{- end -}}
+
+{{/* Egress rules to Postgres: the PG subnet CIDR and/or the in-cluster pods. */}}
+{{- define "bbm.postgresEgressRules" -}}
+{{- with .Values.networkPolicy.postgresCidr }}
+- to:
+    - ipBlock:
+        cidr: {{ . }}
+  ports:
+    - port: 5432
+      protocol: TCP
+{{- end }}
+{{- if .Values.postgres.inCluster.enabled }}
+- to:
+    - podSelector:
+        matchLabels:
+          {{- include "bbm.selectorLabels" (dict "root" . "component" "postgres") | nindent 10 }}
+  ports:
+    - port: 5432
+      protocol: TCP
+{{- end }}
+{{- end -}}

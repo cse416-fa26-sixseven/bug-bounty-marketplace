@@ -90,9 +90,12 @@ secrets:
   # -- Name of the Kubernetes Secret workloads read from.
   name: bbm-secrets
   plain:
-    # -- DATABASE_URL for provider=plain. Dummy default so the chart installs
-    # on kind; the api will fail its health checks without a reachable DB.
-    databaseUrl: postgres://bbm:bbm@postgres:5432/bbm
+    # -- DATABASE_URL for provider=plain. Empty = derived: with
+    # postgres.inCluster.enabled it points at the in-cluster Service
+    # (postgres://bbm:<password>@bbm-postgres:5432/bbm), otherwise it falls
+    # back to the dummy postgres://bbm:bbm@postgres:5432/bbm so the chart
+    # still installs on kind (the api then fails its health checks).
+    databaseUrl: ""
     # -- LLM API key for provider=plain.
     llmApiKey: ""
   csi:
@@ -307,33 +310,69 @@ sandbox:
 ingress:
   # -- Render the Ingress.
   enabled: false
-  # -- IngressClass to use (created by the NginxIngressController below when
-  # ingress.appRouting.enabled).
+  # -- IngressClass to use. bbm-nginx is created by the NginxIngressController
+  # `bbm` in the bbm-platform chart (deploy/helm/bbm-platform), not here.
   className: bbm-nginx
-  # -- Public host, e.g. bbm-<env>.eastus2.cloudapp.azure.com (values-infra).
+  # -- Public host, e.g. prod.<zone> (values-infra) or, on the test cluster,
+  # run-<id>-<attempt>.test.<zone> / pr-<n>.preview.<zone> (--set).
   # Empty = no host rule (matches any host).
   host: ""
   # -- Extra Ingress annotations.
   annotations: {}
   tls:
-    # -- none | certManager. certManager adds the cert-manager.io/cluster-issuer
-    # annotation and a TLS block (cert-manager must be installed separately).
+    # -- none | defaultCert | certManager.
+    #   defaultCert - TLS block with the host and no secretName: NGINX serves
+    #                 the controller's default certificate (the bbm-platform
+    #                 wildcard bbm-platform/bbm-wildcard-tls).
+    #   certManager - cert-manager.io/cluster-issuer annotation + a TLS block
+    #                 with secretName (a per-host certificate).
     mode: none
+    # -- ClusterIssuer for mode=certManager.
     clusterIssuer: letsencrypt-prod
+    # -- TLS Secret for mode=certManager.
     secretName: bbm-tls
-  # -- Name of the static public IP to bind (values-infra).
+  # -- Accepted for compatibility with values-infra.yaml but IGNORED by this
+  # chart: the static PIP is bound by the NginxIngressController in the
+  # bbm-platform chart.
   publicIpName: ""
-  # -- Resource group of that public IP (values-infra).
+  # -- Ignored by this chart (see publicIpName).
   publicIpResourceGroup: ""
-  appRouting:
-    # -- Render the AKS app-routing NginxIngressController `bbm`
-    # (CLUSTER-SCOPED; requires the app-routing add-on CRD).
+
+postgres:
+  inCluster:
+    # -- Run a throwaway single-replica Postgres (Deployment + Service
+    # <fullname>-postgres:5432, emptyDir data: everything is lost when the
+    # pod restarts). For ephemeral test/preview namespaces only; staging and
+    # prod use PG Flexible Server. With secrets.provider=plain and an empty
+    # secrets.plain.databaseUrl, DATABASE_URL points at it automatically.
+    # Incompatible with migrations.enabled (the pre-install hook would run
+    # before Postgres exists); use api.migrateOnBoot instead.
     enabled: false
-    name: bbm
-    controllerNamePrefix: nginx-bbm
-    scaling:
-      minReplicas: 1
-      maxReplicas: 2
+    image:
+      # -- Prefixed with global.image.registry (mirror it into ACR with
+      # `az acr import --source docker.io/library/postgres:16-alpine
+      # --image mirror/postgres:16-alpine`). For kind set `postgres`.
+      repository: mirror/postgres
+      tag: 16-alpine
+      pullPolicy: ""
+    # -- Database name and user.
+    database: bbm
+    user: bbm
+    # -- REQUIRED when enabled. Use URL-safe characters only
+    # ([A-Za-z0-9._~-]), since it is embedded in DATABASE_URL unescaped.
+    password: ""
+    # -- UID/GID of the `postgres` user in the alpine image.
+    runAsUser: 70
+    runAsGroup: 70
+    # -- sizeLimit of the emptyDir data volume.
+    storageSizeLimit: 1Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
 
 networkPolicy:
   # -- Render NetworkPolicies (default-deny ingress + allow-lists).
@@ -343,7 +382,8 @@ networkPolicy:
   # -- CIDR of the Postgres delegated subnet (snet-psql, values-infra). When
   # empty the Postgres egress rule is omitted.
   postgresCidr: ""
-  # -- Namespace the app-routing ingress controller pods run in.
+  # -- Namespace the app-routing ingress controller pods (NginxIngressController
+  # `bbm` from bbm-platform) run in.
   ingressControllerNamespace: app-routing-system
 
 tests:

@@ -809,6 +809,7 @@
               "type": "string",
               "enum": [
                 "none",
+                "defaultCert",
                 "certManager"
               ]
             },
@@ -825,59 +826,105 @@
           "additionalProperties": true
         },
         "publicIpName": {
-          "type": "string"
+          "type": "string",
+          "description": "Ignored by this chart; consumed by bbm-platform (accepted because values-infra.yaml sets it)."
         },
         "publicIpResourceGroup": {
-          "type": "string"
-        },
-        "appRouting": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "name": {
-              "type": "string",
-              "minLength": 1
-            },
-            "controllerNamePrefix": {
-              "type": "string",
-              "pattern": "^[a-z0-9][-a-z0-9]*[a-z0-9]$",
-              "maxLength": 60
-            },
-            "scaling": {
-              "type": "object",
-              "properties": {
-                "minReplicas": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "maxReplicas": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "threshold": {
-                  "type": "string",
-                  "enum": [
-                    "rapid",
-                    "balanced",
-                    "steady"
-                  ]
-                }
-              },
-              "additionalProperties": false
-            }
-          },
-          "required": [
-            "enabled"
-          ],
-          "additionalProperties": true
+          "type": "string",
+          "description": "Ignored by this chart; consumed by bbm-platform."
         }
       },
       "required": [
         "enabled"
       ],
       "additionalProperties": true
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "inCluster": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tag": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              },
+              "required": [
+                "repository"
+              ],
+              "additionalProperties": false
+            },
+            "database": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "password": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._~-]*$",
+              "description": "URL-safe characters only: embedded unescaped in DATABASE_URL."
+            },
+            "runAsUser": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "runAsGroup": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "storageSizeLimit": {
+              "type": "string"
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "enabled",
+            "image",
+            "database",
+            "user"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     },
     "networkPolicy": {
       "type": "object",
@@ -913,6 +960,16 @@
           "minLength": 1
         }
       },
+      "additionalProperties": true
+    },
+    "dns": {
+      "type": "object",
+      "description": "From values-infra.yaml (ADR 0002 section 5). Ignored by this chart; consumed by bbm-platform.",
+      "additionalProperties": true
+    },
+    "platform": {
+      "type": "object",
+      "description": "From values-infra.yaml (ADR 0002 section 5). Ignored by this chart; consumed by bbm-platform.",
       "additionalProperties": true
     }
   },

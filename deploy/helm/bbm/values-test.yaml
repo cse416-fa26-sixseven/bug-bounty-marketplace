@@ -1,0 +1,103 @@
+# Ephemeral namespaces on the test cluster (aks-bbm-test-eus2): CI runs
+# (run-<run_id>-<attempt>) and PR previews (pr-<n>). See ADR 0002 section 1.
+# Layer on top of values.yaml, then the test env's values-infra.yaml (for the
+# ACR registry), then the per-namespace values:
+#
+#   # Reuse the namespace's password on upgrades (a new one re-creates the
+#   # database and rolls the api); generate one on first install.
+#   pw=$(kubectl -n "$NS" get secret bbm-postgres -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+#   [ -n "$pw" ] || pw=$(openssl rand -hex 24)
+#   helm upgrade --install bbm deploy/helm/bbm -n "$NS" \
+#     -f deploy/helm/bbm/values-test.yaml -f values-infra.yaml \
+#     --set global.image.tag=sha-xxxxxxx \
+#     --set ingress.host="$NS.test.<zone>" \
+#     --set-string postgres.inCluster.password="$pw" \
+#     --atomic --wait --timeout 10m
+#
+# Optional: --set web.image.tag=<tag> for the mocked web image,
+# --set-string secrets.plain.llmApiKey=... .
+#
+# Everything lives in the namespace: a throwaway in-cluster Postgres
+# (emptyDir), plain secrets (clear text in the Helm release, fine for a
+# disposable namespace), migrations on api boot. TLS comes from the
+# bbm-platform wildcard (test.<zone> / preview.<zone>), so no per-namespace
+# certificate is issued.
+
+global:
+  # The test cluster has a single (system) pool.
+  nodeSelector: {}
+
+config:
+  logLevel: debug
+
+secrets:
+  provider: plain
+  plain:
+    # Empty = DATABASE_URL points at the in-cluster bbm-postgres Service.
+    databaseUrl: ""
+    llmApiKey: ""
+
+azure:
+  # No Key Vault or federated credentials for ephemeral namespaces.
+  workloadIdentity:
+    enabled: false
+
+postgres:
+  inCluster:
+    enabled: true
+    # password: REQUIRED, per namespace via --set-string.
+
+web:
+  replicaCount: 1
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false
+  topologySpread: false
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+api:
+  replicaCount: 1
+  # No hook Job: the pre-install hook would run before the in-cluster
+  # Postgres exists. The api migrates on boot and restarts until Postgres
+  # is ready.
+  migrateOnBoot: true
+  hpa:
+    enabled: false
+  pdb:
+    enabled: false
+  topologySpread: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+migrations:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: bbm-nginx
+  # host: --set ingress.host=run-<id>-<attempt>.test.<zone> | pr-<n>.preview.<zone>
+  tls:
+    mode: defaultCert
+
+networkPolicy:
+  # Namespaces share the cluster: keep each one locked down like staging.
+  # Postgres egress goes to the in-cluster pods, so no postgresCidr needed.
+  enabled: true
+  restrictEgress: true
+
+analysis:
+  enabled: false
+sandbox:
+  enabled: false

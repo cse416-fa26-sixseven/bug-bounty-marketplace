@@ -1,0 +1,5 @@
+# Staging cluster (aks-bbm-staging-eus2).
+controller:
+  scaling:
+    minReplicas: 1
+    maxReplicas: 2

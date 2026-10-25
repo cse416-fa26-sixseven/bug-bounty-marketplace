@@ -2,9 +2,10 @@ apiVersion: v2
 name: bbm
 description: >-
   Bug-bounty marketplace (web, api, optional analysis worker and sandbox
-  runner) for the staging and prod AKS clusters.
+  runner, throwaway in-cluster Postgres for test namespaces) for the test,
+  staging and prod AKS clusters.
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.0.0"
 kubeVersion: ">=1.29.0-0"
 home: https://github.com/LoistCloist/bug-bounty-marketplace

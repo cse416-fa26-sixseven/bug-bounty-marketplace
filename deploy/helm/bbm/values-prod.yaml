@@ -5,7 +5,7 @@
 #     -f deploy/helm/bbm/values-prod.yaml -f values-infra.yaml \
 #     --set global.image.tag=sha-xxxxxxx --set global.requireInfraValues=true
 #
-# Registry, client IDs, Key Vault, storage, ingress host/PIP and the
+# Registry, client IDs, Key Vault, storage, ingress host and the
 # Postgres CIDR come from values-infra.yaml; never hardcode them here.
 
 global:
@@ -68,15 +68,13 @@ migrations:
 ingress:
   enabled: true
   className: bbm-nginx
-  # host / publicIpName / publicIpResourceGroup: from values-infra.yaml
+  # host: from values-infra.yaml. The IngressClass bbm-nginx, its
+  # NginxIngressController and the static PIP binding (publicIpName /
+  # publicIpResourceGroup) belong to the bbm-platform chart.
   tls:
-    # Switch to certManager once cert-manager + a ClusterIssuer exist.
-    mode: none
-  appRouting:
-    enabled: true
-    scaling:
-      minReplicas: 2
-      maxReplicas: 3
+    # Served by the controller's default certificate (the bbm-platform
+    # wildcard for <env>.<zone> and *.<env>.<zone>).
+    mode: defaultCert
 
 networkPolicy:
   enabled: true

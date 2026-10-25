@@ -1,0 +1,32 @@
+# Fake values-infra.yaml (terraform compute `helm_values`, ADR 0001 + ADR 0002
+# section 5) for render tests with global.requireInfraValues=true. Not a
+# `*-values.yaml` file, so chart-testing does not lint it on its own.
+# The same file is valid input for deploy/helm/bbm-platform.
+"global":
+  "image":
+    "registry": "acrbbmfake0000.azurecr.io"
+"azure":
+  "tenantId": "00000000-0000-0000-0000-000000000000"
+  "keyVaultName": "kv-bbm-prod-fake"
+  "apiClientId": "11111111-1111-1111-1111-111111111111"
+  "workerClientId": "22222222-2222-2222-2222-222222222222"
+  "migrationsClientId": "11111111-1111-1111-1111-111111111111"
+  "sandboxClientId": "33333333-3333-3333-3333-333333333333"
+  "storageAccountName": "stbbmprdfake"
+  "storageBlobEndpoint": "https://stbbmprdfake.blob.core.windows.net/"
+  "queueName": "analysis-jobs"
+"ingress":
+  "host": "prod.bbm.example.com"
+  "publicIpName": "pip-bbm-prod-ingress"
+  "publicIpResourceGroup": "rg-bbm-prod-data-eus2"
+"networkPolicy":
+  "postgresCidr": "10.30.2.0/24"
+"dns":
+  "zone": "bbm.example.com"
+  "envZones":
+    - "prod.bbm.example.com"
+  "internalZone": "prod.internal.bbm.example.com"
+"platform":
+  "subscriptionId": "44444444-4444-4444-4444-444444444444"
+  "dnsResourceGroup": "rg-bbm-prod-data-eus2"
+  "certManagerClientId": "55555555-5555-5555-5555-555555555555"

@@ -6,7 +6,7 @@
 #     --set global.image.tag=sha-xxxxxxx --set global.requireInfraValues=true
 #
 # Everything environment-specific that terraform knows (ACR registry, client
-# IDs, Key Vault, storage, ingress host/PIP, Postgres CIDR) comes from
+# IDs, Key Vault, storage, ingress host, Postgres CIDR) comes from
 # values-infra.yaml and is intentionally NOT set here.
 
 global:
@@ -54,14 +54,13 @@ migrations:
 ingress:
   enabled: true
   className: bbm-nginx
-  # host / publicIpName / publicIpResourceGroup: from values-infra.yaml
+  # host: from values-infra.yaml. The IngressClass bbm-nginx, its
+  # NginxIngressController and the static PIP binding (publicIpName /
+  # publicIpResourceGroup) belong to the bbm-platform chart.
   tls:
-    mode: none
-  appRouting:
-    enabled: true
-    scaling:
-      minReplicas: 1
-      maxReplicas: 2
+    # Served by the controller's default certificate (the bbm-platform
+    # wildcard for <env>.<zone> and *.<env>.<zone>).
+    mode: defaultCert
 
 networkPolicy:
   enabled: true

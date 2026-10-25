@@ -1,0 +1,45 @@
+{{- /*
+ClusterIssuers letsencrypt-staging and letsencrypt-prod: ACME DNS-01 on Azure
+DNS, one azureDNS solver per env zone (selected by dnsZones), authenticated
+with workload identity as id-bbm-<env>-certmgr. cert-manager's controller
+ServiceAccount (cert-manager/cert-manager) carries the workload identity
+label and client-id annotation (deploy/platform/cert-manager-values.yaml,
+install.sh). The ACME account keys live in Secrets of the same names in the
+cert-manager namespace.
+*/ -}}
+{{- $zones := include "bbm-platform.envZones" . | fromJsonArray -}}
+{{- $sub := include "bbm-platform.requireInfra" (dict "key" "platform.subscriptionId" "value" .Values.platform.subscriptionId) -}}
+{{- $rg := include "bbm-platform.requireInfra" (dict "key" "platform.dnsResourceGroup" "value" .Values.platform.dnsResourceGroup) -}}
+{{- $clientId := include "bbm-platform.requireInfra" (dict "key" "platform.certManagerClientId" "value" .Values.platform.certManagerClientId) -}}
+{{- range $name := list "letsencrypt-staging" "letsencrypt-prod" }}
+{{- $issuer := index $.Values.acme.issuers $name }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "bbm-platform.labels" $ | nindent 4 }}
+spec:
+  acme:
+    server: {{ $issuer.server | quote }}
+    {{- with $.Values.acme.email }}
+    email: {{ . | quote }}
+    {{- end }}
+    privateKeySecretRef:
+      name: {{ $name }}
+    solvers:
+      {{- range $zone := $zones }}
+      - selector:
+          dnsZones:
+            - {{ $zone | quote }}
+        dns01:
+          azureDNS:
+            subscriptionID: {{ $sub | quote }}
+            resourceGroupName: {{ $rg | quote }}
+            hostedZoneName: {{ $zone | quote }}
+            environment: {{ $.Values.acme.environment }}
+            managedIdentity:
+              clientID: {{ $clientId | quote }}
+      {{- end }}
+{{- end }}
