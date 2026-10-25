@@ -126,6 +126,7 @@ jobs:
             # Helm chart: lint + render + schema validation, no cluster.
             helm:
               - 'deploy/helm/**'
+              - 'deploy/platform/**'
               - '.github/workflows/ci.yml'
 
             # Workflow files themselves (actionlint).
@@ -644,11 +645,13 @@ jobs:
 
   # ---------------------------------------------------------------------
   # deploy/helm - lint every values layer, render staging/prod/ci with
-  # every optional component on and schema-validate the output
-  # (kubeconform: core schemas + datreeio CRD catalog + the vendored
-  # NginxIngressController schema, which that catalog lacks), assert that
-  # rendering without global.image.tag fails, then chart-testing lint.
-  # No cluster is involved.
+  # every optional component on, render the ephemeral-namespace layer
+  # (values-test.yaml) and the bbm-platform chart per env with their CI
+  # fixtures, and schema-validate the output (kubeconform: core schemas +
+  # datreeio CRD catalog + the vendored NginxIngressController schema,
+  # which that catalog lacks), assert that rendering without
+  # global.image.tag fails, then chart-testing lint and shellcheck of
+  # deploy/platform. No cluster is involved.
   # ---------------------------------------------------------------------
   helm:
     name: helm
@@ -658,6 +661,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CHART: deploy/helm/bbm
+      PLATFORM_CHART: deploy/helm/bbm-platform
+      # Fake terraform `helm_values` outputs (no Azure): test env shape
+      # (two env zones) and single-zone staging/prod shape.
+      TEST_INFRA_FIXTURE: deploy/helm/bbm-platform/ci/test-values.yaml
+      ENV_INFRA_FIXTURE: deploy/helm/bbm-platform/ci/prod-values.yaml
       KUBECONFORM_VERSION: v0.6.7
     steps:
       - name: Checkout
@@ -690,16 +698,55 @@ jobs:
       - name: Render and validate manifests (kubeconform)
         run: |
           set -euo pipefail
+          kc() {
+            kubeconform -strict -summary -kubernetes-version 1.31.0 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              -schema-location 'deploy/helm/kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          }
           for f in values-staging.yaml values-prod.yaml values-ci.yaml; do
             echo "::group::helm template $f | kubeconform"
             helm template bbm "$CHART" -n bbm -f "$CHART/$f" --set global.image.tag=ci \
-              --set analysis.enabled=true --set sandbox.enabled=true --set migrations.enabled=true |
+              --set analysis.enabled=true --set sandbox.enabled=true --set migrations.enabled=true | kc
+            echo "::endgroup::"
+          done
+
+      # Same layering as _ephemeral-env.yml: values-infra, then values-test,
+      # then the per-namespace host/password/tags.
+      - name: Ephemeral namespace layer (values-test.yaml)
+        run: |
+          set -euo pipefail
+          args=(-f "$TEST_INFRA_FIXTURE" -f "$CHART/values-test.yaml"
+            --set global.image.tag=ci --set web.image.tag=ci-mocked
+            --set ingress.host=run-1-1.test.bbm.example.com
+            --set-string postgres.inCluster.password=ci)
+          helm lint --strict "$CHART" "${args[@]}"
+          helm template bbm "$CHART" -n run-1-1 "${args[@]}" |
+            kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default
+
+      - name: Platform chart (bbm-platform)
+        run: |
+          set -euo pipefail
+          for e in test staging prod; do
+            echo "::group::bbm-platform values-$e.yaml"
+            fixture=$ENV_INFRA_FIXTURE
+            [[ "$e" == test ]] && fixture=$TEST_INFRA_FIXTURE
+            args=(-f "$PLATFORM_CHART/values-$e.yaml" -f "$fixture")
+            helm lint --strict "$PLATFORM_CHART" "${args[@]}"
+            helm template bbm-platform "$PLATFORM_CHART" -n bbm-platform "${args[@]}" |
               kubeconform -strict -summary -kubernetes-version 1.31.0 \
                 -schema-location default \
                 -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
                 -schema-location 'deploy/helm/kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
             echo "::endgroup::"
           done
+
+      - name: Shellcheck deploy/platform
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(deploy/platform/*.sh)
+          if (( ${#scripts[@]} )); then shellcheck "${scripts[@]}"; else echo "no scripts"; fi
 
       - name: Rendering without global.image.tag must fail
         run: |
@@ -718,7 +765,7 @@ jobs:
         uses: helm/chart-testing-action@v2
 
       - name: Chart-testing lint
-        run: ct lint --config deploy/helm/ct.yaml --charts deploy/helm/bbm
+        run: ct lint --config deploy/helm/ct.yaml --charts deploy/helm/bbm,deploy/helm/bbm-platform
 
   # ---------------------------------------------------------------------
   # .github - lint workflow files with actionlint (includes shellcheck of

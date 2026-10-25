@@ -1,20 +1,27 @@
 name: Env power
 
-# On-demand power for the AKS environments (staging, prod). See
+# On-demand power for the AKS environments (test, staging, prod). See
 # docs/devops/env-lifecycle.md for the state machine, costs and timings.
 #
 #   status   read-only snapshot (plan identity, no approval)
 #   pause    az aks stop (+ Postgres stop)                 ~2-5 min
 #   resume   Postgres start + az aks start + smoke         ~5-15 min
 #   down     terraform destroy of the compute stack only   (confirm = env name)
-#   up       terraform apply of compute + redeploy of the last deployed tag
+#   up       terraform apply of compute + platform install + redeploy of the
+#            last deployed tag
+#
+# test has no Postgres server (every Postgres step is a no-op) and no app
+# release of its own: CI runs and PR previews deploy into ephemeral
+# namespaces (_ephemeral-env.yml), which also auto-resume a paused cluster.
 #
 # Approvals: prod `pause` runs in `prod-power` (no reviewer, power-only identity);
-# every other prod action runs in `prod` (1 reviewer). Staging needs none.
+# every other prod action runs in `prod` (1 reviewer). test runs in `test-infra`
+# (main only, no reviewer); staging needs none.
 #
 # Schedules (UTC, default branch):
-#   06:00 daily     auto-pause any running env unless its data RG has auto-pause=false
+#   06:00 daily     auto-pause any running env (test too) unless its data RG has auto-pause=false
 #   06:30 daily     stop Postgres again if Azure auto-started it (7-day limit) while paused/down
+#                   (staging, prod: test has no Postgres server)
 #   11:00 Sunday    retry auto-pause after the AKS maintenance window (Sun 06:00-10:00),
 #                   which can block a stop
 #
@@ -30,7 +37,7 @@ on:
       env:
         description: Environment
         type: choice
-        options: [staging, prod]
+        options: [test, staging, prod]
         required: true
       action:
         description: What to do
@@ -38,7 +45,7 @@ on:
         options: [status, pause, resume, down, up]
         default: status
       include_db:
-        description: Also stop Postgres on pause/down (resume/up always start it)
+        description: Also stop Postgres on pause/down (resume/up always start it; no-op for test)
         type: boolean
         default: true
       confirm:
@@ -98,7 +105,7 @@ jobs:
       (inputs.action == 'pause' || inputs.action == 'resume') &&
       vars.AZURE_SUBSCRIPTION_ID != ''
     runs-on: ubuntu-latest
-    environment: ${{ (inputs.env == 'prod' && inputs.action == 'pause') && 'prod-power' || inputs.env }}
+    environment: ${{ inputs.env == 'test' && 'test-infra' || ((inputs.env == 'prod' && inputs.action == 'pause') && 'prod-power' || inputs.env) }}
     concurrency:
       group: env-${{ inputs.env }}
       cancel-in-progress: false
@@ -133,29 +140,30 @@ jobs:
           infra/terraform/scripts/env-power.sh "$ENV_NAME" "$ACTION" \
             --include-db "$INCLUDE_DB"
 
+      # test serves no app of its own (ephemeral namespaces only).
       - name: Wait for the ingress
-        if: inputs.action == 'resume'
+        if: inputs.action == 'resume' && inputs.env != 'test'
         env:
-          FQDN: ${{ steps.power.outputs.fqdn }}
+          URL: ${{ steps.power.outputs.url }}
         run: |
           # Pods are rescheduled once the nodes are back; give them a few minutes.
           for _ in $(seq 1 60); do
-            if curl -fsS -m 5 -o /dev/null "http://$FQDN/health"; then
-              echo "http://$FQDN is serving"
-              echo "App is serving at http://$FQDN" >>"$GITHUB_STEP_SUMMARY"
+            if curl -fsS -m 5 -o /dev/null "$URL/health"; then
+              echo "$URL is serving"
+              echo "App is serving at $URL" >>"$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::http://$FQDN/health did not answer within 10 minutes after resume"
+          echo "::error::$URL/health did not answer within 10 minutes after resume"
           exit 1
 
       - name: Setup pnpm
-        if: inputs.action == 'resume'
+        if: inputs.action == 'resume' && inputs.env != 'test'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node
-        if: inputs.action == 'resume'
+        if: inputs.action == 'resume' && inputs.env != 'test'
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -163,10 +171,10 @@ jobs:
 
       # Read-only smoke on both envs: a resume changes no code.
       - name: Smoke tests
-        if: inputs.action == 'resume'
+        if: inputs.action == 'resume' && inputs.env != 'test'
         env:
-          BBM_API_URL: http://${{ steps.power.outputs.fqdn }}
-          BBM_WEB_URL: http://${{ steps.power.outputs.fqdn }}
+          BBM_API_URL: ${{ steps.power.outputs.url }}
+          BBM_WEB_URL: ${{ steps.power.outputs.url }}
           BBM_SKIP_ANALYSIS: '1'
           BBM_SMOKE_READONLY: '1'
         run: |
@@ -183,7 +191,7 @@ jobs:
       github.event_name == 'workflow_dispatch' && inputs.action == 'down' &&
       vars.AZURE_SUBSCRIPTION_ID != ''
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env }}
+    environment: ${{ inputs.env == 'test' && 'test-infra' || inputs.env }}
     concurrency:
       group: env-${{ inputs.env }}
       cancel-in-progress: false
@@ -248,14 +256,15 @@ jobs:
           infra/terraform/scripts/env-power.sh "$ENV_NAME" status
           {
             echo
-            echo "**$ENV_NAME is down.** Kept: Postgres data, Key Vault, storage, identities, the static IP and DNS name."
-            echo "Still billed: Postgres storage, the public IP, Key Vault/storage/logs (a few USD/month)."
+            echo "**$ENV_NAME is down.** Kept: Postgres data (staging/prod), Key Vault, storage, identities, the static IP and DNS zones."
+            echo "Still billed: Postgres storage, the public IP, DNS zones, Key Vault/storage/logs (a few USD/month)."
             echo "Bring it back with action \`up\` (~10-15 min + deploy)."
           } >>"$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------
-  # up: start Postgres, re-apply the compute stack, then redeploy the last
-  # deployed image tag (redeploy job below).
+  # up: start Postgres, re-apply the compute stack, install the platform,
+  # then redeploy the last deployed image tag (redeploy job below; not for
+  # test, whose apps live in ephemeral namespaces).
   # ---------------------------------------------------------------------
   up:
     name: up (${{ inputs.env }})
@@ -263,7 +272,7 @@ jobs:
       github.event_name == 'workflow_dispatch' && inputs.action == 'up' &&
       vars.AZURE_SUBSCRIPTION_ID != ''
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env }}
+    environment: ${{ inputs.env == 'test' && 'test-infra' || inputs.env }}
     concurrency:
       group: env-${{ inputs.env }}
       cancel-in-progress: false
@@ -324,18 +333,44 @@ jobs:
           infra/terraform/scripts/tf.sh compute "$ENV_NAME" apply -auto-approve
           secs=$(( $(date +%s) - start ))
           echo "_terraform apply (compute) took $((secs / 60))m $((secs % 60))s._" >>"$GITHUB_STEP_SUMMARY"
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" output -raw helm_values > "$RUNNER_TEMP/values-infra.yaml"
+          test -s "$RUNNER_TEMP/values-infra.yaml" || { echo "::error::helm_values output is empty"; exit 1; }
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Setup kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.1.4
+
+      # cert-manager + bbm-platform (ingress controller, wildcard cert),
+      # before the app deploy that relies on them.
+      - name: Platform install
+        run: |
+          set -euo pipefail
+          az aks get-credentials -g "rg-bbm-$ENV_NAME-compute-eus2" -n "aks-bbm-$ENV_NAME-eus2" \
+            --format azure --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+          deploy/platform/install.sh "$ENV_NAME" --values "$RUNNER_TEMP/values-infra.yaml" --wait
 
       - name: Mark up
         run: |
           set -euo pipefail
           infra/terraform/scripts/env-power.sh "$ENV_NAME" mark-up
           infra/terraform/scripts/env-power.sh "$ENV_NAME" status
-          echo "Cluster is up; the **redeploy** job now deploys the last deployed tag." >>"$GITHUB_STEP_SUMMARY"
+          if [[ "$ENV_NAME" == test ]]; then
+            echo "Cluster and platform are up; CI runs and previews deploy into their own namespaces." >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "Cluster is up; the **redeploy** job now deploys the last deployed tag." >>"$GITHUB_STEP_SUMMARY"
+          fi
 
   redeploy:
     name: redeploy (${{ inputs.env }})
     needs: up
-    if: needs.up.result == 'success'
+    if: needs.up.result == 'success' && inputs.env != 'test'
     permissions:
       id-token: write
       contents: read
@@ -358,8 +393,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [staging, prod]
-    environment: ${{ matrix.env == 'prod' && 'prod-power' || 'staging' }}
+        env: [test, staging, prod]
+    environment: ${{ matrix.env == 'prod' && 'prod-power' || (matrix.env == 'test' && 'test-infra' || 'staging') }}
     # Own group (not env-<env>): see the header comment.
     concurrency:
       group: env-power-scheduled-${{ matrix.env }}
@@ -417,6 +452,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Not test: it has no Postgres server.
         env: [staging, prod]
     environment: ${{ matrix.env == 'prod' && 'prod-power' || 'staging' }}
     # Own group (not env-<env>): see the header comment.

@@ -1,12 +1,13 @@
 name: Integration (Azure)
 
 # ---------------------------------------------------------------------
-# Pipeline-test environment on Azure Container Apps (see
-# tests/README.md "Pointing the suites at Azure").
+# Pipeline test on the test AKS cluster, in an ephemeral namespace
+# (ADR 0002; see tests/README.md "Pointing the suites at Azure").
 #
-#   gate → build (push sha-<7> images) → provision (aca-ephemeral, own
-#   state key per run attempt) → test (smoke, integration, e2e, k6) →
-#   destroy (always, unless dispatched with keep_env)
+#   gate → build (push sha-<7> images) → deploy (namespace
+#   run-<run_id>-<attempt>, auto-resumes a paused cluster, host
+#   https://run-<id>-<attempt>.test.<zone>) → test (smoke, integration,
+#   e2e, k6) → teardown (always, unless dispatched with keep_env)
 #
 # Runs on every push to main, nightly, and on demand (dispatch from main
 # only). Everything is OIDC (GitHub Environment `test` →
@@ -28,21 +29,17 @@ on:
         type: boolean
         default: false
       keep_env:
-        description: Debug only - skip destroy (janitor removes it after ttl_hours=6).
+        description: Debug only - skip teardown (janitor deletes the namespace after 6h).
         type: boolean
         default: false
 
-# One run per ref at a time; never cancel a run mid-apply (that would
-# strand resources and a locked state blob).
+# One run per ref at a time; never cancel a run mid-deploy.
 concurrency:
   group: integration-azure-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
-
-env:
-  TERRAFORM_VERSION: 1.9.8
 
 jobs:
   # ---------------------------------------------------------------------
@@ -58,21 +55,18 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      env_name: ${{ steps.tag.outputs.env_name }}
-      state_key: ${{ steps.tag.outputs.state_key }}
+      namespace: ${{ steps.tag.outputs.namespace }}
     steps:
-      - name: Compute image tag and env name
+      - name: Compute image tag and namespace
         id: tag
         env:
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          env_name="run-${RUN_ID}-${RUN_ATTEMPT}"
           {
             echo "tag=sha-${GITHUB_SHA::7}"
-            echo "env_name=$env_name"
-            echo "state_key=test/${env_name}.tfstate"
+            echo "namespace=run-${RUN_ID}-${RUN_ATTEMPT}"
           } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------
@@ -92,103 +86,38 @@ jobs:
       environment: test
 
   # ---------------------------------------------------------------------
-  # Apply stacks/aca-ephemeral for this run attempt.
+  # Namespace run-<run_id>-<attempt> on the test cluster (TTL 6h).
   # ---------------------------------------------------------------------
-  provision:
-    name: Provision test env
+  deploy:
+    name: Deploy test namespace
     needs: [gate, build]
-    runs-on: ubuntu-latest
-    environment: test
-    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
-    outputs:
-      web_url: ${{ steps.out.outputs.web_url }}
-      api_url: ${{ steps.out.outputs.api_url }}
-    env:
-      ARM_USE_OIDC: 'true'
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TFSTATE_RG: ${{ vars.TFSTATE_RG }}
-      TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
-      TF_STATE_KEY: ${{ needs.gate.outputs.state_key }}
-      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_env_name: ${{ needs.gate.outputs.env_name }}
-      TF_VAR_image_tag: ${{ needs.gate.outputs.tag }}
-      TF_IN_AUTOMATION: 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          # Plain stdout so `output -raw` is captured verbatim.
-          terraform_wrapper: false
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # The postgres sidecar pulls <acr>/mirror/postgres:16-alpine (no Docker
-      # Hub at runtime). The mirror is seeded once by the bootstrap runbook;
-      # this identity can only read the registry, so fail early and clearly
-      # instead of letting the container app hang on an image pull.
-      - name: Check postgres mirror in ACR
-        env:
-          ACR_NAME: ${{ vars.ACR_NAME }}
-        run: |
-          set -euo pipefail
-          if ! az acr repository show --name "$ACR_NAME" --image mirror/postgres:16-alpine --only-show-errors >/dev/null; then
-            echo "::error::$ACR_NAME.azurecr.io/mirror/postgres:16-alpine is missing. Seed it once with the 'az acr import' step in docs/devops/azure-bootstrap.md."
-            exit 1
-          fi
-          echo "mirror/postgres:16-alpine present"
-
-      - name: Terraform init
-        run: infra/terraform/scripts/tf.sh aca-ephemeral test init
-
-      - name: Terraform apply
-        run: infra/terraform/scripts/tf.sh aca-ephemeral test apply -auto-approve
-
-      - name: Read outputs
-        id: out
-        run: |
-          set -euo pipefail
-          web_url=$(infra/terraform/scripts/tf.sh aca-ephemeral test output -raw web_url)
-          api_url=$(infra/terraform/scripts/tf.sh aca-ephemeral test output -raw api_url)
-          {
-            echo "web_url=$web_url"
-            echo "api_url=$api_url"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "### Test env \`$TF_VAR_env_name\`"
-            echo "- web: $web_url"
-            echo "- api: $api_url"
-            echo "- images: \`$TF_VAR_image_tag\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+    uses: ./.github/workflows/_ephemeral-env.yml
+    with:
+      action: deploy
+      environment: test
+      namespace: ${{ needs.gate.outputs.namespace }}
+      kind: test
+      ttl_hours: 6
+      image_tag: ${{ needs.gate.outputs.tag }}
 
   # ---------------------------------------------------------------------
-  # System test tiers against the ACA env. No Azure access needed: the
-  # suites only talk to the public web/api URLs. Analysis has no external
+  # System test tiers against the namespace's https host (web, /api and
+  # /health on one host). No Azure access needed. Analysis has no external
   # ingress (BBM_SKIP_ANALYSIS=1) and there is no chain, so the chain
   # tests skip on the missing deployments file. Each suite runs even if
   # an earlier one failed, as long as the env came up healthy.
   # ---------------------------------------------------------------------
   test:
     name: System tests
-    needs: provision
+    needs: deploy
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      BBM_API_URL: ${{ needs.provision.outputs.api_url }}
-      BBM_WEB_URL: ${{ needs.provision.outputs.web_url }}
+      BBM_API_URL: ${{ needs.deploy.outputs.url }}
+      BBM_WEB_URL: ${{ needs.deploy.outputs.url }}
       BBM_SKIP_ANALYSIS: '1'
       BBM_WAIT_MS: '60000'
       CI: 'true'
@@ -196,7 +125,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ACA cold start (image pull + migrations on boot) can take minutes.
+      # The deploy job already waited for https; re-check from here.
       - name: Wait for health (up to 5 min)
         id: health
         run: |
@@ -249,7 +178,7 @@ jobs:
         run: pnpm --filter @bbm/system-tests run e2e
 
       # Load baseline: on demand and nightly (never on every main push).
-      # Talks to the API origin directly, not through the web proxy.
+      # Hits /health and /api on the ingress host (routed straight to api).
       - name: Load test (k6)
         id: load
         if: ${{ !cancelled() && steps.health.outcome == 'success' && (inputs.load || github.event_name == 'schedule') }}
@@ -300,99 +229,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------
-  # Always tear down, whatever happened in test (or if provision failed
-  # halfway: a partial state is destroyed the same way, and an empty
-  # state is a no-op). A lease left by a cancelled apply is broken first;
-  # the state key is unique to this run attempt so nothing else holds it.
-  # The state blob is deleted only after a clean destroy; on failure it
-  # is kept for a manual retry, and janitor.sh sweeps the expired
-  # resources (expires_on tag) and stale test/ state later.
+  # Always delete the namespace, whatever happened in deploy/test. Skipped
+  # green if the cluster stopped meanwhile; the janitor deletes it after
+  # bbm.io/expires-on.
   # ---------------------------------------------------------------------
-  destroy:
-    name: Destroy test env
-    needs: [gate, provision, test]
-    if: ${{ always() && needs.gate.result == 'success' && needs.provision.result != 'skipped' && !inputs.keep_env }}
-    runs-on: ubuntu-latest
-    environment: test
-    timeout-minutes: 30
+  teardown:
+    name: Delete test namespace
+    needs: [gate, deploy, test]
+    if: ${{ always() && needs.gate.result == 'success' && needs.deploy.result != 'skipped' && !inputs.keep_env }}
     permissions:
       contents: read
       id-token: write
-    env:
-      ARM_USE_OIDC: 'true'
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TFSTATE_RG: ${{ vars.TFSTATE_RG }}
-      TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
-      TF_STATE_KEY: ${{ needs.gate.outputs.state_key }}
-      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_env_name: ${{ needs.gate.outputs.env_name }}
-      TF_VAR_image_tag: ${{ needs.gate.outputs.tag }}
-      TF_IN_AUTOMATION: 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Check state blob
-        id: state
-        run: |
-          set -euo pipefail
-          exists=$(az storage blob exists --auth-mode login --account-name "$TFSTATE_ACCOUNT" \
-            --container-name tfstate --name "$TF_STATE_KEY" --query exists -o tsv --only-show-errors)
-          echo "exists=$exists" >> "$GITHUB_OUTPUT"
-          echo "state blob tfstate/$TF_STATE_KEY exists: $exists"
-          if [[ "$exists" == "true" ]]; then
-            lease=$(az storage blob show --auth-mode login --account-name "$TFSTATE_ACCOUNT" \
-              --container-name tfstate --name "$TF_STATE_KEY" \
-              --query properties.lease.state -o tsv --only-show-errors)
-            if [[ "$lease" == "leased" ]]; then
-              echo "::warning::state blob is leased (interrupted apply?); breaking the lease"
-              az storage blob lease break --auth-mode login --account-name "$TFSTATE_ACCOUNT" \
-                --container-name tfstate --blob-name "$TF_STATE_KEY" --only-show-errors >/dev/null
-            fi
-          fi
-
-      # No state blob means init never ran in provision: nothing was created.
-      - name: Terraform init
-        if: steps.state.outputs.exists == 'true'
-        run: infra/terraform/scripts/tf.sh aca-ephemeral test init
-
-      - name: Terraform destroy
-        id: destroy
-        if: steps.state.outputs.exists == 'true'
-        run: infra/terraform/scripts/tf.sh aca-ephemeral test destroy -auto-approve
-
-      - name: Delete state blob
-        if: steps.destroy.outcome == 'success'
-        run: |
-          az storage blob delete --auth-mode login --account-name "$TFSTATE_ACCOUNT" \
-            --container-name tfstate --name "$TF_STATE_KEY" --only-show-errors
-
-      - name: Summary
-        if: always()
-        env:
-          STATE_EXISTS: ${{ steps.state.outputs.exists }}
-          DESTROY: ${{ steps.destroy.outcome }}
-        run: |
-          {
-            echo "### Teardown \`$TF_VAR_env_name\`"
-            echo "- state blob existed: ${STATE_EXISTS:-unknown}"
-            echo "- terraform destroy: ${DESTROY:-not run}"
-            if [[ "$DESTROY" == "failure" ]]; then
-              echo "- state kept at \`tfstate/$TF_STATE_KEY\` for a manual retry; janitor.sh removes expired resources"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+    uses: ./.github/workflows/_ephemeral-env.yml
+    with:
+      action: delete
+      environment: test
+      namespace: ${{ needs.gate.outputs.namespace }}
+      kind: test

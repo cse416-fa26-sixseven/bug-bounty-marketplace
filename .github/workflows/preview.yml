@@ -1,26 +1,25 @@
 name: Preview
 
 # ---------------------------------------------------------------------
-# Per-PR preview environment on Azure Container Apps (stack
-# `aca-ephemeral`, kind `preview`). One environment per PR, named
-# `pr-<n>`, state in `preview/pr-<n>.tfstate`:
+# Per-PR preview in namespace `pr-<n>` (kind `preview`, TTL 168h,
+# re-stamped on every push) on the test AKS cluster (ADR 0002), served at
+# https://pr-<n>.preview.<zone>:
 #
-#   opened / synchronize / reopened  -> build + push images, terraform
-#                                       apply, smoke test, sticky comment
-#   closed (merged or not)           -> terraform destroy, delete state,
-#                                       sticky comment "destroyed"
+#   opened / synchronize / reopened  -> build + push images, helm upgrade
+#                                       in pr-<n>, smoke test, sticky comment
+#   closed (merged or not)           -> delete the namespace, sticky
+#                                       comment "deleted"
 #
 # The web image is the MOCKED variant (`<tag>-mocked`, built with
 # NEXT_PUBLIC_API_MOCKING=enabled): the real API only serves
 # /api/contracts today, so a preview wired to the real API would show a
-# mostly broken UI. MSW only intercepts in the browser, so the server-side
-# /api proxy still reaches the real api app and the smoke suite's
-# create+read round-trip (BBM_SMOKE_WRITE=1) exercises api + Postgres
-# sidecar for real.
+# mostly broken UI. MSW only intercepts in the browser, so /api on the
+# same host still reaches the real api and the smoke suite's create+read
+# round-trip (BBM_SMOKE_WRITE=1) exercises api + in-cluster Postgres.
 #
 # ACR tags `pr-<n>-sha-*` are NOT deleted here; infra-janitor.yml purges
-# old `pr-*` tags. The janitor also deletes any preview past its
-# `expires_on` tag (168h, re-stamped on every push) if teardown is missed.
+# old `pr-*` tags and deletes any namespace past bbm.io/expires-on if
+# teardown is missed (or the cluster was paused when the PR closed).
 # ---------------------------------------------------------------------
 
 on:
@@ -30,31 +29,17 @@ on:
     # event and leak a preview. Docs-only PRs are skipped inside `gate`
     # (paths-filter) instead; teardown always runs on `closed`.
 
-# One run per PR at a time, never cancelled mid-flight: cancelling an
-# apply leaves a held state lease, and cancelling a destroy leaks the
-# environment. (GitHub still replaces a *pending* queued run with a newer
-# one in the same group, which is what we want: push-then-close only runs
-# the teardown.)
+# One run per PR at a time, never cancelled mid-flight: cancelling a
+# helm upgrade leaves a pending release, and cancelling a teardown leaks
+# the namespace. (GitHub still replaces a *pending* queued run with a
+# newer one in the same group, which is what we want: push-then-close
+# only runs the teardown.)
 concurrency:
   group: preview-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 # Everything off by default; each job asks for exactly what it needs.
 permissions: {}
-
-env:
-  TF_VERSION: 1.9.8
-  TF_DIR: infra/terraform
-  # Shared by every terraform / az call below. ARM_CLIENT_ID comes from
-  # the `preview` GitHub Environment (vars.AZURE_CLIENT_ID), so it is set
-  # per job, not here.
-  ARM_USE_OIDC: 'true'
-  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-  TFSTATE_RG: ${{ vars.TFSTATE_RG }}
-  TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
-  PREVIEW_RG: rg-bbm-preview-eus2
 
 jobs:
   # ---------------------------------------------------------------------
@@ -81,8 +66,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       pr: ${{ steps.names.outputs.pr }}
-      env_name: ${{ steps.names.outputs.env_name }}
-      state_key: ${{ steps.names.outputs.state_key }}
+      namespace: ${{ steps.names.outputs.namespace }}
       tag: ${{ steps.names.outputs.tag }}
       web_tag: ${{ steps.names.outputs.web_tag }}
     steps:
@@ -96,8 +80,7 @@ jobs:
           tag="pr-${PR}-sha-${HEAD_SHA:0:7}"
           {
             echo "pr=${PR}"
-            echo "env_name=pr-${PR}"
-            echo "state_key=preview/pr-${PR}.tfstate"
+            echo "namespace=pr-${PR}"
             echo "tag=${tag}"
             echo "web_tag=${tag}-mocked"
           } | tee -a "$GITHUB_OUTPUT"
@@ -120,8 +103,8 @@ jobs:
   # Build and push api + web tagged `pr-<n>-sha-<7>`, plus the mocked
   # web variant `pr-<n>-sha-<7>-mocked` (the one actually deployed; the
   # reusable workflow only builds the mocked variant alongside web).
-  # analysis/contracts are skipped: previews run analysis_enabled = false
-  # and have no chain. Permissions here cap what the reusable workflow
+  # analysis/contracts are skipped: previews run without analysis and
+  # have no chain. Permissions here cap what the reusable workflow
   # may request (OIDC for `az acr login`).
   # ---------------------------------------------------------------------
   build:
@@ -139,109 +122,40 @@ jobs:
       environment: preview
 
   # ---------------------------------------------------------------------
-  # Apply the aca-ephemeral stack for this PR and smoke-test it. Re-runs
-  # on every push: terraform only swaps the image tags (and re-stamps
-  # expires_on), the Postgres sidecar keeps its data until the revision
-  # restarts.
+  # helm upgrade --install in pr-<n>. Re-runs on every push: the release
+  # keeps its DB password, so in-cluster Postgres data survives until its
+  # pod is rescheduled (emptyDir).
   # ---------------------------------------------------------------------
   deploy:
     name: Deploy preview
     needs: [gate, build]
     if: github.event.action != 'closed' && needs.gate.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
-    environment:
-      name: preview
-      url: ${{ steps.tf-out.outputs.web_url }}
-    outputs:
-      web_url: ${{ steps.tf-out.outputs.web_url }}
-      api_url: ${{ steps.tf-out.outputs.api_url }}
-      expires_on: ${{ steps.tf-out.outputs.expires_on }}
-    env:
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      TF_STATE_KEY: ${{ needs.gate.outputs.state_key }}
-      TF_VAR_env_name: ${{ needs.gate.outputs.env_name }}
-      TF_VAR_image_tag: ${{ needs.gate.outputs.tag }}
-      TF_VAR_web_image_tag: ${{ needs.gate.outputs.web_tag }}
+    uses: ./.github/workflows/_ephemeral-env.yml
+    with:
+      action: deploy
+      environment: preview
+      namespace: ${{ needs.gate.outputs.namespace }}
+      kind: preview
+      ttl_hours: 168
+      image_tag: ${{ needs.gate.outputs.tag }}
+      web_image_tag: ${{ needs.gate.outputs.web_tag }}
+
+  # ---------------------------------------------------------------------
+  # Smoke suite against https://pr-<n>.preview.<zone>. No Azure access.
+  # ---------------------------------------------------------------------
+  smoke:
+    name: Smoke preview
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # The Postgres sidecar pulls <acr>/mirror/postgres:16-alpine (no
-      # Docker Hub pulls from ACA). The bootstrap runbook seeds that mirror
-      # once; gh-bbm-ephemeral only has AcrPush, which cannot `az acr
-      # import`, so here we only check it exists and fail early otherwise.
-      - name: Check Postgres mirror in ACR
-        env:
-          ACR_NAME: ${{ vars.ACR_NAME }}
-        run: |
-          set -euo pipefail
-          if ! az acr repository show --name "$ACR_NAME" \
-              --image mirror/postgres:16-alpine -o none; then
-            echo "::error::mirror/postgres:16-alpine is missing from $ACR_NAME. Seed it once with the 'az acr import' step in docs/devops/azure-bootstrap.md, then re-run."
-            exit 1
-          fi
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          # The wrapper would mangle `output -raw` captured below.
-          terraform_wrapper: false
-
-      - name: Terraform init
-        working-directory: ${{ env.TF_DIR }}
-        run: ./scripts/tf.sh aca-ephemeral preview init
-
-      - name: Terraform apply
-        working-directory: ${{ env.TF_DIR }}
-        run: ./scripts/tf.sh aca-ephemeral preview apply -auto-approve
-
-      - name: Read outputs
-        id: tf-out
-        working-directory: ${{ env.TF_DIR }}
-        run: |
-          set -euo pipefail
-          web_url=$(./scripts/tf.sh aca-ephemeral preview output -raw web_url)
-          api_url=$(./scripts/tf.sh aca-ephemeral preview output -raw api_url)
-          # Mirrors ttl_hours = 168 in envs/preview/aca.tfvars; the stack
-          # re-stamps expires_on whenever the image tags change.
-          expires_on=$(date -u -d '+168 hours' +%Y-%m-%dT%H:%MZ)
-          {
-            echo "web_url=${web_url}"
-            echo "api_url=${api_url}"
-            echo "expires_on=${expires_on}"
-          } | tee -a "$GITHUB_OUTPUT"
-
-      # A new revision takes a while to pull and start; the smoke suite's
-      # own globalSetup only waits BBM_WAIT_MS for the API, so wait for
-      # both apps here first (up to 10 minutes).
-      - name: Wait for health
-        env:
-          WEB_URL: ${{ steps.tf-out.outputs.web_url }}
-          API_URL: ${{ steps.tf-out.outputs.api_url }}
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 60); do
-            if curl -fsS --max-time 10 "$API_URL/health" >/dev/null &&
-               curl -fsS --max-time 10 "$WEB_URL/healthz" >/dev/null; then
-              echo "healthy after attempt $i"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::preview did not become healthy ($API_URL/health, $WEB_URL/healthz)"
-          exit 1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -255,133 +169,34 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --filter '@bbm/system-tests...'
 
-      # Analysis is not deployed in previews (analysis_enabled = false)
-      # and has no external ingress anyway. See tests/README.md.
+      # Analysis is not deployed in previews. See tests/README.md.
       - name: Smoke tests
         env:
-          BBM_API_URL: ${{ steps.tf-out.outputs.api_url }}
-          BBM_WEB_URL: ${{ steps.tf-out.outputs.web_url }}
+          BBM_API_URL: ${{ needs.deploy.outputs.url }}
+          BBM_WEB_URL: ${{ needs.deploy.outputs.url }}
           BBM_SKIP_ANALYSIS: '1'
           # The create+read round-trip is opt-in; previews are disposable,
-          # so exercise web proxy -> api -> Postgres sidecar for real.
+          # so exercise web -> api -> Postgres for real.
           BBM_SMOKE_WRITE: '1'
         run: pnpm --filter @bbm/system-tests run test:smoke
 
   # ---------------------------------------------------------------------
-  # PR closed: destroy the environment and its state. Must succeed even
-  # when no preview was ever created (state blob missing -> no-op) and
-  # when a previous deploy failed half-way (terraform destroys whatever
-  # the state recorded; if terraform itself cannot run, fall back to
-  # deleting the known resource names with az).
-  #
-  # Checks out the PR head SHA: the default refs/pull/<n>/merge ref may
-  # no longer exist once the PR is closed or merged, and the head is
-  # the code that created the environment.
+  # PR closed: delete the namespace (a no-op when no preview was ever
+  # created; skipped green when the cluster is paused or down).
   # ---------------------------------------------------------------------
   teardown:
-    name: Destroy preview
+    name: Delete preview
     needs: gate
     if: github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
-    environment:
-      name: preview
-    env:
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      TF_STATE_KEY: ${{ needs.gate.outputs.state_key }}
-      ENV_NAME: ${{ needs.gate.outputs.env_name }}
-      # Destroy still evaluates the config, so required vars need values.
-      TF_VAR_env_name: ${{ needs.gate.outputs.env_name }}
-      TF_VAR_image_tag: ${{ needs.gate.outputs.tag }}
-      TF_VAR_web_image_tag: ${{ needs.gate.outputs.web_tag }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Check for preview state
-        id: state
-        run: |
-          set -euo pipefail
-          exists=$(az storage blob exists --auth-mode login \
-            --account-name "$TFSTATE_ACCOUNT" --container-name tfstate \
-            --name "$TF_STATE_KEY" --query exists -o tsv)
-          echo "exists=${exists}" | tee -a "$GITHUB_OUTPUT"
-          if [[ "$exists" != "true" ]]; then
-            echo "No $TF_STATE_KEY - no preview was ever created for this PR. Nothing to do."
-          fi
-
-      # A runner killed mid-apply leaves the state blob leased; break it so
-      # destroy (and the final blob delete) can proceed. Safe: the
-      # concurrency group guarantees no other run for this PR is active.
-      - name: Break stale state lease
-        if: steps.state.outputs.exists == 'true'
-        run: |
-          az storage blob lease break --auth-mode login \
-            --account-name "$TFSTATE_ACCOUNT" --container-name tfstate \
-            --blob-name "$TF_STATE_KEY" >/dev/null 2>&1 || true
-
-      - name: Setup Terraform
-        if: steps.state.outputs.exists == 'true'
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Terraform destroy
-        id: destroy
-        if: steps.state.outputs.exists == 'true'
-        continue-on-error: true
-        working-directory: ${{ env.TF_DIR }}
-        run: |
-          set -euo pipefail
-          ./scripts/tf.sh aca-ephemeral preview init
-          ./scripts/tf.sh aca-ephemeral preview destroy -auto-approve
-
-      # Terraform could not run (e.g. config broken on this head, global
-      # state unreadable). Delete the apps, then the environment, by their
-      # deterministic names so nothing is left billing.
-      - name: Fallback delete with az
-        id: fallback
-        if: steps.state.outputs.exists == 'true' && steps.destroy.outcome == 'failure'
-        run: |
-          set -euo pipefail
-          echo "::warning::terraform destroy failed; deleting $ENV_NAME resources directly"
-          for app in api web analysis; do
-            az resource delete -g "$PREVIEW_RG" -n "${ENV_NAME}-${app}" \
-              --resource-type Microsoft.App/containerApps 2>/dev/null || true
-          done
-          az resource delete -g "$PREVIEW_RG" -n "cae-bbm-${ENV_NAME}" \
-            --resource-type Microsoft.App/managedEnvironments 2>/dev/null || true
-          left=$(az resource list -g "$PREVIEW_RG" \
-            --query "[?starts_with(name, '${ENV_NAME}-') || name == 'cae-bbm-${ENV_NAME}'].id" -o tsv)
-          if [[ -n "$left" ]]; then
-            echo "::error::resources still present after fallback delete:"
-            echo "$left"
-            exit 1
-          fi
-
-      # Only drop the state once the resources are really gone; otherwise
-      # keep it so a re-run (or a human) can retry the destroy.
-      - name: Delete state blob
-        if: >-
-          steps.state.outputs.exists == 'true' &&
-          (steps.destroy.outcome == 'success' || steps.fallback.outcome == 'success')
-        run: |
-          az storage blob delete --auth-mode login \
-            --account-name "$TFSTATE_ACCOUNT" --container-name tfstate \
-            --name "$TF_STATE_KEY" --delete-snapshots include
+    uses: ./.github/workflows/_ephemeral-env.yml
+    with:
+      action: delete
+      environment: preview
+      namespace: ${{ needs.gate.outputs.namespace }}
+      kind: preview
 
   # ---------------------------------------------------------------------
   # Sticky PR comment (one per PR, updated in place). Kept in its own job
@@ -390,7 +205,7 @@ jobs:
   # ---------------------------------------------------------------------
   comment:
     name: Preview comment
-    needs: [gate, build, deploy, teardown]
+    needs: [gate, build, deploy, smoke, teardown]
     # Docs-only pushes build nothing, so they get no comment.
     if: >-
       always() && needs.gate.result == 'success' &&
@@ -407,9 +222,10 @@ jobs:
           ACTION: ${{ github.event.action }}
           BUILD: ${{ needs.build.result }}
           DEPLOY: ${{ needs.deploy.result }}
+          SMOKE: ${{ needs.smoke.result }}
           TEARDOWN: ${{ needs.teardown.result }}
-          WEB_URL: ${{ needs.deploy.outputs.web_url }}
-          API_URL: ${{ needs.deploy.outputs.api_url }}
+          TEARDOWN_RESULT: ${{ needs.teardown.outputs.result }}
+          URL: ${{ needs.deploy.outputs.url }}
           EXPIRES: ${{ needs.deploy.outputs.expires_on }}
           TAG: ${{ needs.gate.outputs.tag }}
           WEB_TAG: ${{ needs.gate.outputs.web_tag }}
@@ -420,20 +236,25 @@ jobs:
             echo '### PR preview'
             echo
             if [[ "$ACTION" == "closed" ]]; then
-              if [[ "$TEARDOWN" == "success" ]]; then
-                echo 'Preview destroyed (PR closed).'
+              if [[ "$TEARDOWN" == "success" && "$TEARDOWN_RESULT" == "deleted" ]]; then
+                echo 'Preview deleted (PR closed).'
+              elif [[ "$TEARDOWN" == "success" ]]; then
+                echo 'Test cluster is not running; the janitor deletes the preview namespace after it expires.'
               else
-                echo "Teardown **${TEARDOWN}** - resources may still exist; the janitor removes them after expiry. [Run]($RUN_URL)"
+                echo "Teardown **${TEARDOWN}** - the namespace may still exist; the janitor deletes it after expiry. [Run]($RUN_URL)"
               fi
             elif [[ "$DEPLOY" == "success" ]]; then
               echo '| | |'
               echo '|---|---|'
-              echo "| Web (mocked UI) | $WEB_URL |"
-              echo "| API | $API_URL |"
+              echo "| App (mocked UI, \`/api\`, \`/health\`) | $URL |"
               echo "| Images | \`$TAG\` (web \`$WEB_TAG\`) |"
               echo "| Expires | $EXPIRES (extended on every push) |"
               echo
-              echo "Smoke tests passed. Destroyed automatically when the PR closes. [Run]($RUN_URL)"
+              if [[ "$SMOKE" == "success" ]]; then
+                echo "Smoke tests passed. Deleted automatically when the PR closes. [Run]($RUN_URL)"
+              else
+                echo "Smoke tests **${SMOKE}**. [Run]($RUN_URL)"
+              fi
             elif [[ "$BUILD" != "success" ]]; then
               echo "Image build **${BUILD}** for \`$TAG\` - preview not updated. [Run]($RUN_URL)"
             else

@@ -4,7 +4,7 @@ name: Terraform
 # terraform test) live in ci.yml and need no Azure credentials; this workflow
 # is the only place that talks to the real backend/state.
 #
-#   pull_request       plan global + staging-{data,compute} with the read-only
+#   pull_request       plan global + {test,staging}-{data,compute} with the read-only
 #                      plan identity, sticky PR comment per stack
 #   push to main       auto-apply the global stack when it (or its inputs) changed
 #   workflow_dispatch  plan (and optionally apply) one stack in its environment
@@ -30,6 +30,8 @@ on:
         type: choice
         options:
           - global
+          - test-data
+          - test-compute
           - staging-data
           - staging-compute
           - prod-data
@@ -86,11 +88,11 @@ jobs:
 
   # ---------------------------------------------------------------------
   # PR plans with the read-only plan identity (gh-bbm-plan, no GitHub
-  # environment). It can read global.tfstate and staging/* but NOT prod/*,
+  # environment). It can read global.tfstate, test/* and staging/* but NOT prod/*,
   # and cannot take the state lease, hence -lock=false. Prod stacks are
   # planned only via workflow_dispatch in the `prod` environment.
   #
-  # staging-* PR plans run with -refresh=false: the plan identity is
+  # test-* / staging-* PR plans run with -refresh=false: the plan identity is
   # control-plane Reader only, with no Key Vault data-plane access (the
   # data stack's azurerm_key_vault_secret reads) and no AKS
   # listClusterUserCredential (refreshing the compute stack's
@@ -121,6 +123,16 @@ jobs:
             requires: ''
             # Extra plan flags (see the job comment for -refresh=false).
             plan_flags: ''
+          - id: test-data
+            stack: data
+            env: test
+            requires: 'global.tfstate'
+            plan_flags: '-refresh=false'
+          - id: test-compute
+            stack: compute
+            env: test
+            requires: 'global.tfstate test/data.tfstate'
+            plan_flags: '-refresh=false'
           - id: staging-data
             stack: data
             env: staging
@@ -223,7 +235,7 @@ jobs:
               echo "**Result:** ${RESULT:-failed} · commit \`${HEAD_SHA:0:7}\` · [run]($RUN_URL)"
               echo
               if [[ "$PLAN_FLAGS" == *-refresh=false* ]]; then
-                echo "> **Unrefreshed plan** (\`-refresh=false\`): diffs this PR's config against the last-applied state, not live Azure. Drift is not shown. The read-only PR plan identity has no Key Vault data-plane or AKS credential access; run the Terraform workflow_dispatch (\`staging\` environment) for a fully refreshed plan."
+                echo "> **Unrefreshed plan** (\`-refresh=false\`): diffs this PR's config against the last-applied state, not live Azure. Drift is not shown. The read-only PR plan identity has no Key Vault data-plane or AKS credential access; run the Terraform workflow_dispatch (\`test-infra\` / \`staging\` environment) for a fully refreshed plan."
                 echo
               fi
               echo '<details><summary>Plan output</summary>'
@@ -293,7 +305,7 @@ jobs:
               - '.github/workflows/terraform.yml'
 
   # ---------------------------------------------------------------------
-  # Auto-apply the global stack (ACR, shared LAW/KV, ACA pull identity) on
+  # Auto-apply the global stack (ACR, shared LAW/KV) on
   # main. Runs as gh-bbm-global in the `infra-global` environment, whose
   # required reviewer gates the apply; AZURE_CLIENT_ID is the environment's
   # variable. Shares the tf-global concurrency group with dispatch runs.
@@ -343,6 +355,7 @@ jobs:
   # ---------------------------------------------------------------------
   # Manual plan / apply of one stack in its GitHub environment:
   #   global -> infra-global (gh-bbm-global)
+  #   test-* -> test-infra (gh-bbm-test)
   #   staging-* -> staging (gh-bbm-staging)
   #   prod-* -> prod (gh-bbm-prod, required reviewer)
   # Plan and apply run in the same job so prod needs a single approval and
@@ -354,11 +367,11 @@ jobs:
     needs: gate
     if: github.event_name == 'workflow_dispatch' && needs.gate.outputs.enabled == 'true'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.stack == 'global' && 'infra-global' || (startsWith(inputs.stack, 'staging-') && 'staging' || 'prod') }}
+    environment: ${{ inputs.stack == 'global' && 'infra-global' || (startsWith(inputs.stack, 'test-') && 'test-infra' || (startsWith(inputs.stack, 'staging-') && 'staging' || 'prod')) }}
     # Compute stacks share env-<env> with env-power.yml (down/up) and
     # deploy.yml so a compute apply never races a power action or deploy.
     concurrency:
-      group: ${{ endsWith(inputs.stack, '-compute') && format('env-{0}', startsWith(inputs.stack, 'prod') && 'prod' || 'staging') || format('tf-{0}', inputs.stack) }}
+      group: ${{ endsWith(inputs.stack, '-compute') && format('env-{0}', startsWith(inputs.stack, 'prod') && 'prod' || (startsWith(inputs.stack, 'test') && 'test' || 'staging')) || format('tf-{0}', inputs.stack) }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -376,6 +389,8 @@ jobs:
         run: |
           case "$STACK_ID" in
             global)          stack=global;  env=global;  requires="" ;;
+            test-data)       stack=data;    env="test";  requires="global.tfstate" ;;
+            test-compute)    stack=compute; env="test";  requires="global.tfstate test/data.tfstate" ;;
             staging-data)    stack=data;    env=staging; requires="global.tfstate" ;;
             staging-compute) stack=compute; env=staging; requires="global.tfstate staging/data.tfstate" ;;
             prod-data)       stack=data;    env=prod;    requires="global.tfstate" ;;

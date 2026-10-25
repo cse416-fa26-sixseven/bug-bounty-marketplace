@@ -1,6 +1,8 @@
 name: Deploy (AKS)
 
-# Deploys the Helm chart (deploy/helm/bbm) to the staging or prod AKS cluster.
+# Deploys the Helm chart (deploy/helm/bbm) to the staging or prod AKS cluster,
+# after making sure the cluster platform (cert-manager + bbm-platform, via the
+# idempotent deploy/platform/install.sh) is installed.
 #
 #   - Called by other workflows (workflow_call), e.g. env-power.yml `up`, or
 #     dispatched by hand.
@@ -261,6 +263,12 @@ jobs:
           kubelogin convert-kubeconfig -l azurecli
           kubectl get nodes -o wide
 
+      # Idempotent: cert-manager, ClusterIssuers, the wildcard certificate and
+      # the ingress controller the app's Ingress uses.
+      - name: Platform install
+        if: steps.gate.outputs.go == 'true'
+        run: deploy/platform/install.sh "$ENV_NAME" --values "$RUNNER_TEMP/values-infra.yaml" --wait
+
       - name: Helm upgrade
         if: steps.gate.outputs.go == 'true'
         env:
@@ -284,22 +292,19 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: |
           set -euo pipefail
-          values=$(helm get values bbm -n bbm --all -o json)
-          host=$(jq -r '.ingress.host // empty' <<<"$values")
-          mode=$(jq -r '.ingress.tls.mode // "none"' <<<"$values")
-          [[ -n "$host" ]] || { echo "::error::release has no ingress.host"; exit 1; }
-          scheme=https
-          [[ "$mode" == "none" ]] && scheme=http
-          echo "url=$scheme://$host" >>"$GITHUB_OUTPUT"
-          # The LB / DNS can lag the rollout by a minute or two.
+          # <env>.<zone> (ADR 0002), served with the platform's wildcard cert.
+          host=$(yq -r '.ingress.host // ""' "$RUNNER_TEMP/values-infra.yaml")
+          [[ -n "$host" ]] || { echo "::error::helm_values has no ingress.host"; exit 1; }
+          echo "url=https://$host" >>"$GITHUB_OUTPUT"
+          # The LB / DNS / certificate can lag the rollout by a minute or two.
           for _ in $(seq 1 30); do
-            if curl -fsS -m 5 -o /dev/null "$scheme://$host/health"; then
-              echo "ingress is serving $scheme://$host"
+            if curl -fsS -m 5 -o /dev/null "https://$host/health"; then
+              echo "ingress is serving https://$host"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::$scheme://$host/health did not answer within 5 minutes"
+          echo "::error::https://$host/health did not answer within 5 minutes"
           exit 1
 
       - name: Setup pnpm
