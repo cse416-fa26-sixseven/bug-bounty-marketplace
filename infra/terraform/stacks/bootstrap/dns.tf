@@ -45,3 +45,43 @@ resource "azurerm_dns_ns_record" "delegation" {
   records             = sort(tolist(each.value.name_servers))
   tags                = module.naming.tags
 }
+
+# Mail for the parent zone (e.g. alerts@<zone> for budget alerts), forwarded
+# by an external service. Provider-specific values live in bootstrap.tfvars,
+# so an account or provider switch only changes tfvars. Both default to off.
+resource "azurerm_dns_mx_record" "apex" {
+  count = length(var.dns_mx_records) > 0 ? 1 : 0
+
+  name                = "@"
+  zone_name           = azurerm_dns_zone.parent.name
+  resource_group_name = azurerm_resource_group.shared.name
+  ttl                 = 3600
+
+  dynamic "record" {
+    for_each = var.dns_mx_records
+    content {
+      preference = record.value.preference
+      exchange   = record.value.exchange
+    }
+  }
+
+  tags = module.naming.tags
+}
+
+resource "azurerm_dns_txt_record" "apex" {
+  count = length(var.dns_txt_records) > 0 ? 1 : 0
+
+  name                = "@"
+  zone_name           = azurerm_dns_zone.parent.name
+  resource_group_name = azurerm_resource_group.shared.name
+  ttl                 = 3600
+
+  dynamic "record" {
+    for_each = var.dns_txt_records
+    content {
+      value = record.value
+    }
+  }
+
+  tags = module.naming.tags
+}

@@ -100,3 +100,18 @@ variable "preregistered_resource_providers" {
   type        = list(string)
   default     = []
 }
+
+variable "dns_mx_records" {
+  description = "MX records at the parent zone apex (mail forwarding for addresses like alerts@<zone>). Empty = no MX record."
+  type = list(object({
+    preference = number
+    exchange   = string
+  }))
+  default = []
+}
+
+variable "dns_txt_records" {
+  description = "TXT values at the parent zone apex (e.g. the mail provider's SPF record). Empty = no TXT record."
+  type        = list(string)
+  default     = []
+}

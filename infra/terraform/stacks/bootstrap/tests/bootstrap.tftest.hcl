@@ -616,3 +616,23 @@ run "rejects_unknown_env_location" {
 
   expect_failures = [var.env_locations]
 }
+
+# Mail records at the parent zone apex are optional and driven by tfvars.
+run "mail_records" {
+  command = plan
+
+  variables {
+    dns_mx_records  = [{ preference = 10, exchange = "mx1.example.net" }, { preference = 20, exchange = "mx2.example.net" }]
+    dns_txt_records = ["v=spf1 include:spf.example.net ~all"]
+  }
+
+  assert {
+    condition     = length(azurerm_dns_mx_record.apex) == 1 && length(azurerm_dns_mx_record.apex[0].record) == 2
+    error_message = "two MX records expected at the apex"
+  }
+
+  assert {
+    condition     = length(azurerm_dns_txt_record.apex) == 1 && azurerm_dns_txt_record.apex[0].name == "@"
+    error_message = "one apex TXT record expected"
+  }
+}

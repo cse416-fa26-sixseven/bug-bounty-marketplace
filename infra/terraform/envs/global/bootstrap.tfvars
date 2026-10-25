@@ -40,3 +40,11 @@ preregistered_resource_providers = ["Microsoft.AlertsManagement", "Microsoft.Com
 # Parent DNS zone for every env host (ADR 0002), e.g. "bug-bounty.example.com".
 # Required: infra/up.sh --zone <zone> (or its prompt) writes it here.
 dns_zone_name = "bug-bounty.cse416-group.pranavjothivel.com"
+
+# Mail for the parent zone (alerts@<zone> receives the budget alerts), forwarded
+# by ImprovMX. Swap these when changing mail provider; empty lists remove them.
+dns_mx_records = [
+  { preference = 10, exchange = "mx1.improvmx.com" },
+  { preference = 20, exchange = "mx2.improvmx.com" },
+]
+dns_txt_records = ["v=spf1 include:spf.improvmx.com ~all"]
