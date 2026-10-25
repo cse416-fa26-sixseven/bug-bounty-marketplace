@@ -20,17 +20,23 @@ name: Env power
 #
 # Schedules (UTC, default branch):
 #   06:00 daily     auto-pause any running env (test too) unless its data RG has auto-pause=false;
-#                   test first waits (up to 30 min) for in-flight integration-azure /
-#                   preview runs, and is skipped until the next schedule if they are still busy
+#                   each env first waits (up to 30 min) for in-flight runs that use it
+#                   (test: integration-azure / preview; staging, prod: in_progress or queued
+#                   cd / deploy runs, not ones waiting for approval), and is skipped until
+#                   the next schedule if they are still busy
 #   06:30 daily     stop Postgres again if Azure auto-started it (7-day limit) while paused/down
 #                   (staging, prod: test has no Postgres server)
-#   11:00 Sunday    retry auto-pause after the AKS maintenance window (Sun 06:00-10:00),
-#                   which can block a stop
+#   11:00 Sunday    retry auto-pause. Originally for the AKS maintenance window
+#                   (Sun 06:00-10:00), which can block a stop; upgrades are off on the
+#                   current subscription, so the windows are dropped. The retry is kept
+#                   (harmless, and covers a skipped or busy 06:00 run)
 #
 # Every manual mutating job uses the concurrency group env-<env>, shared with
 # deploy.yml. The scheduled jobs use env-power-scheduled-<env> instead, so a
 # prod run parked on an unanswered `prod` approval (holding env-prod) cannot
-# block the nightly pause. env-power.sh refuses to stop a cluster whose
+# block the nightly pause. Instead, the nightly pause first waits for
+# in-flight CD / manual deploy runs (see scheduled-pause), so it does not
+# stop a cluster mid `helm upgrade`. env-power.sh refuses to stop a cluster whose
 # provisioningState is not Succeeded, so it never stops one mid-apply.
 
 on:
@@ -395,8 +401,7 @@ jobs:
       smoke: true
 
   # ---------------------------------------------------------------------
-  # Scheduled: nightly auto-pause (+ Sunday retry after the maintenance
-  # window). Pause only. prod runs as prod-power (no reviewer, power-only).
+  # Scheduled: nightly auto-pause (+ Sunday retry). Pause only. prod runs as prod-power (no reviewer, power-only).
   # ---------------------------------------------------------------------
   scheduled-pause:
     name: auto-pause (${{ matrix.env }})
@@ -418,7 +423,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      # gh run list (in-flight runs on the test cluster).
+      # gh run list (in-flight runs that use the env).
       actions: read
     steps:
       - name: Check configuration
@@ -446,21 +451,38 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Pausing test under a running CI run or preview deploy would fail it
-      # mid-flight (their namespaces live on this cluster). Wait for them,
-      # then pause; if they are still busy after 30 minutes, skip tonight.
-      - name: Wait for in-flight runs on the test cluster
+      # Pausing an env under a run that uses it would fail that run mid-flight.
+      #   test:          integration-azure / preview runs (their namespaces
+      #                  live on this cluster), including `waiting` ones.
+      #   staging, prod: CD (cd.yml) and manual deploys (deploy.yml). These
+      #                  hold env-<env>, not this job's group, so without the
+      #                  wait a 06:00 pause could stop the cluster mid
+      #                  `helm upgrade` (release left pending-upgrade). Only
+      #                  in_progress / queued count: a CD run parked on an
+      #                  unanswered prod approval is `waiting` and must not
+      #                  block the pause (prod resumes after approval). An
+      #                  in_progress CD run may be deploying the other env;
+      #                  waiting for it too is cheap and bounded.
+      # Wait up to 30 minutes; if still busy, skip tonight (next schedule retries).
+      - name: Wait for in-flight runs on the env
         id: inflight
-        if: steps.cfg.outputs.ok == 'true' && matrix.env == 'test'
+        if: steps.cfg.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          ENV_NAME: ${{ matrix.env }}
         run: |
           set -euo pipefail
+          if [[ "$ENV_NAME" == test ]]; then
+            workflows=(integration-azure.yml preview.yml) statuses=(in_progress queued waiting)
+          else
+            workflows=(cd.yml deploy.yml) statuses=(in_progress queued)
+          fi
+          what=$(IFS=/; echo "${workflows[*]}")
           busy() {
             local n=0 wf st c
-            for wf in integration-azure.yml preview.yml; do
-              for st in in_progress queued waiting; do
+            for wf in "${workflows[@]}"; do
+              for st in "${statuses[@]}"; do
                 c=$(gh run list --workflow "$wf" --status "$st" --limit 50 --json databaseId --jq 'length')
                 n=$((n + c))
               done
@@ -470,14 +492,14 @@ jobs:
           for i in $(seq 1 30); do
             n=$(busy)
             if [[ "$n" -eq 0 ]]; then
-              echo "no integration-azure / preview runs in flight"
+              echo "no $what runs in flight"
               echo "go=true" >>"$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "$n integration-azure / preview run(s) in flight; waiting ($i/30)"
+            echo "$n $what run(s) in flight; waiting ($i/30)"
             sleep 60
           done
-          echo "::warning::integration-azure / preview runs still in flight after 30 min; not pausing test now (next schedule retries)."
+          echo "::notice::$what runs still in flight after 30 min; not pausing $ENV_NAME now (next schedule retries)."
           echo "go=false" >>"$GITHUB_OUTPUT"
 
       - name: Auto-pause
@@ -490,8 +512,8 @@ jobs:
           rc=$?
           set -e
           if [[ $rc -eq 3 ]]; then
-            # Cluster busy (usually the Sunday maintenance window). The Sunday
-            # 11:00 run or the next night retries.
+            # Cluster busy (an operation in progress, or a maintenance window
+            # where upgrades are on). The Sunday 11:00 run or the next night retries.
             echo "::warning::$ENV_NAME could not be paused now (cluster busy); it will be retried."
             exit 0
           fi

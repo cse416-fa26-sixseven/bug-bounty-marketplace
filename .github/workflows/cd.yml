@@ -164,15 +164,27 @@ jobs:
         run: |
           set -euo pipefail
           # `waiting` = parked on an Environment protection rule; in this
-          # workflow only the prod reviewer gate (staging has none). Approved
-          # or running deploys are `in_progress` and never touched.
+          # workflow only the prod reviewer gate (staging has none).
+          # `gh run cancel` also cancels in_progress runs, so each run's
+          # status is re-read right before its cancel, and a run that was
+          # approved (in_progress) or finished meanwhile is skipped. An
+          # approval in the moment between that re-read and the cancel can
+          # still be cancelled (see docs/devops/cd.md).
           older=$(gh run list --workflow cd.yml --status waiting --limit 50 \
             --json databaseId,number \
             --jq ".[] | select(.number < $RUN_NUMBER and .databaseId != $RUN_ID) | .databaseId")
           for id in $older; do
+            st=$(gh run view "$id" --json status -q .status 2>/dev/null || echo unknown)
+            if [[ "$st" != waiting ]]; then
+              echo "skipping CD run $id: now '$st', no longer waiting for approval"
+              continue
+            fi
             echo "cancelling CD run $id (older promotion still waiting for approval)"
-            gh run cancel "$id" || echo "::warning::could not cancel run $id (approved or finished meanwhile?)"
-            echo "- Superseded older CD run $id (was waiting for prod approval)" >>"$GITHUB_STEP_SUMMARY"
+            if gh run cancel "$id"; then
+              echo "- Superseded older CD run $id (was waiting for prod approval)" >>"$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::could not cancel CD run $id (finished meanwhile?)"
+            fi
           done
           [[ -n "$older" ]] || echo "no older promotion is waiting"
 

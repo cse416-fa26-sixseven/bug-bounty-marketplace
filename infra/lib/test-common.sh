@@ -430,9 +430,10 @@ case "$1 $2" in
     if [[ -n "$n" && "$n" == "${BBM_TEST_GROUP_EXISTS:-}" ]]; then echo true; else echo false; fi ;;
   "storage account") echo "stbbmtfstateab12" ;;
   "group list")
+    [[ -z "${BBM_TEST_GROUP_LIST_FAIL:-}" ]] || exit 1
     # only the groups whose name starts with the queried prefix
     pfx=$(sed -nE "s/.*starts_with\(name, '([^']+)'\).*/\1/p" <<<"$q")
-    for g in ${BBM_TEST_GROUPS:-}; do [[ "$g" == "$pfx"* ]] && echo "$g"; done ;;
+    for g in ${BBM_TEST_GROUPS:-}; do [[ "$g" != "$pfx"* ]] || echo "$g"; done ;;
   "resource list") echo "${BBM_TEST_RESOURCES:-0}" ;;
   "vm list-skus")
     size=""; prev=""
@@ -651,6 +652,27 @@ RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com 
 out=$(cat "$T/out")
 has "up: env with a cluster in its old region dies" 'env prod still has a cluster in another region (rg-bbm-prod-aksnodes-ncus)'
 unset BBM_TEST_GROUPS
+# az group list failing must not read as "no old-region RGs" (fail closed)
+export BBM_TEST_GROUP_LIST_FAIL=1
+: >"$LOG"
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --dry-run; then
+  bad "up: unverifiable region-move check without --yes dies"
+else
+  ok_ "up: unverifiable region-move check without --yes dies"
+fi
+out=$(cat "$T/out")
+has "up: unverifiable move check warns" 'az group list failed: CANNOT VERIFY that env(s) test staging prod hold nothing in another region'
+has "up: unverifiable move check refusal explains" 'region-move check not done (az group list failed)'
+hasnt_log "up: unverifiable move check stops before any terraform" '^terraform .*(init|plan|output)'
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  ok_ "up: unverifiable region-move check with --yes continues"
+else
+  bad "up: unverifiable region-move check with --yes continues"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: --yes still warns about the skipped move check" '--yes: continuing WITHOUT the region-move check for test staging prod'
+unset BBM_TEST_GROUP_LIST_FAIL
 
 # --location outside the subscription's allowed-locations policy fails early
 : >"$LOG"

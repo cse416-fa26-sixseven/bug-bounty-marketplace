@@ -195,7 +195,10 @@ The scheduled jobs (`scheduled-pause`, `scheduled-repause-db`) use their own gro
 `env-power-scheduled-<env>`. A prod run waiting on an unanswered `prod` approval holds `env-prod`,
 and would otherwise block the nightly pause indefinitely. Running outside `env-<env>` is safe for
 Terraform: `env-power.sh` refuses to stop a cluster whose `provisioningState` is not `Succeeded`,
-so it never stops one in the middle of an `up`/`down` apply.
+so it never stops one in the middle of an `up`/`down` apply. For staging and prod, the auto-pause
+first waits up to 30 minutes for `in_progress` or `queued` `cd.yml` / `deploy.yml` runs (not ones
+`waiting` for the prod approval) and skips that night if they're still busy, so it doesn't stop a
+cluster mid `helm upgrade` ([cd.md](cd.md#concurrency)).
 
 ### Image provenance
 
@@ -217,7 +220,7 @@ All times are UTC and run from the default branch.
 
 | cron         | job                    | what it does                                                                                                                                 |
 | ------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0 6 * * *`  | `scheduled-pause`      | pauses every env (test included) whose cluster is running, unless its data RG has `auto-pause=false`; test waits for in-flight CI/previews  |
+| `0 6 * * *`  | `scheduled-pause`      | pauses every env (test included) whose cluster is running, unless its data RG has `auto-pause=false`; waits for in-flight runs first         |
 | `30 6 * * *` | `scheduled-repause-db` | Azure auto-starts a stopped Postgres after 7 days. If the env is `paused`/`down` and Postgres is Ready, stop it again. Staging and prod only |
 | `0 11 * * 0` | `scheduled-pause`      | Sunday retry: the AKS maintenance window (Sun 06:00–10:00) can block the 06:00 stop                                                          |
 

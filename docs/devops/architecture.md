@@ -282,8 +282,9 @@ flowchart TB
 - `deploy.yml` and every manual mutating `env-power.yml` job share the concurrency group
   `env-<env>`, so a deploy never races a manual pause or resume. The scheduled auto-pause and PG
   re-pause use `env-power-scheduled-<env>` instead, so a parked prod approval can't block the nightly
-  pause; `env-power.sh` only refuses to stop a cluster whose provisioningState isn't `Succeeded`, so a
-  deploy running at 06:00 UTC could still be interrupted. `deploy.yml` skips cleanly when the cluster is not running.
+  pause. For staging and prod the auto-pause first waits (up to 30 min) for running or queued CD /
+  manual deploys (not ones waiting for approval) and skips the night if they're still busy, so it
+  doesn't stop a cluster mid `helm upgrade`. `deploy.yml` skips cleanly when the cluster is not running.
 - Ephemeral workflows never cancel mid-deploy or mid-teardown, because a cancelled `helm upgrade`
   leaves a pending release and a cancelled teardown leaks the namespace.
 

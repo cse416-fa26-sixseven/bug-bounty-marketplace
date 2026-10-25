@@ -293,9 +293,15 @@ fi
 # bootstrap-owned RGs and DNS zones (bootstrap then recreates those in the
 # new region, with the zones' NS delegation). Its data / compute stacks must
 # be destroyed first: infra/down.sh --envs <env> keeps the RGs.
+# If the RGs can't be listed, the check can't be done: stop, or with --yes
+# carry on with a warning (never treat a failed listing as "nothing there").
+move_unverified=""
 for e in test staging prod; do
   a=$(envval ENV_ABBR "$e")
-  stale=$(az group list --query "[?starts_with(name, 'rg-bbm-$e-')].name" -o tsv 2>/dev/null || true)
+  if ! stale=$(az group list --query "[?starts_with(name, 'rg-bbm-$e-')].name" -o tsv 2>/dev/null); then
+    move_unverified+=" $e"
+    continue
+  fi
   for g in $stale; do
     [[ "$g" == *"-$a" ]] && continue
     case "$g" in
@@ -312,6 +318,14 @@ for e in test staging prod; do
     esac
   done
 done
+if [[ -n "$move_unverified" ]]; then
+  warn "az group list failed: CANNOT VERIFY that env(s)${move_unverified} hold nothing in another region. If an env moved region while its old data/compute stacks still exist, bootstrap would orphan them."
+  if [[ "$ASSUME_YES" == 1 ]]; then
+    warn "--yes: continuing WITHOUT the region-move check for${move_unverified}"
+  else
+    die "region-move check not done (az group list failed): fix az access and re-run, or pass --yes to continue without it"
+  fi
+fi
 
 # Quota and SKU queries need Microsoft.Compute; bootstrap registers it too
 # (and imports it, since step 3 lists it in preregistered_resource_providers).

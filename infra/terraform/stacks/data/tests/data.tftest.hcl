@@ -415,16 +415,19 @@ run "env_in_its_own_region" {
   }
 }
 
-# The test env stays in the home region with its already-applied names.
-run "test_env_keeps_ncus_names" {
+# The test env in its deployed region (envs/test/data.tfvars: canadacentral,
+# cac, zonal), away from the home region the other runs' mocks use: every
+# region-bearing name takes the env's own code, the zone-free and
+# suffix-based names don't change.
+run "test_env_in_deployed_region" {
   command = plan
 
   variables {
     env               = "test"
     postgres_enabled  = false
-    location          = "northcentralus"
-    location_abbr     = "ncus"
-    ingress_pip_zones = []
+    location          = "canadacentral"
+    location_abbr     = "cac"
+    ingress_pip_zones = ["1", "2", "3"]
     vnet_cidr         = "10.10.0.0/16"
     subnet_cidrs = {
       aks  = "10.10.0.0/20"
@@ -435,13 +438,16 @@ run "test_env_keeps_ncus_names" {
 
   assert {
     condition = (
-      data.azurerm_resource_group.data.name == "rg-bbm-test-data-ncus" &&
-      module.network.vnet_name == "vnet-bbm-test-ncus" &&
-      module.law.name == "log-bbm-test-ncus" &&
+      data.azurerm_resource_group.data.name == "rg-bbm-test-data-cac" &&
+      module.network.vnet_name == "vnet-bbm-test-cac" &&
+      module.law.name == "log-bbm-test-cac" &&
       module.keyvault.name == "kv-bbm-tst-a1b2" &&
       module.storage.name == "stbbmtsta1b2" &&
-      azurerm_public_ip.ingress.name == "pip-bbm-test-ingress"
+      azurerm_public_ip.ingress.name == "pip-bbm-test-ingress" &&
+      azurerm_public_ip.ingress.location == "canadacentral" &&
+      azurerm_public_ip.ingress.zones == toset(["1", "2", "3"]) &&
+      length(module.postgres) == 0
     )
-    error_message = "test names must not change"
+    error_message = "test names and placement must follow its deployed region (cac)"
   }
 }

@@ -50,6 +50,8 @@ flowchart LR
 - Post-deploy checks, in both envs: `helm upgrade --atomic --wait`, `helm test`, the `/health`
   check through the ingress, the smoke suite (create+read on staging, read-only on prod), then the
   `bbm-last-deployed-tag` / `deployed-at` tags on the data RG.
+- CI's integration tests run the **arm64** images on the test cluster, while staging and prod run
+  **amd64**, so an amd64-only regression first shows up in the staging smoke checks.
 
 ## Approving prod
 
@@ -97,12 +99,19 @@ it's still waiting (see Concurrency), and GitHub fails a job that has waited 30 
   behind the stale one. Instead, after a successful staging deploy, `promote` cancels older CD
   runs whose status is still `waiting`, which here can only mean the prod approval (staging has no
   reviewer). An approved promotion is `in_progress` and is left alone; the newer one queues behind
-  it.
+  it. `gh run cancel` would also cancel an `in_progress` run, so `promote` re-reads each run's
+  status just before cancelling it and skips any that is no longer `waiting`. A tiny race remains:
+  an approval in the same second as that re-read can still be cancelled (re-run that CD run).
+- While it waits, that prod job also holds `env-prod`, so manual `env-power prod` actions and manual
+  prod deploys queue behind it until it is approved or rejected (or superseded by a newer run).
 - There's no workflow-level group in `cd.yml`. `cancel-in-progress` there would also cancel
   running deploys.
-- The scheduled auto-pause uses `env-power-scheduled-<env>`, not `env-<env>`, so a deploy running
-  at 06:00 UTC can still be interrupted ([env-lifecycle.md](env-lifecycle.md#approvals)). Main
-  merges around that time are rare.
+- The scheduled auto-pause uses `env-power-scheduled-<env>`, not `env-<env>`, so an unanswered
+  prod approval can't block it ([env-lifecycle.md](env-lifecycle.md#approvals)). Instead, for
+  staging and prod it first waits (up to 30 minutes) for `in_progress` or `queued` runs of `cd.yml`
+  and `deploy.yml`, so it doesn't stop a cluster mid `helm upgrade`. Runs `waiting` for the prod
+  approval don't count. If deploys are still running after 30 minutes, that night's pause is
+  skipped with a notice (the next schedule retries).
 
 ## Failures
 
