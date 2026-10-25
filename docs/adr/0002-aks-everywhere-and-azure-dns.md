@@ -330,7 +330,9 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   **Test runs on arm64.** It hosts only CI-run and PR-preview namespaces, so it can take the one
   region without an x86 size. `.github/workflows/_build-push.yml` builds the api and web images for
   `linux/amd64,linux/arm64`; analysis and contracts stay amd64 (analysis is off everywhere, and the
-  chart deploys no contracts image).
+  chart deploys no contracts image). Each platform builds natively (`ubuntu-24.04` and the free
+  public-repo `ubuntu-24.04-arm` runner), pushes by digest, and a merge job joins the digests into
+  one tag. Emulated arm64 builds under QEMU made `next build` 5–15× slower.
   **Staging and prod get the two x86 regions,** so staging rehearses prod exactly: same
   architecture, same node size, same images. Prod is in `northcentralus` to stay in North America
   with the home region (tfstate, shared RG and ACR, so prod's image pulls stay in-region). The
