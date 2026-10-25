@@ -787,43 +787,36 @@
     },
     "ingress": {
       "type": "object",
+      "description": "Exposure through the bbm-platform Gateway (HTTPRoute). TLS terminates at the Gateway with the env wildcard certificate.",
       "properties": {
         "enabled": {
           "type": "boolean"
         },
-        "className": {
-          "type": "string",
-          "minLength": 1
-        },
         "host": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^$|^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "HTTPRoute hostname (values-infra.yaml or --set). Must fall under one of the Gateway's env-zone listeners."
         },
-        "annotations": {
+        "gateway": {
           "type": "object",
-          "additionalProperties": true
-        },
-        "tls": {
-          "type": "object",
+          "description": "parentRef of the HTTPRoute: the Gateway from deploy/helm/bbm-platform.",
           "properties": {
-            "mode": {
+            "name": {
               "type": "string",
-              "enum": [
-                "none",
-                "defaultCert",
-                "certManager"
-              ]
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "maxLength": 63
             },
-            "clusterIssuer": {
-              "type": "string"
-            },
-            "secretName": {
-              "type": "string"
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "maxLength": 63
             }
           },
           "required": [
-            "mode"
+            "name",
+            "namespace"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         "publicIpName": {
           "type": "string",
@@ -835,9 +828,10 @@
         }
       },
       "required": [
-        "enabled"
+        "enabled",
+        "gateway"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "postgres": {
       "type": "object",
@@ -938,15 +932,12 @@
         "postgresCidr": {
           "type": "string",
           "pattern": "^$|^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-        },
-        "ingressControllerNamespace": {
-          "type": "string"
         }
       },
       "required": [
         "enabled"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "tests": {
       "type": "object",

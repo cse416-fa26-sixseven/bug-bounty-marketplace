@@ -2,7 +2,13 @@
 # Install or upgrade the per-cluster platform layer (ADR 0002 section 3):
 #   1. jetstack cert-manager (release cert-manager, namespace cert-manager)
 #   2. deploy/helm/bbm-platform (release bbm-platform, namespace bbm-platform):
-#      ClusterIssuers, the env wildcard Certificate, NginxIngressController bbm
+#      ClusterIssuers, the env wildcard Certificate, Gateway bbm (GatewayClass
+#      approuting-istio, bound to the static ingress IP) and its HTTP->HTTPS
+#      redirect HTTPRoute
+#
+# The cluster must have the Managed Gateway API CRDs and the app routing
+# Gateway API implementation enabled (infra/terraform/modules/aks, applied by
+# the compute stack); the script waits for the GatewayClass before installing.
 #
 # Idempotent: safe to re-run. Assumes the current kubectl context already
 # points at the env's cluster (az aks get-credentials + kubelogin).
@@ -11,6 +17,9 @@ set -euo pipefail
 CERT_MANAGER_VERSION="v1.21.3"
 CERT_MANAGER_REPO="https://charts.jetstack.io"
 CERT_TIMEOUT="600s"
+GATEWAY_TIMEOUT="600s"
+GATEWAY_CLASS="approuting-istio"
+GATEWAY="gateways.gateway.networking.k8s.io/bbm"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -28,6 +37,7 @@ cluster of the current kubectl context.
   --values FILE       values-infra.yaml (terraform: tf.sh compute <env> output -raw helm_values)
   --issuer NAME       ClusterIssuer for the wildcard certificate (default letsencrypt-prod)
   --wait              wait up to ${CERT_TIMEOUT} for Certificate bbm-platform/bbm-wildcard to be Ready
+                      and up to ${GATEWAY_TIMEOUT} for Gateway bbm-platform/bbm to be Programmed
   -h, --help          show this help
 EOF
 }
@@ -103,6 +113,17 @@ echo "==> env=$env_name context=$context cert-manager=$CERT_MANAGER_VERSION"
 [[ "$context" == *"bbm-$env_name"* ]] ||
   echo "warning: context '$context' does not look like the $env_name cluster (aks-bbm-$env_name-eus2)" >&2
 
+# The add-on creates the GatewayClass a few minutes after
+# `--enable-app-routing-istio` (terraform apply of the compute stack).
+echo "==> GatewayClass $GATEWAY_CLASS (AKS app routing Gateway API)"
+for _ in $(seq 1 30); do
+  kubectl get gatewayclass "$GATEWAY_CLASS" -o name >/dev/null 2>&1 && break
+  sleep 10
+done
+kubectl get gatewayclass "$GATEWAY_CLASS" -o name >/dev/null 2>&1 ||
+  die "GatewayClass $GATEWAY_CLASS not found: enable the Managed Gateway API and app routing Gateway API on the cluster (infra/terraform/scripts/tf.sh compute $env_name apply)"
+kubectl wait "gatewayclass/$GATEWAY_CLASS" --for=condition=Accepted --timeout=5m
+
 echo "==> cert-manager $CERT_MANAGER_VERSION (namespace cert-manager)"
 helm upgrade --install cert-manager cert-manager \
   --repo "$CERT_MANAGER_REPO" --version "$CERT_MANAGER_VERSION" \
@@ -143,7 +164,20 @@ if [[ "$wait_cert" == true ]]; then
     kubectl -n bbm-platform describe challenges.acme.cert-manager.io >&2 || true
     exit 1
   fi
+
+  # Programmed = Envoy pods ready and the LoadBalancer Service holds the
+  # static IP (a missing Network Contributor grant on the data RG shows up
+  # as Service events here).
+  echo "==> waiting up to $GATEWAY_TIMEOUT for Gateway bbm-platform/bbm to be Programmed"
+  if ! kubectl -n bbm-platform wait "$GATEWAY" --for=condition=Programmed --timeout="$GATEWAY_TIMEOUT"; then
+    echo "error: Gateway bbm-platform/bbm is not Programmed" >&2
+    kubectl -n bbm-platform describe "$GATEWAY" >&2 || true
+    kubectl -n bbm-platform get deploy,svc,hpa,pods -l gateway.networking.k8s.io/gateway-name=bbm -o wide >&2 || true
+    kubectl -n bbm-platform get events --field-selector involvedObject.kind=Service >&2 || true
+    exit 1
+  fi
 fi
 
 echo "==> platform ready on $context"
 kubectl -n bbm-platform get certificate bbm-wildcard 2>/dev/null || true
+kubectl -n bbm-platform get "$GATEWAY" 2>/dev/null || true

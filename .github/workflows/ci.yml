@@ -648,8 +648,8 @@ jobs:
   # every optional component on, render the ephemeral-namespace layer
   # (values-test.yaml) and the bbm-platform chart per env with their CI
   # fixtures, and schema-validate the output (kubeconform: core schemas +
-  # datreeio CRD catalog + the vendored NginxIngressController schema,
-  # which that catalog lacks), assert that rendering without
+  # the pinned datreeio CRD catalog, which covers cert-manager, KEDA,
+  # Secrets Store CSI and Gateway API), assert that rendering without
   # global.image.tag fails, then chart-testing lint and shellcheck of
   # deploy/platform. No cluster is involved.
   # ---------------------------------------------------------------------
@@ -701,8 +701,7 @@ jobs:
           kc() {
             kubeconform -strict -summary -kubernetes-version 1.31.0 \
               -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-              -schema-location 'deploy/helm/kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
           }
           for f in values-staging.yaml values-prod.yaml values-ci.yaml; do
             echo "::group::helm template $f | kubeconform"
@@ -722,7 +721,8 @@ jobs:
             --set-string postgres.inCluster.password=ci)
           helm lint --strict "$CHART" "${args[@]}"
           helm template bbm "$CHART" -n run-1-1 "${args[@]}" |
-            kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default
+            kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 
       - name: Platform chart (bbm-platform)
         run: |
@@ -736,8 +736,7 @@ jobs:
             helm template bbm-platform "$PLATFORM_CHART" -n bbm-platform "${args[@]}" |
               kubeconform -strict -summary -kubernetes-version 1.31.0 \
                 -schema-location default \
-                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-                -schema-location 'deploy/helm/kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
             echo "::endgroup::"
           done
 

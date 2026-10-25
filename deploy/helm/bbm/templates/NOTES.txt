@@ -24,17 +24,14 @@ Migrations: {{ if .Values.migrations.enabled }}pre-install/pre-upgrade hook Job 
 
 {{- if .Values.ingress.enabled }}
 
-Ingress (class {{ .Values.ingress.className }}):
-  {{ if eq .Values.ingress.tls.mode "none" }}http{{ else }}https{{ end }}://{{ .Values.ingress.host | default "<any host>" }}/
-{{- if eq .Values.ingress.tls.mode "defaultCert" }}
-  TLS: the controller's default certificate (bbm-platform wildcard bbm-platform/bbm-wildcard-tls).
-{{- else if eq .Values.ingress.tls.mode "certManager" }}
-  TLS: Secret {{ .Values.ingress.tls.secretName }} issued by ClusterIssuer {{ .Values.ingress.tls.clusterIssuer }}.
-{{- end }}
-  The IngressClass and its NginxIngressController come from the bbm-platform chart (deploy/platform/install.sh).
+HTTPRoute {{ include "bbm.fullname" . }} on Gateway {{ .Values.ingress.gateway.namespace }}/{{ .Values.ingress.gateway.name }}:
+  https://{{ .Values.ingress.host | default "<any host>" }}/   (/api, /health -> api; / -> web)
+  TLS terminates at the Gateway (bbm-platform wildcard bbm-platform/bbm-wildcard-tls); HTTP redirects to HTTPS.
+  The route attaches only if namespace {{ .Release.Namespace }} has label bbm.io/gateway-access=true:
+    kubectl -n {{ .Release.Namespace }} get httproute {{ include "bbm.fullname" . }} -o jsonpath='{.status.parents[0].conditions}'
 {{- else }}
 
-No Ingress. Reach the app with:
+No HTTPRoute. Reach the app with:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "bbm.fullname" . }}-web {{ .Values.web.port }}:{{ .Values.web.port }}
 {{- end }}
 

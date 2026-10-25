@@ -127,9 +127,11 @@ module "law" {
 }
 
 # Static ingress IP. Lives here (not in compute) so the IP and DNS name survive
-# compute down/up. The app-routing NGINX LoadBalancer service binds it by name
-# (azure-pip-name + azure-load-balancer-resource-group annotations), which is
-# why the AKS cluster identity gets Network Contributor on this RG.
+# compute down/up. The LoadBalancer Service of the bbm-platform Gateway (AKS
+# app routing Gateway API) binds it by name (azure-pip-name +
+# azure-load-balancer-resource-group in the Gateway's
+# spec.infrastructure.annotations), which is why the AKS cluster identity gets
+# Network Contributor on this RG.
 resource "azurerm_public_ip" "ingress" {
   name                = local.n.ingress_public_ip
   resource_group_name = local.rg

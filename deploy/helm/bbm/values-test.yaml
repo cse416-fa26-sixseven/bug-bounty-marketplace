@@ -7,6 +7,9 @@
 #   # database and rolls the api); generate one on first install.
 #   pw=$(kubectl -n "$NS" get secret bbm-postgres -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
 #   [ -n "$pw" ] || pw=$(openssl rand -hex 24)
+#   # Lets the namespace's HTTPRoute attach to the bbm-platform Gateway.
+#   kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl label namespace "$NS" --overwrite bbm.io/gateway-access=true
 #   helm upgrade --install bbm deploy/helm/bbm -n "$NS" \
 #     -f deploy/helm/bbm/values-test.yaml -f values-infra.yaml \
 #     --set global.image.tag=sha-xxxxxxx \
@@ -19,9 +22,9 @@
 #
 # Everything lives in the namespace: a throwaway in-cluster Postgres
 # (emptyDir), plain secrets (clear text in the Helm release, fine for a
-# disposable namespace), migrations on api boot. TLS comes from the
-# bbm-platform wildcard (test.<zone> / preview.<zone>), so no per-namespace
-# certificate is issued.
+# disposable namespace), migrations on api boot. TLS terminates at the
+# bbm-platform Gateway with its wildcard (test.<zone> / preview.<zone>), so
+# no per-namespace certificate is issued.
 
 global:
   # The test cluster has a single (system) pool.
@@ -86,10 +89,9 @@ migrations:
 
 ingress:
   enabled: true
-  className: bbm-nginx
   # host: --set ingress.host=run-<id>-<attempt>.test.<zone> | pr-<n>.preview.<zone>
-  tls:
-    mode: defaultCert
+  # (HTTPS on the bbm-platform Gateway's *.test.<zone> / *.preview.<zone>
+  # listeners; the namespace needs label bbm.io/gateway-access=true).
 
 networkPolicy:
   # Namespaces share the cluster: keep each one locked down like staging.

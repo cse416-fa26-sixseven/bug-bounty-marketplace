@@ -308,32 +308,25 @@ sandbox:
     limitsEphemeralStorage: 8Gi
 
 ingress:
-  # -- Render the Ingress.
+  # -- Render the HTTPRoute that attaches to the bbm-platform Gateway
+  # (deploy/helm/bbm-platform): /api and /health -> api, / -> web. TLS
+  # terminates at the Gateway with the env wildcard certificate, so nothing
+  # TLS-related is configured here. The release namespace must carry the
+  # label bbm.io/gateway-access=true or the Gateway rejects the route
+  # (deploy.yml / _ephemeral-env.yml set it).
   enabled: false
-  # -- IngressClass to use. bbm-nginx is created by the NginxIngressController
-  # `bbm` in the bbm-platform chart (deploy/helm/bbm-platform), not here.
-  className: bbm-nginx
   # -- Public host, e.g. prod.<zone> (values-infra) or, on the test cluster,
-  # run-<id>-<attempt>.test.<zone> / pr-<n>.preview.<zone> (--set).
-  # Empty = no host rule (matches any host).
+  # run-<id>-<attempt>.test.<zone> / pr-<n>.preview.<zone> (--set). Must sit
+  # under one of the Gateway's env-zone listeners. Empty = no hostnames
+  # (the route matches every listener hostname).
   host: ""
-  # -- Extra Ingress annotations.
-  annotations: {}
-  tls:
-    # -- none | defaultCert | certManager.
-    #   defaultCert - TLS block with the host and no secretName: NGINX serves
-    #                 the controller's default certificate (the bbm-platform
-    #                 wildcard bbm-platform/bbm-wildcard-tls).
-    #   certManager - cert-manager.io/cluster-issuer annotation + a TLS block
-    #                 with secretName (a per-host certificate).
-    mode: none
-    # -- ClusterIssuer for mode=certManager.
-    clusterIssuer: letsencrypt-prod
-    # -- TLS Secret for mode=certManager.
-    secretName: bbm-tls
+  gateway:
+    # -- Gateway the HTTPRoute attaches to (bbm-platform gateway.name).
+    name: bbm
+    # -- Its namespace (the bbm-platform release namespace).
+    namespace: bbm-platform
   # -- Accepted for compatibility with values-infra.yaml but IGNORED by this
-  # chart: the static PIP is bound by the NginxIngressController in the
-  # bbm-platform chart.
+  # chart: the static PIP is bound by the Gateway in the bbm-platform chart.
   publicIpName: ""
   # -- Ignored by this chart (see publicIpName).
   publicIpResourceGroup: ""
@@ -382,9 +375,10 @@ networkPolicy:
   # -- CIDR of the Postgres delegated subnet (snet-psql, values-infra). When
   # empty the Postgres egress rule is omitted.
   postgresCidr: ""
-  # -- Namespace the app-routing ingress controller pods (NginxIngressController
-  # `bbm` from bbm-platform) run in.
-  ingressControllerNamespace: app-routing-system
+  # Ingress to web/api is allowed from the Gateway's data-plane pods only:
+  # namespace ingress.gateway.namespace, pod label
+  # gateway.networking.k8s.io/gateway-name=<ingress.gateway.name> (set by
+  # the app routing Istio control plane on the Envoy pods it provisions).
 
 tests:
   # -- Image used by the `helm test` pod when global.image.registry is empty

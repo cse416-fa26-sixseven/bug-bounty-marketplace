@@ -1,8 +1,11 @@
 {{- /*
 NetworkPolicies for the release namespace (enforced by Cilium on AKS).
 
-Ingress: default-deny; allow app-routing controller -> web/api, web -> api,
-helm test pod -> web/api, api/migrations -> in-cluster postgres (when
+Ingress: default-deny; allow the bbm-platform Gateway's Envoy pods
+(namespace ingress.gateway.namespace, label
+gateway.networking.k8s.io/gateway-name=<ingress.gateway.name>, provisioned
+by the app routing Gateway API control plane) -> web/api, web -> api, helm
+test pod -> web/api, api/migrations -> in-cluster postgres (when
 postgres.inCluster.enabled).
 Egress (only when networkPolicy.restrictEgress): default-deny; allow DNS
 for everything, plus per component:
@@ -48,9 +51,7 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+        - {{ include "bbm.gatewayPeer" $ | nindent 10 | trim }}
         - podSelector:
             matchLabels:
               {{- include "bbm.selectorLabels" (dict "root" $ "component" "test") | nindent 14 }}
@@ -73,9 +74,7 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+        - {{ include "bbm.gatewayPeer" $ | nindent 10 | trim }}
         - podSelector:
             matchLabels:
               {{- include "bbm.selectorLabels" (dict "root" $ "component" "web") | nindent 14 }}

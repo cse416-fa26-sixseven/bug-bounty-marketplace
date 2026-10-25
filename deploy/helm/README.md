@@ -9,14 +9,15 @@ cluster (`values-test.yaml`). It contains:
 - Migrations as a Helm hook Job (`node dist/migrate-cli.js`).
 - ServiceAccounts with workload identity, plus Key Vault secrets through the
   Secrets Store CSI driver.
-- An Ingress (class `bbm-nginx`) and NetworkPolicies.
+- An `HTTPRoute` on the platform Gateway `bbm-platform/bbm` and
+  NetworkPolicies.
 - Off by default: the `analysis` worker (with KEDA), the `sandbox`
   namespace stub and a throwaway in-cluster Postgres (`postgres.inCluster`,
   test namespaces only).
 
 The cluster-wide pieces (cert-manager, the Let's Encrypt ClusterIssuers, the
-env wildcard certificate and the `NginxIngressController` `bbm` that creates
-the `bbm-nginx` class and binds the static IP) live in the separate
+env wildcard certificate and the Gateway API `Gateway` `bbm` that binds the
+static IP and terminates TLS) live in the separate
 [`bbm-platform`](bbm-platform/README.md) chart, installed once per cluster by
 `deploy/platform/install.sh` (ADR 0002 section 3).
 
@@ -63,14 +64,14 @@ The app chart accepts but ignores `ingress.publicIpName`,
 
 The env files never hardcode these. Set `global.requireInfraValues=true` in
 deploys, so a missing key fails rendering instead of producing a broken
-SecretProviderClass or Ingress.
+SecretProviderClass or HTTPRoute.
 
 | file | used by | highlights |
 |---|---|---|
 | `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot |
-| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, ingress (`tls.mode: defaultCert`), netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1 |
+| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1 |
 | `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1 |
-| `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, ingress `defaultCert`, netpol + egress lockdown |
+| `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown |
 | `values-ci.yaml` | `ct install`, kind smoke tests | plain Secret with dummy `DATABASE_URL`, everything optional off |
 
 > **API replicas.** Uploaded sources are stored on a per-pod `emptyDir`
@@ -150,22 +151,31 @@ A failed migration fails the `helm upgrade`. With `--atomic`, the release is
 then rolled back. The failed Job is kept for `kubectl logs` until the next
 deploy recreates it.
 
-## Ingress and TLS
+## Routing and TLS (Gateway API)
 
-- The Ingress (`ingressClassName: bbm-nginx`) routes:
-  - `/api` (Prefix) and `/health` (Exact) to `bbm-api:3001`
+- With `ingress.enabled`, the chart renders `HTTPRoute` `bbm` with
+  `parentRefs` → Gateway `ingress.gateway.namespace`/`ingress.gateway.name`
+  (default `bbm-platform/bbm`, from the `bbm-platform` chart, GatewayClass
+  `approuting-istio` of the AKS app routing add-on) and
+  `hostnames: [ingress.host]`. Rules:
+  - `/api` (PathPrefix) and `/health` (Exact) to `bbm-api:3001`
   - `/` to `bbm-web:3000`
-- `ingress.tls.mode`:
-  - `none`: plain HTTP.
-  - `defaultCert` (staging, prod, test): a TLS block with the host and **no
-    `secretName`**, so NGINX serves the controller's default certificate,
-    the `bbm-platform` wildcard `bbm-platform/bbm-wildcard-tls`
-    (`<env>.<zone>` and `*.<env>.<zone>`). No per-namespace certificates.
-    Without a host (lint only) the TLS block is omitted.
-  - `certManager`: the `cert-manager.io/cluster-issuer` annotation and a TLS
-    block with `tls.secretName` (a per-host certificate).
-- The `bbm-nginx` IngressClass and its `NginxIngressController` come from
-  `bbm-platform`. Install the platform before the first app release.
+- TLS terminates at the Gateway's HTTPS listeners with the `bbm-platform`
+  wildcard `bbm-platform/bbm-wildcard-tls` (`<z>` and `*.<z>` per env zone),
+  and its HTTP listener redirects to HTTPS. The chart has no TLS settings and
+  issues no per-namespace certificates.
+- **Namespace label:** the HTTPS listeners admit routes only from namespaces
+  labelled `bbm.io/gateway-access=true`. `deploy.yml` labels `bbm`,
+  `_ephemeral-env.yml` labels `run-*` / `pr-*`; for a manual install run
+  `kubectl label namespace <ns> --overwrite bbm.io/gateway-access=true`.
+  Without it the route reports `Accepted=False` (`NotAllowedByListeners`):
+  `kubectl -n <ns> describe httproute bbm`.
+- `ingress.host` must sit under one of the env zones (the listener
+  hostnames), or the route is not accepted.
+- NetworkPolicies admit web/api traffic from the Gateway's Envoy pods:
+  namespace `ingress.gateway.namespace`, label
+  `gateway.networking.k8s.io/gateway-name=<ingress.gateway.name>`.
+- Install the platform before the first app release.
 
 ## In-cluster Postgres (`postgres.inCluster`)
 
@@ -234,8 +244,7 @@ for f in values-staging.yaml values-prod.yaml values-ci.yaml; do
     --set analysis.enabled=true --set sandbox.enabled=true --set migrations.enabled=true |
   kubeconform -strict -summary -kubernetes-version 1.34.0 \
     -schema-location default \
-    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-    -schema-location 'kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 done
 
 # (same kubeconform flags for values-test.yaml and for
@@ -248,12 +257,10 @@ helm template bbm bbm -n bbm   # Error: ... global.image.tag is required
 ct lint --config deploy/helm/ct.yaml --charts deploy/helm/bbm
 ```
 
-`NginxIngressController` is not in the datreeio CRD catalog, so its schema is
-vendored in `kubeconform-schemas/nginxingresscontroller_v1alpha1.json`: the
-`openAPIV3Schema` of
-[the operator's CRD](https://github.com/Azure/aks-app-routing-operator/blob/main/config/crd/bases/approuting.kubernetes.azure.com_nginxingresscontrollers.yaml)
-converted to JSON. Regenerate it the same way if the operator's API changes.
-The CI `helm` job runs the same checks.
+Every CRD the charts render (cert-manager, KEDA, Secrets Store CSI, Gateway
+API `Gateway` / `HTTPRoute`) is in the datreeio CRD catalog, so nothing is
+vendored and kubeconform skips nothing. The CI `helm` job runs the same
+checks against a pinned catalog commit (`main` above is fine locally).
 
 `ct` reads `bbm/ci/ci-values.yaml`, which is a symlink to `values-ci.yaml`,
 and `bbm-platform/ci/{prod,test}-values.yaml` (fake `values-infra.yaml`
@@ -272,7 +279,9 @@ ct install --config deploy/helm/ct.yaml --charts deploy/helm/bbm \
 ```sh
 infra/terraform/scripts/tf.sh compute "$ENV" output -raw helm_values > values-infra.yaml
 az aks get-credentials -g "rg-bbm-$ENV-compute-eus2" -n "aks-bbm-$ENV-eus2"   # then kubelogin convert-kubeconfig -l azurecli
-deploy/platform/install.sh "$ENV" --values values-infra.yaml   # idempotent; cert-manager + bbm-platform
+deploy/platform/install.sh "$ENV" --values values-infra.yaml --wait   # idempotent; cert-manager + bbm-platform
+kubectl create namespace bbm --dry-run=client -o yaml | kubectl apply -f -
+kubectl label namespace bbm --overwrite bbm.io/gateway-access=true    # HTTPRoute admission
 helm upgrade --install bbm deploy/helm/bbm \
   --namespace bbm --create-namespace \
   -f "deploy/helm/bbm/values-$ENV.yaml" \
@@ -299,8 +308,9 @@ az acr import --name <acr> \
 - **AKS add-ons:**
   - OIDC issuer and workload identity
   - `azure-keyvault-secrets-provider` (with `secretObjects` sync)
-  - app routing (`web_app_routing`); the `NginxIngressController` itself
-    comes from `bbm-platform`
+  - Managed Gateway API CRDs and the app routing Gateway API
+    implementation (GatewayClass `approuting-istio`; `modules/aks`, via
+    azapi); the `Gateway` itself comes from `bbm-platform`. No managed NGINX.
   - KEDA, only when `analysis.keda.enabled`
 - **Network policy:** Cilium enforces NetworkPolicies (CNI Overlay + Cilium).
 - **Federated credentials:**
@@ -319,7 +329,7 @@ az acr import --name <acr> \
   - `Key Vault Secrets User` on the env Key Vault for the api identity.
   - The same role for the worker identity when analysis is enabled.
   - `Network Contributor` on the data RG for the AKS cluster identity, so the
-    app-routing LoadBalancer can use the static PIP.
+    Gateway's LoadBalancer Service can bind the static PIP.
 - **Node pools:**
   - Node label `bbm.io/pool=apps` on the apps pool (prod `nodeSelector`).
   - `bbm.io/pool=sandbox` plus taint `bbm.io/sandbox=true:NoSchedule` and

@@ -264,10 +264,20 @@ jobs:
           kubectl get nodes -o wide
 
       # Idempotent: cert-manager, ClusterIssuers, the wildcard certificate and
-      # the ingress controller the app's Ingress uses.
+      # the Gateway bbm-platform/bbm the app's HTTPRoute attaches to (waits
+      # for it to be Programmed).
       - name: Platform install
         if: steps.gate.outputs.go == 'true'
         run: deploy/platform/install.sh "$ENV_NAME" --values "$RUNNER_TEMP/values-infra.yaml" --wait
+
+      # The Gateway's HTTPS listeners only admit HTTPRoutes from namespaces
+      # with this label (deploy/helm/bbm-platform gateway.routeNamespaceLabel).
+      - name: Namespace
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          kubectl create namespace bbm --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace bbm --overwrite bbm.io/gateway-access=true
 
       - name: Helm upgrade
         if: steps.gate.outputs.go == 'true'
@@ -296,7 +306,21 @@ jobs:
           host=$(yq -r '.ingress.host // ""' "$RUNNER_TEMP/values-infra.yaml")
           [[ -n "$host" ]] || { echo "::error::helm_values has no ingress.host"; exit 1; }
           echo "url=https://$host" >>"$GITHUB_OUTPUT"
-          # The LB / DNS / certificate can lag the rollout by a minute or two.
+          # The route must be Accepted by the Gateway (namespace label, listener
+          # hostname) before anything is served.
+          accepted=""
+          for _ in $(seq 1 24); do
+            accepted=$(kubectl -n bbm get httproute bbm \
+              -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null || true)
+            [[ "$accepted" == True ]] && break
+            sleep 5
+          done
+          if [[ "$accepted" != True ]]; then
+            kubectl -n bbm describe httproute bbm || true
+            echo "::error::HTTPRoute bbm/bbm was not accepted by Gateway bbm-platform/bbm"
+            exit 1
+          fi
+          # DNS / Gateway programming can lag the rollout by a minute or two.
           for _ in $(seq 1 30); do
             if curl -fsS -m 5 -o /dev/null "https://$host/health"; then
               echo "ingress is serving https://$host"

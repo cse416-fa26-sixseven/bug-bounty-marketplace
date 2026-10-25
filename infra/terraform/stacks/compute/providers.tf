@@ -13,3 +13,9 @@ provider "azurerm" {
     }
   }
 }
+
+# Same auth chain as azurerm (OIDC in CI, Azure CLI locally).
+provider "azapi" {
+  subscription_id = var.subscription_id
+  use_oidc        = true
+}

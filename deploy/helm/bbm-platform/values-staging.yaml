@@ -1,5 +1,5 @@
 # Staging cluster (aks-bbm-staging-eus2).
-controller:
+gateway:
   scaling:
-    minReplicas: 1
-    maxReplicas: 2
+    minReplicas: 2
+    maxReplicas: 3

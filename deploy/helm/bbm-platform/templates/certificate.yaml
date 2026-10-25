@@ -1,7 +1,8 @@
 {{- /*
 Wildcard certificate for the env: <z> and *.<z> for every env zone. Its
-Secret is the NginxIngressController's default certificate, so app Ingresses
-with tls.mode=defaultCert (no secretName) are served by it.
+Secret is the certificateRef of every HTTPS listener of the Gateway
+(gateway.yaml), so app HTTPRoutes (CI runs, PR previews, staging, prod)
+never need certificates of their own.
 */ -}}
 {{- $zones := include "bbm-platform.envZones" . | fromJsonArray -}}
 {{- $c := .Values.certificate -}}

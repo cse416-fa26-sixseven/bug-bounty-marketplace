@@ -151,12 +151,10 @@ resource "azurerm_kubernetes_cluster" "this" {
     secret_rotation_interval = "2m"
   }
 
-  # App-routing (managed NGINX). The chart creates NginxIngressController `bbm`
-  # bound to the static PIP in the data RG; no default controller needed.
-  web_app_routing {
-    dns_zone_ids             = []
-    default_nginx_controller = "None"
-  }
+  # No web_app_routing block: ingress is the app routing Gateway API
+  # implementation (azapi_update_resource.app_routing_gateway_api below), not
+  # the add-on's managed NGINX, and DNS records are managed by Terraform, not
+  # by the add-on.
 
   workload_autoscaler_profile {
     keda_enabled = true
@@ -173,11 +171,54 @@ resource "azurerm_kubernetes_cluster" "this" {
   tags = var.tags
 
   lifecycle {
-    # The cluster autoscaler owns node_count.
-    ignore_changes = [default_node_pool[0].node_count]
+    # The cluster autoscaler owns node_count. web_app_routing: azurerm (API
+    # 2025-10-01) cannot express ingressProfile.gatewayAPI or
+    # webAppRouting.gatewayAPIImplementations, which azapi sets below; if the
+    # RP ever reports the shared ingressProfile.webAppRouting as a block,
+    # azurerm must not "fix" it by rewriting the whole ingressProfile.
+    ignore_changes = [default_node_pool[0].node_count, web_app_routing]
   }
 
   depends_on = [time_sleep.rbac_propagation]
+}
+
+# Ingress (ADR 0002 section 3): the Managed Gateway API CRDs (standard
+# channel, bundle pinned to the Kubernetes minor) plus the application
+# routing add-on's Gateway API implementation, a sidecar-less istiod in
+# aks-istio-system that reconciles Gateways of GatewayClass approuting-istio.
+# azurerm (4.x and 5.x) has no argument for either, so this is the azapi
+# update Microsoft documents for Terraform
+# (https://learn.microsoft.com/azure/aks/app-routing-gateway-api, Terraform
+# tab): equivalent to `az aks update --enable-gateway-api
+# --enable-app-routing-istio`. It GETs the cluster, merges this body and PUTs
+# it back; the Gateway itself (static PIP, TLS) is in deploy/helm/bbm-platform.
+resource "azapi_update_resource" "app_routing_gateway_api" {
+  type        = "Microsoft.ContainerService/managedClusters@2026-03-01"
+  resource_id = azurerm_kubernetes_cluster.this.id
+
+  body = {
+    properties = {
+      ingressProfile = {
+        gatewayAPI = {
+          installation = "Standard"
+        }
+        webAppRouting = {
+          gatewayAPIImplementations = {
+            appRoutingIstio = {
+              mode = "Enabled"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  response_export_values = ["properties.ingressProfile"]
+
+  lifecycle {
+    # A replaced cluster keeps its resource ID; the OIDC issuer URL is new.
+    replace_triggered_by = [azurerm_kubernetes_cluster.this.oidc_issuer_url]
+  }
 }
 
 resource "azurerm_kubernetes_cluster_node_pool" "apps" {

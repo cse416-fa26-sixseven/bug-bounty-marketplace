@@ -25,7 +25,7 @@ infra/terraform/
     bootstrap/           state storage, every RG, providers, OIDC identities, DNS zones, sub budget
     global/              ACR, shared LAW, shared Key Vault, RG budgets
     data/                per env: VNet, PG (not test), KV, storage, UAMIs, ingress PIP, DNS records
-    compute/             per env: AKS, node pools, federated credentials, helm_values
+    compute/             per env: AKS (+ app routing Gateway API via azapi), node pools, federated credentials, helm_values
   envs/
     global/              bootstrap.tfvars, global.tfvars, backend.hcl
     test/ staging/ prod/ data.tfvars, compute.tfvars, backend-data.hcl, backend-compute.hcl
@@ -191,6 +191,19 @@ instead of registering it. You can also import it by hand:
 - **Compute** federates `system:serviceaccount:cert-manager:cert-manager` to the
   certmgr UAMI and takes `aks_sku_tier` (`Free` | `Standard`, prod sets
   `Standard`).
+- **Ingress** (`modules/aks`, ADR 0002 section 3): no `web_app_routing` block
+  (no managed NGINX, no add-on DNS). `azapi_update_resource
+  .app_routing_gateway_api` (`Microsoft.ContainerService/managedClusters@2026-03-01`)
+  sets `ingressProfile.gatewayAPI.installation = Standard` (Managed Gateway
+  API CRDs) and `ingressProfile.webAppRouting.gatewayAPIImplementations
+  .appRoutingIstio.mode = Enabled` (GatewayClass `approuting-istio`), which
+  azurerm cannot express; it is the same as `az aks update
+  --enable-gateway-api --enable-app-routing-istio`. The compute stack therefore
+  also needs the `Azure/azapi` provider (same OIDC / CLI auth as azurerm). The
+  Gateway itself (static PIP binding, TLS) is in `deploy/helm/bbm-platform`.
+  Check after an apply:
+  `az aks show -g rg-bbm-<env>-compute-eus2 -n aks-bbm-<env>-eus2 --query ingressProfile`
+  and `kubectl get gatewayclass approuting-istio`.
 
 `helm_values` (compute output, `values-infra.yaml`):
 

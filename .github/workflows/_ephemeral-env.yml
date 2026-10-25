@@ -207,7 +207,7 @@ jobs:
           kubelogin convert-kubeconfig -l azurecli
           kubectl get nodes -o wide
 
-      # cert-manager + bbm-platform (ingress controller, wildcard cert).
+      # cert-manager + bbm-platform (Gateway bbm, wildcard cert).
       # install.sh is idempotent; run it only when the release is missing
       # or not deployed, so normal runs don't touch cluster-wide objects.
       - name: Ensure platform
@@ -217,6 +217,9 @@ jobs:
           status=$(helm status bbm-platform -n bbm-platform -o json 2>/dev/null | jq -r '.info.status' || true)
           if [[ "$status" == "deployed" ]]; then
             echo "bbm-platform is deployed"
+            # After a resume the Gateway's Envoy pods may still be rescheduling.
+            kubectl -n bbm-platform wait gateways.gateway.networking.k8s.io/bbm \
+              --for=condition=Programmed --timeout=10m
           else
             echo "bbm-platform is '${status:-missing}': installing the platform"
             deploy/platform/install.sh test --values "$VALUES_INFRA" --wait
@@ -229,7 +232,9 @@ jobs:
           set -euo pipefail
           expires=$(date -u -d "+${TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
           kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
-          kubectl label namespace "$NS" --overwrite bbm.io/ephemeral=true "bbm.io/kind=$KIND"
+          # bbm.io/gateway-access: lets the HTTPRoute attach to the bbm-platform
+          # Gateway's HTTPS listeners (gateway.routeNamespaceLabel).
+          kubectl label namespace "$NS" --overwrite bbm.io/ephemeral=true "bbm.io/kind=$KIND" bbm.io/gateway-access=true
           kubectl annotate namespace "$NS" --overwrite "bbm.io/expires-on=$expires"
           echo "expires_on=$expires" >>"$GITHUB_OUTPUT"
 
@@ -267,13 +272,25 @@ jobs:
           echo "url=https://$HOST" >>"$GITHUB_OUTPUT"
 
       # DNS (wildcard alias record) and the wildcard cert already exist; the
-      # ingress controller may still be picking up the new Ingress.
+      # Gateway may still be programming the new HTTPRoute.
       - name: Wait for https
         if: inputs.action == 'deploy'
         env:
           URL: ${{ steps.release.outputs.url }}
         run: |
           set -euo pipefail
+          accepted=""
+          for _ in $(seq 1 24); do
+            accepted=$(kubectl -n "$NS" get httproute bbm \
+              -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null || true)
+            [[ "$accepted" == True ]] && break
+            sleep 5
+          done
+          if [[ "$accepted" != True ]]; then
+            kubectl -n "$NS" describe httproute bbm || true
+            echo "::error::HTTPRoute $NS/bbm was not accepted by Gateway bbm-platform/bbm"
+            exit 1
+          fi
           for path in /health /healthz; do
             for i in $(seq 1 30); do
               if curl -fsS --max-time 10 -o /dev/null "$URL$path"; then

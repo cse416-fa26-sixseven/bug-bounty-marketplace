@@ -1,5 +1,5 @@
 # Prod cluster (aks-bbm-prod-eus2).
-controller:
+gateway:
   scaling:
     minReplicas: 2
-    maxReplicas: 3
+    maxReplicas: 5

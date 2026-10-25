@@ -29,7 +29,7 @@ platform:
   certManagerClientId: ""
 
 ingress:
-  # -- Static public IP the controller's LoadBalancer binds (pip-bbm-<env>-ingress).
+  # -- Static public IP the Gateway's LoadBalancer Service binds (pip-bbm-<env>-ingress).
   publicIpName: ""
   # -- Resource group of that IP (rg-bbm-<env>-data-eus2).
   publicIpResourceGroup: ""
@@ -47,7 +47,7 @@ acme:
       server: https://acme-v02.api.letsencrypt.org/directory
 
 certificate:
-  # -- Certificate (and Secret) used as the controller's default certificate.
+  # -- Certificate (and Secret) every HTTPS listener of the Gateway serves.
   name: bbm-wildcard
   secretName: bbm-wildcard-tls
   # -- ClusterIssuer that signs it: letsencrypt-prod | letsencrypt-staging
@@ -55,18 +55,26 @@ certificate:
   # clear of Let's Encrypt rate limits; browsers will not trust it.
   issuer: letsencrypt-prod
 
-controller:
-  # -- Render the AKS app-routing NginxIngressController (CLUSTER-SCOPED;
-  # needs the app-routing add-on CRD).
+gateway:
+  # -- Render the Gateway, its options ConfigMap and the HTTP->HTTPS redirect
+  # HTTPRoute. Needs the cluster's Managed Gateway API CRDs and the app
+  # routing Gateway API implementation (modules/aks).
   enabled: true
+  # -- Gateway name; the app chart's ingress.gateway.name. The add-on names
+  # what it provisions <name>-<className> (Deployment/Service/HPA/PDB
+  # bbm-approuting-istio in this namespace).
   name: bbm
-  # -- IngressClass it creates; the app chart's ingress.className.
-  ingressClassName: bbm-nginx
-  controllerNamePrefix: nginx-bbm
-  # -- Redirect HTTP to HTTPS for every Ingress on this class. Ingresses
-  # with a TLS block (app chart tls.mode defaultCert / certManager) are
-  # redirected by NGINX anyway.
-  forceSSLRedirect: false
+  # -- AKS-managed GatewayClass of the app routing Gateway API implementation.
+  className: approuting-istio
+  # -- Namespaces whose HTTPRoutes may attach to the HTTPS listeners must
+  # carry this label (bbm, run-*, pr-*; set by deploy.yml and
+  # _ephemeral-env.yml). The HTTP listener only admits this namespace's
+  # redirect route.
+  routeNamespaceLabel:
+    key: bbm.io/gateway-access
+    value: "true"
+  # -- HPA of the Envoy Deployment, through the per-Gateway ConfigMap
+  # (infrastructure.parametersRef). The add-on rejects minReplicas < 2.
   scaling:
-    minReplicas: 1
-    maxReplicas: 2
+    minReplicas: 2
+    maxReplicas: 5

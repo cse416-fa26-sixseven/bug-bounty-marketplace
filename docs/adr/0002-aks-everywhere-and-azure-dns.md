@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-25
+- **Amended:** 2026-10-25, ingress moved from the app-routing add-on's managed NGINX to its Gateway
+  API implementation (section 3), because Azure support for managed NGINX ends in November 2026.
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
   interfaces. Everything else in 0001 still holds.
@@ -15,6 +17,11 @@
 - Prod needs the AKS uptime SLA; test and staging don't.
 - We want real hostnames with HTTPS, including per-PR previews, instead of
   `bbm-<env>.eastus2.cloudapp.azure.com`.
+- Upstream ingress-nginx was retired (maintenance ended in March 2026), and Azure supports the
+  app-routing add-on's managed NGINX (`NginxIngressController`) only with critical security patches
+  through **November 2026**. Microsoft's documented successor on AKS is the app routing add-on's
+  Kubernetes Gateway API implementation (GatewayClass `approuting-istio`), GA since AKS release
+  2026-04-28.
 
 ## Decision
 
@@ -83,11 +90,21 @@ Hosts:
 | CI run      | `run-<id>-<attempt>.test.<zone>`         |                                   |
 | PR preview  | `pr-<n>.preview.<zone>`                  |                                   |
 
-### 3. TLS: cert-manager, Let's Encrypt DNS-01, one wildcard per env
+### 3. Ingress and TLS: AKS app routing Gateway API, cert-manager, one wildcard per env
 
+- **Cluster (`modules/aks`):** the Managed Gateway API CRDs (`ingressProfile.gatewayAPI.installation
+  = Standard`: standard channel, bundle version pinned to the Kubernetes minor, v1.3.0 on 1.34) and
+  the app routing Gateway API implementation (`ingressProfile.webAppRouting.gatewayAPIImplementations
+  .appRoutingIstio.mode = Enabled`), which runs a sidecar-less `istiod` in `aks-istio-system` and
+  reconciles Gateways of GatewayClass `approuting-istio`. azurerm has no argument for either, so the
+  module sets them with `azapi_update_resource` on `Microsoft.ContainerService/managedClusters@2026-03-01`
+  (the Terraform path Microsoft documents; same as `az aks update --enable-gateway-api
+  --enable-app-routing-istio`). There is no `web_app_routing` block: no managed NGINX and no add-on
+  DNS integration (records are ours, section 2).
 - New per-cluster **platform** layer, installed once per cluster by `deploy/platform/install.sh <env>`
   (called by `env-power up`, `deploy.yml`, the ephemeral workflows when the platform is missing, and
-  `up.sh`). It is idempotent:
+  `up.sh`). It is idempotent, waits for the GatewayClass, and with `--wait` waits for the certificate
+  to be Ready and the Gateway to be `Programmed`:
   1. `cert-manager` (jetstack chart, pinned version, namespace `cert-manager`, CRDs enabled, workload
      identity labels on the controller SA/pod).
   2. `deploy/helm/bbm-platform`, release `bbm-platform`, namespace `bbm-platform`:
@@ -95,11 +112,30 @@ Hosts:
        with workload identity, one solver per env zone, selected by `dnsZones`).
      - Certificate `bbm-wildcard` → Secret `bbm-wildcard-tls` in `bbm-platform`, with DNS names
        `<z>` and `*.<z>` for each env zone (test: both `test.<zone>` and `preview.<zone>`).
-     - The app-routing `NginxIngressController` `bbm` (moved here from the app chart), bound to the
-       static PIP, with `defaultSSLCertificate` = `bbm-platform/bbm-wildcard-tls`.
-- The app chart's ingress gets `tls.mode: defaultCert`: a TLS block listing the host and no
-  `secretName`, so NGINX serves the controller's default (wildcard) certificate. No per-namespace or
-  per-PR certificates, so no Let's Encrypt rate-limit risk. `tls.mode: certManager` is kept.
+     - **Gateway `bbm-platform/bbm`** (`gatewayClassName: approuting-istio`). The add-on provisions
+       Envoy Deployment, LoadBalancer Service, HPA and PDB `bbm-approuting-istio` in `bbm-platform`.
+       `spec.infrastructure.annotations` (`service.beta.kubernetes.io/azure-pip-name`,
+       `azure-load-balancer-resource-group`) are copied onto that Service, which binds the static PIP
+       `pip-bbm-<env>-ingress` in the data RG (the cluster identity has Network Contributor there).
+       A per-Gateway ConfigMap (`infrastructure.parametersRef`) sets the HPA (min 2, the add-on's
+       floor). Listeners:
+       - `http` (:80): admits only routes from its own namespace (`allowedRoutes.namespaces.from:
+         Same`), i.e. HTTPRoute `bbm-https-redirect`, which 301s every host to HTTPS.
+       - `https-<zone>` and `https-wildcard-<zone>` (:443, hostnames `<z>` and `*.<z>` per env zone):
+         TLS `Terminate` with `certificateRefs` → `bbm-wildcard-tls` (same namespace, so no
+         ReferenceGrant), admitting HTTPRoutes from namespaces labelled
+         **`bbm.io/gateway-access=true`** (`from: Selector`).
+- **App chart:** an `HTTPRoute` (instead of an Ingress) in the release namespace, `parentRefs` →
+  Gateway `bbm-platform/bbm`, `hostnames: [ingress.host]`, rules `/api` (prefix) and `/health`
+  (exact) → api, `/` → web. TLS and the HTTP redirect live on the Gateway, so the chart has no TLS
+  settings and no per-namespace or per-PR certificates (no Let's Encrypt rate-limit risk). The value
+  keys stay `ingress.*` (`ingress.host` from `helm_values`, `ingress.gateway.{name,namespace}`).
+  NetworkPolicies admit web/api traffic from pods labelled
+  `gateway.networking.k8s.io/gateway-name=bbm` in namespace `bbm-platform` (the label Istio puts on
+  the Gateway's Envoy pods).
+- **Namespace label:** `deploy.yml` labels `bbm` and `_ephemeral-env.yml` labels each `run-*` /
+  `pr-*` namespace `bbm.io/gateway-access=true`; both wait for the HTTPRoute to be `Accepted`
+  before probing HTTPS. A namespace without the label cannot publish a host on the shared Gateway.
 - **Identity:** `stacks/data` creates UAMI `id-bbm-<env>-certmgr` and grants it **DNS Zone
   Contributor** on each of the env's public zones (zone scope only). `stacks/compute` adds the
   federated credential `system:serviceaccount:cert-manager:cert-manager`. "DNS Zone Contributor" is
@@ -134,7 +170,8 @@ platform:
 ```
 
 `bbm-platform` consumes `dns.*`, `platform.*` and `ingress.publicIpName` /
-`ingress.publicIpResourceGroup`. The app chart ignores keys it does not use.
+`ingress.publicIpResourceGroup` (bound by the Gateway). The app chart uses `ingress.host` as its
+HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) changed no keys.
 
 ### 6. One-command bring-up and teardown
 
@@ -170,6 +207,24 @@ platform:
 - **HTTP-01 certificates per host.** No new role, but one certificate per PR preview, issuance on
   every preview, and exposure to Let's Encrypt's per-domain weekly limit. Rejected for DNS-01
   wildcards.
+- **Keep the app-routing managed NGINX (`NginxIngressController`).** What this ADR first shipped
+  with. Upstream ingress-nginx is retired and Azure support ends in November 2026, i.e. within this
+  project's lifetime. Rejected.
+- **Self-managed ingress-nginx or another Ingress controller via Helm.** Ingress API only, and one
+  more component for us to patch; ingress-nginx itself is unmaintained. Rejected.
+- **Application Gateway for Containers (AGC).** Azure-managed, supports Gateway API and Ingress, but
+  it is a separately billed Azure resource (hourly plus capacity units) with its own subnet,
+  identity and ALB controller to run, and it does not bind our existing static PIP: hostnames would
+  point at an AGC frontend FQDN (CNAME), not the apex/wildcard alias A records of section 2. Too
+  much cost and moving parts for a student project. Rejected.
+- **Istio service mesh add-on with Gateway API.** Same Gateway API surface plus `EnvoyFilter`, but
+  revisioned: minor upgrades are manual canary upgrades even when used only for ingress, and it
+  cannot be enabled together with the app routing implementation. We need no mesh features.
+  Rejected.
+- **Self-managed Envoy Gateway (or another Gateway API implementation) via Helm.** Portable and
+  feature-rich, but AKS supports the Managed Gateway API CRDs only with an AKS add-on
+  implementation, and we would own its upgrades and CVEs. Rejected for the managed add-on, which is
+  upgraded in place with the cluster.
 - **Bicep / ARM deployment stacks.** Azure-native equivalent of CloudFormation, but the Terraform
   stacks, tests and workflows already exist and Terraform also manages Entra ID and GitHub-facing
   pieces. Kept Terraform.
@@ -187,3 +242,12 @@ platform:
   rewrote.
 - New delegable role (DNS Zone Contributor) and the test-cluster roles for `gh-bbm-ephemeral` are
   applied by bootstrap, locally, by an Owner.
+- **Gateway API:** the compute stack adds the `Azure/azapi` provider (`~> 2.0`) for the one setting
+  azurerm lacks; drop it once azurerm exposes the ingress profile's Gateway API fields. The Envoy
+  data plane runs at least 2 replicas per cluster (add-on floor), slightly more than NGINX's 1 on
+  test/staging. App routing Gateway API cannot set request body/header size limits or rate limits
+  (no `EnvoyFilter`); the app relies on its own limits. TLSRoute/SNI passthrough and egress are not
+  supported; we use neither. The add-on upgrades istiod in place with the cluster's Kubernetes
+  version (respecting the maintenance window), and the CRD bundle follows the Kubernetes minor.
+- **Admission:** a namespace must carry `bbm.io/gateway-access=true` to publish a host; routes are
+  also limited to hostnames under the env zones by the listener hostnames.

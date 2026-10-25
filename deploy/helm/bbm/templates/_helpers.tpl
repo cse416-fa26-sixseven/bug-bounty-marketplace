@@ -241,3 +241,18 @@ postgres://bbm:bbm@postgres:5432/bbm
       protocol: TCP
 {{- end }}
 {{- end -}}
+
+{{/*
+NetworkPolicy peer for the Gateway data plane: the Envoy pods the app routing
+Gateway API implementation (approuting-istio) provisions for Gateway
+<ingress.gateway.name> in its namespace. Istio labels them
+gateway.networking.k8s.io/gateway-name=<gateway name>.
+*/}}
+{{- define "bbm.gatewayPeer" -}}
+namespaceSelector:
+  matchLabels:
+    kubernetes.io/metadata.name: {{ .Values.ingress.gateway.namespace }}
+podSelector:
+  matchLabels:
+    gateway.networking.k8s.io/gateway-name: {{ .Values.ingress.gateway.name }}
+{{- end -}}

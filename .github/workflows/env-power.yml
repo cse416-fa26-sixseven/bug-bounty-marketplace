@@ -346,7 +346,7 @@ jobs:
         with:
           kubelogin-version: v0.1.4
 
-      # cert-manager + bbm-platform (ingress controller, wildcard cert),
+      # cert-manager + bbm-platform (Gateway bbm, wildcard cert),
       # before the app deploy that relies on them.
       - name: Platform install
         run: |

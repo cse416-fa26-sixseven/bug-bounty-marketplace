@@ -1,4 +1,4 @@
-# Offline test with a mock azurerm provider and overridden remote state
+# Offline test with mock azurerm/azapi providers and overridden remote state
 # (no credentials, no backend).
 
 mock_provider "azurerm" {
@@ -40,6 +40,9 @@ mock_provider "azurerm" {
 
 # time_sleep (AKS RBAC propagation) is a no-op under the mock.
 mock_provider "time" {}
+
+# azapi_update_resource (app routing Gateway API) is a no-op under the mock.
+mock_provider "azapi" {}
 
 override_data {
   target = data.terraform_remote_state.global
@@ -152,6 +155,15 @@ run "staging_plan" {
   assert {
     condition     = module.aks.security.local_account_disabled && module.aks.security.azure_rbac_enabled
     error_message = "local accounts must be disabled with Entra ID + Azure RBAC"
+  }
+
+  assert {
+    condition = alltrue([
+      module.aks.ingress_profile.gateway_api_installation == "Standard",
+      module.aks.ingress_profile.app_routing_istio_mode == "Enabled",
+      !module.aks.ingress_profile.web_app_routing_nginx,
+    ])
+    error_message = "expected Managed Gateway API (Standard) + app routing Gateway API (approuting-istio) and no managed NGINX"
   }
 
   assert {

@@ -33,9 +33,13 @@ output "kubelet_identity_principal_id" {
   value       = azurerm_user_assigned_identity.kubelet.principal_id
 }
 
-output "web_app_routing_identity_object_id" {
-  description = "Object ID of the app-routing add-on identity."
-  value       = try(azurerm_kubernetes_cluster.this.web_app_routing[0].web_app_routing_identity[0].object_id, null)
+output "ingress_profile" {
+  description = "Requested ingress settings (azapi): Managed Gateway API installation and the app routing Gateway API implementation (GatewayClass approuting-istio)."
+  value = {
+    gateway_api_installation = azapi_update_resource.app_routing_gateway_api.body.properties.ingressProfile.gatewayAPI.installation
+    app_routing_istio_mode   = azapi_update_resource.app_routing_gateway_api.body.properties.ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode
+    web_app_routing_nginx    = length(azurerm_kubernetes_cluster.this.web_app_routing) > 0
+  }
 }
 
 output "node_pools" {

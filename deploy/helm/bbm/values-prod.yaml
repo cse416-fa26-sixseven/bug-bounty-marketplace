@@ -67,14 +67,9 @@ migrations:
 
 ingress:
   enabled: true
-  className: bbm-nginx
-  # host: from values-infra.yaml. The IngressClass bbm-nginx, its
-  # NginxIngressController and the static PIP binding (publicIpName /
-  # publicIpResourceGroup) belong to the bbm-platform chart.
-  tls:
-    # Served by the controller's default certificate (the bbm-platform
-    # wildcard for <env>.<zone> and *.<env>.<zone>).
-    mode: defaultCert
+  # host: from values-infra.yaml. The Gateway bbm-platform/bbm, its static
+  # PIP binding (publicIpName / publicIpResourceGroup) and TLS (the wildcard
+  # for <env>.<zone> and *.<env>.<zone>) belong to the bbm-platform chart.
 
 networkPolicy:
   enabled: true

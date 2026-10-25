@@ -3,8 +3,9 @@ name: bbm-platform
 description: >-
   Per-cluster platform layer for bbm (ADR 0002): Let's Encrypt ClusterIssuers
   (DNS-01 on Azure DNS with workload identity), the per-env wildcard
-  Certificate and the AKS app-routing NginxIngressController `bbm` bound to
-  the static ingress IP. Release bbm-platform in namespace bbm-platform,
+  Certificate and the Gateway API Gateway `bbm` (AKS app routing,
+  GatewayClass approuting-istio) bound to the static ingress IP, with an
+  HTTP to HTTPS redirect. Release bbm-platform in namespace bbm-platform,
   installed by deploy/platform/install.sh after cert-manager.
 type: application
 version: 0.1.0
@@ -17,3 +18,4 @@ keywords:
   - bbm
   - aks
   - cert-manager
+  - gateway-api

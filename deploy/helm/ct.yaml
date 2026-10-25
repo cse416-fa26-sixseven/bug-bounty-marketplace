@@ -5,8 +5,8 @@
 #
 # ct picks up deploy/helm/bbm/ci/*-values.yaml (a symlink to values-ci.yaml)
 # and deploy/helm/bbm-platform/ci/*-values.yaml (fake values-infra.yaml).
-# Only lint bbm-platform: `ct install` would need cert-manager and the AKS
-# app-routing CRDs, which kind does not have.
+# Only lint bbm-platform: `ct install` would need cert-manager, the Gateway
+# API CRDs and the AKS app routing GatewayClass, which kind does not have.
 target-branch: main
 chart-dirs:
   - deploy/helm

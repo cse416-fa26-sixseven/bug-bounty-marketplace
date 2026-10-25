@@ -9,7 +9,7 @@
     "ingress",
     "acme",
     "certificate",
-    "controller"
+    "gateway"
   ],
   "properties": {
     "dns": {
@@ -150,13 +150,14 @@
       },
       "additionalProperties": false
     },
-    "controller": {
+    "gateway": {
       "type": "object",
       "required": [
         "enabled",
         "name",
-        "ingressClassName",
-        "controllerNamePrefix"
+        "className",
+        "routeNamespaceLabel",
+        "scaling"
       ],
       "properties": {
         "enabled": {
@@ -165,39 +166,48 @@
         "name": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-          "maxLength": 63
+          "maxLength": 40,
+          "description": "Gateway name; <name>-approuting-istio must stay under 63 characters."
         },
-        "ingressClassName": {
+        "className": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
           "maxLength": 63
         },
-        "controllerNamePrefix": {
-          "type": "string",
-          "pattern": "^[a-z0-9][-a-z0-9]*[a-z0-9]$",
-          "maxLength": 60
-        },
-        "forceSSLRedirect": {
-          "type": "boolean"
+        "routeNamespaceLabel": {
+          "type": "object",
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+              "maxLength": 63
+            }
+          },
+          "additionalProperties": false
         },
         "scaling": {
           "type": "object",
+          "required": [
+            "minReplicas",
+            "maxReplicas"
+          ],
           "properties": {
             "minReplicas": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 2,
+              "description": "The add-on rejects an HPA minReplicas below 2."
             },
             "maxReplicas": {
               "type": "integer",
-              "minimum": 1
-            },
-            "threshold": {
-              "type": "string",
-              "enum": [
-                "rapid",
-                "balanced",
-                "steady"
-              ]
+              "minimum": 2
             }
           },
           "additionalProperties": false
