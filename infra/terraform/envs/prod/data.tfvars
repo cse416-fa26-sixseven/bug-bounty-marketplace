@@ -1,9 +1,9 @@
 # stacks/data for prod — persistent data layer (VNet, PG, KV, storage, UAMIs, PIP, LAW).
-subscription_id = "00000000-0000-0000-0000-000000000000"
+subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
 env             = "prod"
-location        = "northcentralus" # infra/up.sh --location (same in every tfvars)
-location_abbr   = "ncus"
-suffix          = "0000" # bootstrap output: suffix (same as envs/global/global.tfvars)
+location        = "canadacentral" # this env's region: infra/up.sh --env-location prod=<region>
+location_abbr   = "cac"
+suffix          = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.30.0.0/16"
 subnet_cidrs = {
@@ -17,7 +17,7 @@ postgres_storage_mb            = 32768
 postgres_backup_retention_days = 7
 
 law_daily_quota_gb = 0.5
-ingress_pip_zones  = [] # infra/up.sh: ["1", "2", "3"] if the region has availability zones, else []
+ingress_pip_zones  = ["1", "2", "3"] # infra/up.sh: ["1", "2", "3"] if canadacentral has availability zones, else []
 
 # Key Vault Secrets Officer on the env KV (mirrors envs/global/global.tfvars).
 # gh-bbm-prod already has Secrets Officer on the data RG via bootstrap.
@@ -26,4 +26,4 @@ secret_officer_sp_object_ids = [] # extra service principals (CI can apply)
 # (az keyvault secret set --vault-name <kv> --name llm-api-key --value ...).
 # principal_type User: CI cannot grant these, so apply changes to this list
 # locally as a subscription Owner first; CI then sees no diff.
-secret_officer_user_object_ids = []
+secret_officer_user_object_ids = ["bf41ada0-7cb4-48ca-9c34-c2616abf5b54"]
