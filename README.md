@@ -210,8 +210,8 @@ A `changes` job (`dorny/paths-filter`) decides which jobs run. Root config
 
 `ci.yml` never logs in to Azure, so `CI OK` never depends on cloud
 credentials, quota or uptime. `CI OK` is the required status check on `main`
-(ruleset source of truth: `.github/rulesets/main.json`; see `TODO.md` for
-applying it).
+(ruleset source of truth: `.github/rulesets/main.json`; apply changes with
+`gh api -X PUT repos/cse416-fa26-sixseven/bug-bounty-marketplace/rulesets/24287837 --input .github/rulesets/main.json`).
 
 ### Azure workflows
 
