@@ -75,16 +75,6 @@ on:
 permissions:
   contents: read
 
-# Names follow modules/naming; the region comes from the repo variables
-# AZURE_LOCATION / AZURE_LOCATION_ABBR (bootstrap gh_setup_commands). The
-# callers' gate jobs skip the run while they are unset.
-env:
-  DATA_RG: rg-bbm-test-data-${{ vars.AZURE_LOCATION_ABBR }}
-  COMPUTE_RG: rg-bbm-test-compute-${{ vars.AZURE_LOCATION_ABBR }}
-  CLUSTER: aks-bbm-test-${{ vars.AZURE_LOCATION_ABBR }}
-  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
-  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
-
 jobs:
   ns:
     name: ${{ inputs.action }} ${{ inputs.namespace }}
@@ -113,6 +103,17 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Names follow modules/naming. The region is the test env's: the `test`
+      # and `preview` GitHub Environments carry it as AZURE_LOCATION /
+      # AZURE_LOCATION_ABBR (bootstrap gh_setup_commands), overriding the
+      # home-region repo variables (ADR 0002 section 8). Set at job level so
+      # the Environment's values apply; deploy checks them against
+      # envs/test/data.tfvars, delete has no checkout.
+      DATA_RG: rg-bbm-test-data-${{ vars.AZURE_LOCATION_ABBR }}
+      COMPUTE_RG: rg-bbm-test-compute-${{ vars.AZURE_LOCATION_ABBR }}
+      CLUSTER: aks-bbm-test-${{ vars.AZURE_LOCATION_ABBR }}
+      BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+      BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
     steps:
       - name: Check inputs and configuration
         env:
@@ -135,7 +136,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$BBM_REGION_ABBR" || -z "$BBM_LOCATION" ]]; then
-            echo "::error::Repo variables AZURE_LOCATION / AZURE_LOCATION_ABBR are not set. Run the bootstrap gh_setup_commands."
+            echo "::error::Variables AZURE_LOCATION / AZURE_LOCATION_ABBR are not set. Run the bootstrap gh_setup_commands."
             exit 1
           fi
           echo "VALUES_INFRA=$RUNNER_TEMP/values-infra.yaml" >>"$GITHUB_ENV"
@@ -144,6 +145,10 @@ jobs:
       - name: Checkout
         if: inputs.action == 'deploy'
         uses: actions/checkout@v4
+
+      - name: Check the test env region
+        if: inputs.action == 'deploy'
+        run: infra/terraform/scripts/env-region.sh test --check
 
       - name: Azure login (OIDC)
         uses: azure/login@v2

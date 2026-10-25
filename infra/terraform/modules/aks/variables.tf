@@ -55,6 +55,12 @@ variable "node_os_upgrade_channel" {
   }
 }
 
+variable "keda_enabled" {
+  description = "Enable the AKS KEDA add-on (workload_autoscaler_profile). It requests about 0.4 CPU; turn it off while nothing uses it (the analysis worker's ScaledObject)."
+  type        = bool
+  default     = true
+}
+
 variable "sku_tier" {
   description = "AKS control-plane tier: Free (no SLA) or Standard (uptime SLA; prod only, ADR 0002)."
   type        = string

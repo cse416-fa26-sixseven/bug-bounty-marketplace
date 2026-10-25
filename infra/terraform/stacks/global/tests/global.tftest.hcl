@@ -142,3 +142,39 @@ run "rejects_empty_dns_zone" {
 
   expect_failures = [var.dns_zone_name]
 }
+
+# One region per env (ADR 0002 section 8): budgets find each env RG in its
+# own region; the shared resources stay in the home region.
+run "per_env_regions" {
+  command = plan
+
+  variables {
+    location      = "northcentralus"
+    location_abbr = "ncus"
+    env_locations = {
+      test    = { location = "northcentralus", location_abbr = "ncus" }
+      staging = { location = "francecentral", location_abbr = "frc" }
+      prod    = { location = "canadacentral" }
+    }
+  }
+
+  assert {
+    condition = (
+      data.azurerm_resource_group.env["test-data"].name == "rg-bbm-test-data-ncus" &&
+      data.azurerm_resource_group.env["staging-data"].name == "rg-bbm-staging-data-frc" &&
+      data.azurerm_resource_group.env["staging-compute"].name == "rg-bbm-staging-compute-frc" &&
+      data.azurerm_resource_group.env["prod-compute"].name == "rg-bbm-prod-compute-cac"
+    )
+    error_message = "budgets must look up each env RG in its own region"
+  }
+
+  assert {
+    condition = (
+      data.azurerm_resource_group.shared.name == "rg-bbm-shared-ncus" &&
+      module.acr.name == "acrbbma1b2" &&
+      module.law.name == "log-bbm-shared-ncus" &&
+      azurerm_key_vault.shared.name == "kv-bbm-shared-a1b2"
+    )
+    error_message = "shared names must stay in the home region"
+  }
+}

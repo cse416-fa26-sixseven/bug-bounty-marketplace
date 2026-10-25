@@ -65,6 +65,7 @@ module "aks" {
   subnet_id                     = local.d.subnet_aks_id
   acr_id                        = local.g.acr_id
 
+  keda_enabled              = var.keda_enabled
   automatic_upgrade_channel = var.automatic_upgrade_channel
   node_os_upgrade_channel   = var.node_os_upgrade_channel
 

@@ -14,7 +14,7 @@ variable "env" {
 }
 
 variable "location" {
-  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
+  description = "Region of this env (full name), e.g. northcentralus. infra/up.sh --env-location <env>=<region> writes it into the env's data and compute tfvars."
   type        = string
   default     = "northcentralus"
 }
@@ -140,4 +140,10 @@ variable "node_os_upgrade_channel" {
   description = "Node OS upgrade channel (modules/aks). Set \"None\" while the subscription's vCPU quota is full."
   type        = string
   default     = "NodeImage"
+}
+
+variable "keda_enabled" {
+  description = "Enable the AKS KEDA add-on. It requests about 0.4 CPU and only the analysis worker's ScaledObject uses it, so envs that run without the analysis worker set false."
+  type        = bool
+  default     = true
 }

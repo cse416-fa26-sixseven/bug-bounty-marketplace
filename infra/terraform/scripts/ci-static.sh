@@ -14,9 +14,11 @@
 #
 # Needs terraform, tflint and shellcheck on PATH. Set SKIP_TFLINT=1 or
 # SKIP_SHELLCHECK=1 to skip those steps when the tool is not installed.
-# init writes .terraform/ dirs (gitignored); modules get a temporary
-# .terraform.lock.hcl that is removed again, since lock files are committed
-# for stacks only. Set TF_PLUGIN_CACHE_DIR to reuse provider downloads.
+# init uses a throwaway TF_DATA_DIR per dir (not the dirs' .terraform/), so a
+# stack that was once initialised against the real azurerm backend is never
+# read or locked from here; modules get a temporary .terraform.lock.hcl that
+# is removed again, since lock files are committed for stacks only. Set
+# TF_PLUGIN_CACHE_DIR to reuse provider downloads.
 set -euo pipefail
 
 tf_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,7 +53,11 @@ done < <(
   exit 1
 }
 
+data_root=$(mktemp -d "${TMPDIR:-/tmp}/bbm-ci-static.XXXXXX")
+trap 'rm -rf "$data_root"' EXIT
+
 for dir in "${dirs[@]}"; do
+  export TF_DATA_DIR="$data_root/${dir//\//_}"
   had_lock=0
   [[ -f "$dir/.terraform.lock.hcl" ]] && had_lock=1
 
@@ -71,6 +77,7 @@ for dir in "${dirs[@]}"; do
     rm -f "$dir/.terraform.lock.hcl"
   fi
 done
+unset TF_DATA_DIR
 
 if [[ "${SKIP_TFLINT:-}" != "1" ]]; then
   group "tflint"

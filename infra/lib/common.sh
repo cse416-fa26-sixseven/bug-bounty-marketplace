@@ -366,11 +366,16 @@ tf_fmt() {
 
 # ---- region -------------------------------------------------------------------
 #
-# The region lives in envs/global/bootstrap.tfvars (location, location_abbr)
-# and is copied into every other tfvars and the backend .hcl state RG names by
-# set_region. Region → abbreviation comes from the one map in
-# modules/naming/main.tf (local.location_abbrs), parsed here so the shell and
-# Terraform never disagree.
+# Two kinds of region (ADR 0002 section 8):
+#   home  location / location_abbr in envs/global/{bootstrap,global}.tfvars:
+#         tfstate, the shared RG and its resources; the backend .hcl state RG
+#         (rg-bbm-tfstate-<abbr>). set_home_region writes it.
+#   env   location / location_abbr in envs/<env>/{data,compute}.tfvars (the
+#         env's source of truth; set_env_region writes it), copied into the
+#         env_locations map of bootstrap.tfvars and global.tfvars by
+#         sync_env_locations.
+# Region → abbreviation comes from the one map in modules/naming/main.tf
+# (local.location_abbrs), parsed here so the shell and Terraform never disagree.
 
 NAMING_MAIN="$BBM_TF_ROOT/modules/naming/main.tf"
 
@@ -419,26 +424,103 @@ resolve_location_abbr() {
   fi
 }
 
-# set_region <location> <abbr>: write the region into every tfvars (the
-# bootstrap, global, data and compute ones must have both keys) and the
-# backend .hcl state resource group names.
-set_region() {
+BBM_ENVS="test staging prod"
+
+# set_home_region <location> <abbr>: the home region in bootstrap.tfvars and
+# global.tfvars (both must have the keys) and the backend .hcl state RG names.
+set_home_region() {
   local loc=$1 abbr=$2 envs="$BBM_TF_ROOT/envs" f
-  while IFS= read -r f; do
-    case "$f" in
-      */global/bootstrap.tfvars | */global/global.tfvars | */data.tfvars | */compute.tfvars)
-        tfvars_set "$f" location "$(hcl_quote "$loc")"
-        tfvars_set "$f" location_abbr "$(hcl_quote "$abbr")"
-        ;;
-      *)
-        tfvars_set_if_present "$f" location "$(hcl_quote "$loc")"
-        tfvars_set_if_present "$f" location_abbr "$(hcl_quote "$abbr")"
-        ;;
-    esac
-  done < <(find "$envs" -name '*.tfvars' | sort)
+  for f in "$envs/global/bootstrap.tfvars" "$envs/global/global.tfvars"; do
+    tfvars_set "$f" location "$(hcl_quote "$loc")"
+    tfvars_set "$f" location_abbr "$(hcl_quote "$abbr")"
+  done
   while IFS= read -r f; do
     tfvars_set_if_present "$f" resource_group_name "$(hcl_quote "rg-bbm-tfstate-$abbr")"
   done < <(find "$envs" -name 'backend*.hcl' | sort)
+}
+
+# set_env_region <env> <location> <abbr>: the env's region in its data and
+# compute tfvars (both must have the keys).
+set_env_region() {
+  local e=$1 loc=$2 abbr=$3 f
+  for f in "$BBM_TF_ROOT/envs/$e/data.tfvars" "$BBM_TF_ROOT/envs/$e/compute.tfvars"; do
+    tfvars_set "$f" location "$(hcl_quote "$loc")"
+    tfvars_set "$f" location_abbr "$(hcl_quote "$abbr")"
+  done
+}
+
+# env_region <env> → "<location> <abbr>" from envs/<env>/data.tfvars.
+env_region() {
+  local f="$BBM_TF_ROOT/envs/$1/data.tfvars"
+  printf '%s %s\n' "$(tfvars_get_string "$f" location)" "$(tfvars_get_string "$f" location_abbr)"
+}
+
+# env_locations_block [<env>=<location>:<abbr>...] → the env_locations map
+# (one line per env, `terraform fmt` layout). Envs not given are read from
+# their tfvars (up.sh passes the values it resolved, so a dry run shows them).
+env_locations_block() {
+  local e loc abbr a
+  echo "env_locations = {"
+  for e in $BBM_ENVS; do
+    loc="" abbr=""
+    for a in "$@"; do
+      if [[ "${a%%=*}" == "$e" ]]; then
+        a=${a#*=}
+        loc=${a%%:*} abbr=${a#*:}
+      fi
+    done
+    [[ -n "$loc" ]] || read -r loc abbr < <(env_region "$e")
+    printf '  %-7s = { location = %s, location_abbr = %s }\n' "$e" "$(hcl_quote "$loc")" "$(hcl_quote "$abbr")"
+  done
+  echo "}"
+}
+
+# tfvars_replace_map <file> <key> <content-file>: replace a top-level
+# multi-line `key = {` ... `}` block (closing brace at column 0) with the
+# content file. The block must exist exactly once.
+tfvars_replace_map() {
+  local f=$1 k=$2 content=$3 tmp n rc=0
+  [[ -f "$f" ]] || die "missing file $f"
+  n=$(grep -cE "^${k}[[:space:]]*=[[:space:]]*\{[[:space:]]*(#.*)?$" "$f" || true)
+  [[ "$n" == 1 ]] || die "$f: expected one multi-line '$k = {' block (found $n)"
+  tmp=$(mktemp "${TMPDIR:-/tmp}/bbm-tfvars.XXXXXX")
+  awk -v k="$k" -v cf="$content" '
+    !done && !skip && $0 ~ ("^" k "[ \t]*=[ \t]*[{][ \t]*(#.*)?$") { while ((getline l < cf) > 0) print l; skip = 1; next }
+    skip { if ($0 ~ /^[}]/) { skip = 0; done = 1 } ; next }
+    { print }
+    END { if (skip) exit 7 }
+  ' "$f" >"$tmp" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    rm -f "$tmp"
+    die "$f: '$k = {' block has no closing '}' at column 0"
+  fi
+  if cmp -s "$tmp" "$f"; then
+    rm -f "$tmp"
+    info "unchanged ${f#"$BBM_REPO_ROOT/"}: $k"
+    return 0
+  fi
+  if [[ "$DRY_RUN" == 1 ]]; then
+    info "[dry-run] would set ${f#"$BBM_REPO_ROOT/"}: $k to:"
+    sed 's/^/    /' "$content" >&2
+    rm -f "$tmp"
+    return 0
+  fi
+  _write_file "$f" "$tmp"
+  info "set ${f#"$BBM_REPO_ROOT/"}: $k to:"
+  sed 's/^/    /' "$content" >&2
+}
+
+# sync_env_locations [<env>=<location>:<abbr>...]: write every env's region
+# (given, else from its tfvars) into the env_locations map of bootstrap.tfvars
+# and global.tfvars.
+sync_env_locations() {
+  local tmp f
+  tmp=$(mktemp "${TMPDIR:-/tmp}/bbm-envloc.XXXXXX")
+  env_locations_block "$@" >"$tmp"
+  for f in "$BBM_TF_ROOT/envs/global/bootstrap.tfvars" "$BBM_TF_ROOT/envs/global/global.tfvars"; do
+    tfvars_replace_map "$f" env_locations "$tmp"
+  done
+  rm -f "$tmp"
 }
 
 # allowed_locations_json <subscription-id> → JSON array of the regions every
@@ -470,16 +552,18 @@ allowed_locations_json() {
 # infra/up.sh writes back to its committed placeholder, so the next up.sh on
 # another tenant does not carry the old object ids, suffix or state account.
 # Kept (they survive an account switch): dns_zone_name, alert_emails,
-# github_reviewer_ids, github_repo, and the region (location / location_abbr,
-# a user choice, not per tenant; the backend state RG keeps its region code).
-# When the new subscription needs another region (e.g. its policy allows
-# different ones), run `up.sh --location <region>`: it rewrites them all.
+# github_reviewer_ids, github_repo, and the regions (home location /
+# location_abbr, every env's location / location_abbr and the env_locations
+# maps: user choices, not per tenant; the backend state RG keeps its region
+# code). When the new subscription needs other regions (e.g. its policy
+# allows different ones), run `up.sh --location <region>` and/or
+# `--env-location <env>=<region>`: they rewrite them.
 reset_tenant_fields() {
   local envs="$BBM_TF_ROOT/envs" boot glob loc f empty='[]'
   boot="$envs/global/bootstrap.tfvars"
   glob="$envs/global/global.tfvars"
   loc=$(tfvars_get_string "$boot" location_abbr)
-  info "resetting per-tenant fields in ${envs#"$BBM_REPO_ROOT/"} to placeholders (kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo, location)"
+  info "resetting per-tenant fields in ${envs#"$BBM_REPO_ROOT/"} to placeholders (kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo, home and env regions)"
   tfvars_set "$boot" admin_object_ids "$empty"
   tfvars_set "$boot" power_operator_object_ids "$empty"
   tfvars_set_if_present "$boot" preregistered_resource_providers "$empty"

@@ -67,10 +67,12 @@ env:
   TFSTATE_RG: ${{ vars.TFSTATE_RG }}
   TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
   TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-  # Region of every resource name (env-power.sh, platform install); set by the
-  # bootstrap gh_setup_commands. Every job is skipped while they are unset.
-  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
-  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+  # No BBM_LOCATION / BBM_REGION_ABBR here: each env has its own region
+  # (ADR 0002 section 8), and the repo variables hold the home region. Every
+  # job checks out the repo, so env-power.sh and env-region.sh read the env's
+  # region from envs/<env>/data.tfvars, also in the jobs that are not bound to
+  # the env's GitHub Environment (status, and the scheduled matrices bind one
+  # per entry). Jobs still skip while the repo variables are unset.
 
 jobs:
   # ---------------------------------------------------------------------
@@ -361,8 +363,10 @@ jobs:
       - name: Platform install
         run: |
           set -euo pipefail
-          az aks get-credentials -g "rg-bbm-$ENV_NAME-compute-$BBM_REGION_ABBR" -n "aks-bbm-$ENV_NAME-$BBM_REGION_ABBR" \
-            --format azure --overwrite-existing
+          # COMPUTE_RG / CLUSTER in the env's own region.
+          # shellcheck source=/dev/null
+          source <(infra/terraform/scripts/env-region.sh "$ENV_NAME")
+          az aks get-credentials -g "$COMPUTE_RG" -n "$CLUSTER" --format azure --overwrite-existing
           kubelogin convert-kubeconfig -l azurecli
           deploy/platform/install.sh "$ENV_NAME" --values "$RUNNER_TEMP/values-infra.yaml" --wait
 

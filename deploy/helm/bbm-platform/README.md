@@ -55,7 +55,8 @@ ignored. Optional chart settings: `acme.email`, `certificate.issuer`,
 ## Install
 
 ```sh
-az aks get-credentials -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus
+source <(infra/terraform/scripts/env-region.sh <env>)   # COMPUTE_RG / CLUSTER in the env's region
+az aks get-credentials -g "$COMPUTE_RG" -n "$CLUSTER"
 kubelogin convert-kubeconfig -l azurecli
 infra/terraform/scripts/tf.sh compute <env> output -raw helm_values > values-infra.yaml
 deploy/platform/install.sh <env> --values values-infra.yaml [--issuer letsencrypt-staging] [--wait]
@@ -128,8 +129,8 @@ kubectl get httproute -A                              # per-route Accepted / Res
 ```
 
 - No GatewayClass `approuting-istio`: the Gateway API settings are not on
-  the cluster. `az aks show -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus
-  --query ingressProfile` should show `gatewayApi.installation: Standard` and
+  the cluster. `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr>
+  --query ingressProfile` (`<abbr>`: the env's region code, `ncus` / `frc` / `cac`) should show `gatewayApi.installation: Standard` and
   `webAppRouting.gatewayApiImplementations.appRoutingIstio.mode: Enabled`;
   re-apply the compute stack.
 - Gateway not `Programmed`, Service `EXTERNAL-IP` pending, events

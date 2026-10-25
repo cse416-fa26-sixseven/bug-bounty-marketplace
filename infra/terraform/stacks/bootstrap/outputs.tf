@@ -14,8 +14,15 @@ output "subscription_id" {
 }
 
 output "location" {
-  description = "Azure region."
+  description = "Home region (tfstate, shared RG)."
   value       = var.location
+}
+
+output "env_locations" {
+  description = "Region and name abbreviation of each env (test, staging, prod)."
+  value = {
+    for e, n in module.naming_env : e => { location = n.location, location_abbr = n.location_abbr }
+  }
 }
 
 output "tfstate_resource_group" {

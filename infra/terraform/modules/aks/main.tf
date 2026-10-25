@@ -168,8 +168,10 @@ resource "azurerm_kubernetes_cluster" "this" {
   # the add-on's managed NGINX, and DNS records are managed by Terraform, not
   # by the add-on.
 
+  # KEDA add-on (analysis worker queue scaler). About 0.4 CPU of requests, so
+  # it is off while the analysis worker is disabled (var.keda_enabled).
   workload_autoscaler_profile {
-    keda_enabled = true
+    keda_enabled = var.keda_enabled
   }
 
   dynamic "oms_agent" {

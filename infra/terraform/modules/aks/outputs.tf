@@ -76,3 +76,8 @@ output "container_insights_enabled" {
   description = "Whether the Container Insights add-on and its data collection rule are configured."
   value       = length(azurerm_kubernetes_cluster.this.oms_agent) > 0 && length(azurerm_monitor_data_collection_rule_association.container_insights) > 0
 }
+
+output "keda_enabled" {
+  description = "Whether the KEDA add-on is enabled."
+  value       = azurerm_kubernetes_cluster.this.workload_autoscaler_profile[0].keda_enabled
+}

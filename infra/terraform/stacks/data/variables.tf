@@ -14,7 +14,7 @@ variable "env" {
 }
 
 variable "location" {
-  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
+  description = "Region of this env (full name), e.g. northcentralus. infra/up.sh --env-location <env>=<region> writes it into the env's data and compute tfvars."
   type        = string
   default     = "northcentralus"
 }

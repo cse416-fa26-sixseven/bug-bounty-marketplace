@@ -19,8 +19,8 @@ module "naming_env" {
   for_each = toset(["test", "staging", "prod"])
 
   env           = each.key
-  location      = var.location
-  location_abbr = var.location_abbr
+  location      = local.env_locations[each.key].location
+  location_abbr = local.env_locations[each.key].location_abbr
   suffix        = var.suffix
 }
 
@@ -30,6 +30,15 @@ data "azurerm_resource_group" "shared" {
 
 locals {
   tags = module.naming.tags
+
+  # Same per-env regions as stacks/bootstrap (the env RGs it created); an env
+  # missing from var.env_locations is in the home region.
+  env_locations = {
+    for e in ["test", "staging", "prod"] : e => lookup(var.env_locations, e, {
+      location      = var.location
+      location_abbr = var.location_abbr
+    })
+  }
 }
 
 module "acr" {

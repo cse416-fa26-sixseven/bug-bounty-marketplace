@@ -521,3 +521,98 @@ run "other_region" {
     error_message = "names and AZURE_LOCATION_ABBR must follow location"
   }
 }
+
+# One region per env (ADR 0002 section 8): env RGs and env-scoped names use
+# the env's region, everything shared stays in the home region, and the
+# GitHub Environments carry the env region as Environment-level variables.
+run "per_env_regions" {
+  command = apply
+
+  variables {
+    location      = "northcentralus"
+    location_abbr = "ncus"
+    env_locations = {
+      test    = { location = "northcentralus", location_abbr = "ncus" }
+      staging = { location = "francecentral", location_abbr = "frc" }
+      prod    = { location = "canadacentral" } # abbr derived from modules/naming
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_resource_group.tfstate.name == "rg-bbm-tfstate-ncus" &&
+      azurerm_resource_group.tfstate.location == "northcentralus" &&
+      azurerm_storage_account.tfstate.name == "stbbmtfstatea1b2" &&
+      azurerm_resource_group.shared.name == "rg-bbm-shared-ncus" &&
+      azurerm_resource_group.shared.location == "northcentralus"
+    )
+    error_message = "tfstate and the shared RG must stay in the home region"
+  }
+
+  assert {
+    condition = (
+      azurerm_resource_group.env_data["test"].name == "rg-bbm-test-data-ncus" &&
+      azurerm_resource_group.env_data["test"].location == "northcentralus" &&
+      azurerm_resource_group.env_compute["test"].name == "rg-bbm-test-compute-ncus" &&
+      azurerm_resource_group.env_data["staging"].name == "rg-bbm-staging-data-frc" &&
+      azurerm_resource_group.env_data["staging"].location == "francecentral" &&
+      azurerm_resource_group.env_compute["staging"].name == "rg-bbm-staging-compute-frc" &&
+      azurerm_resource_group.env_compute["staging"].location == "francecentral" &&
+      azurerm_resource_group.env_data["prod"].name == "rg-bbm-prod-data-cac" &&
+      azurerm_resource_group.env_compute["prod"].name == "rg-bbm-prod-compute-cac" &&
+      azurerm_resource_group.env_compute["prod"].location == "canadacentral"
+    )
+    error_message = "env RGs must be named after and placed in their env's region"
+  }
+
+  assert {
+    condition = (
+      azurerm_dns_zone.child["staging"].resource_group_name == "rg-bbm-staging-data-frc" &&
+      azurerm_dns_zone.child["prod"].resource_group_name == "rg-bbm-prod-data-cac" &&
+      azurerm_dns_zone.child["preview"].resource_group_name == "rg-bbm-test-data-ncus" &&
+      azurerm_dns_zone.parent.resource_group_name == "rg-bbm-shared-ncus"
+    )
+    error_message = "child zones live in their env's data RG, the parent zone in the shared RG"
+  }
+
+  assert {
+    condition = (
+      output.env_locations.staging.location_abbr == "frc" &&
+      output.env_locations.prod.location == "canadacentral" &&
+      output.env_locations.prod.location_abbr == "cac" &&
+      output.env_locations.test.location_abbr == "ncus"
+    )
+    error_message = "env_locations output wrong"
+  }
+
+  assert {
+    condition = alltrue([
+      for e, abbr in { test = "ncus", preview = "ncus", "test-infra" = "ncus", staging = "frc", prod = "cac", "prod-power" = "cac" } :
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION_ABBR --repo cse416-fa26-sixseven/bug-bounty-marketplace --env ${e} --body '${abbr}'")
+    ])
+    error_message = "every env-bound GitHub Environment must carry its env's AZURE_LOCATION_ABBR"
+  }
+
+  assert {
+    condition = (
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION --repo cse416-fa26-sixseven/bug-bounty-marketplace --env staging --body 'francecentral'") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION --repo cse416-fa26-sixseven/bug-bounty-marketplace --env prod-power --body 'canadacentral'") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION --repo cse416-fa26-sixseven/bug-bounty-marketplace --body 'northcentralus'") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION_ABBR --repo cse416-fa26-sixseven/bug-bounty-marketplace --body 'ncus'") &&
+      !strcontains(output.gh_setup_commands, "--env infra-global --body 'n") &&
+      !strcontains(output.gh_setup_commands, "AZURE_LOCATION --repo cse416-fa26-sixseven/bug-bounty-marketplace --env infra-global") &&
+      !strcontains(output.gh_setup_commands, "AZURE_LOCATION --repo cse416-fa26-sixseven/bug-bounty-marketplace --env contracts-sepolia")
+    )
+    error_message = "repo-level AZURE_LOCATION* stay the home region; shared-only Environments get no override"
+  }
+}
+
+run "rejects_unknown_env_location" {
+  command = plan
+
+  variables {
+    env_locations = { dev = { location = "francecentral" } }
+  }
+
+  expect_failures = [var.env_locations]
+}

@@ -85,7 +85,11 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      # Names follow modules/naming; region from the bootstrap repo variables.
+      # Names follow modules/naming. The job is bound to the env's GitHub
+      # Environment, whose AZURE_LOCATION / AZURE_LOCATION_ABBR (bootstrap
+      # gh_setup_commands) override the home-region repo variables: each env
+      # has its own region (ADR 0002 section 8). Checked against
+      # envs/<env>/data.tfvars after checkout.
       DATA_RG: rg-bbm-${{ inputs.env }}-data-${{ vars.AZURE_LOCATION_ABBR }}
       COMPUTE_RG: rg-bbm-${{ inputs.env }}-compute-${{ vars.AZURE_LOCATION_ABBR }}
       CLUSTER: aks-bbm-${{ inputs.env }}-${{ vars.AZURE_LOCATION_ABBR }}
@@ -111,6 +115,11 @@ jobs:
         with:
           # Full history + origin/main for the image provenance check.
           fetch-depth: 0
+
+      # Stale Environment variables (gh_setup_commands not re-run after a
+      # region change) would point every name at the wrong region.
+      - name: Check the env region
+        run: infra/terraform/scripts/env-region.sh "$ENV_NAME" --check
 
       - name: Azure login (OIDC)
         uses: azure/login@v2

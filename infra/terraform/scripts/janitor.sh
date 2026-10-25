@@ -26,18 +26,15 @@
 # staging/prod bbm-last-deployed-tag tags first and fails closed.
 #
 # Env (optional): BBM_REGION_ABBR (default: location_abbr in
-# envs/global/bootstrap.tfvars; CI sets it from repo var AZURE_LOCATION_ABBR).
+# envs/test/data.tfvars; CI jobs in the `test` Environment get it from the
+# Environment variable AZURE_LOCATION_ABBR).
 set -euo pipefail
 
-# Region: BBM_LOCATION / BBM_REGION_ABBR (CI: repo vars AZURE_LOCATION /
-# AZURE_LOCATION_ABBR), else location / location_abbr in
-# envs/global/bootstrap.tfvars, the single source of truth infra/up.sh writes.
-boot_tfvars="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/envs/global/bootstrap.tfvars"
-boot_var() { # boot_var <key> → string value from bootstrap.tfvars (empty if absent)
-  [[ -f "$boot_tfvars" ]] || return 0
-  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$boot_tfvars" | head -n1
-}
-abbr=${BBM_REGION_ABBR:-$(boot_var location_abbr)}
+# Region of the test env: BBM_REGION_ABBR when set (CI: the `test` GitHub
+# Environment's AZURE_LOCATION_ABBR), else envs/test/data.tfvars via
+# env-region.sh (each env has its own region, ADR 0002 section 8).
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+abbr=${BBM_REGION_ABBR:-$("$here/env-region.sh" test --get abbr)} || { echo "janitor: region of test unknown" >&2; exit 1; }
 [[ -n "$abbr" ]] || { echo "janitor: region unknown: set BBM_REGION_ABBR" >&2; exit 1; }
 compute_rg="rg-bbm-test-compute-$abbr"
 cluster="aks-bbm-test-$abbr"
