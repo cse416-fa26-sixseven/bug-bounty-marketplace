@@ -1,12 +1,17 @@
 # Environment lifecycle: turning environments on and off
 
-There are three AKS environments, each on its own cluster:
+There are three AKS environments, each on its own cluster in its own region (ADR 0002 §8), on one
+`Standard_B4as_v2` node:
 
-| Env       | Cluster                | Runs                                                                 |
-| --------- | ---------------------- | -------------------------------------------------------------------- |
-| `test`    | `aks-bbm-test-ncus`    | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
-| `staging` | `aks-bbm-staging-ncus` | one release in namespace `bbm`                                       |
-| `prod`    | `aks-bbm-prod-ncus`    | one release in namespace `bbm`                                       |
+| Env       | Region           | Cluster               | Runs                                                                 |
+| --------- | ---------------- | --------------------- | -------------------------------------------------------------------- |
+| `test`    | `northcentralus` | `aks-bbm-test-ncus`   | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
+| `staging` | `francecentral`  | `aks-bbm-staging-frc` | one release in namespace `bbm`                                       |
+| `prod`    | `canadacentral`  | `aks-bbm-prod-cac`    | one release in namespace `bbm`                                       |
+
+Below, `<abbr>` is the env's region code (`ncus`, `frc`, `cac`).
+`infra/terraform/scripts/env-region.sh <env>` prints the env's region and its `DATA_RG`,
+`COMPUTE_RG` and `CLUSTER` names from `envs/<env>/data.tfvars`.
 
 They only need to be up for testing, development and demos, so all three can be switched off on
 demand without losing data. The design is in [ADR 0001](../adr/0001-azure-environment-topology.md)
@@ -31,7 +36,7 @@ stateDiagram-v2
     paused --> paused: daily Postgres re-pause 06:30 UTC
 ```
 
-The current state is stored as tags on the data resource group `rg-bbm-<env>-data-ncus`.
+The current state is stored as tags on the data resource group `rg-bbm-<env>-data-<abbr>`.
 Terraform ignores these tags: the bootstrap stack's `lifecycle.ignore_changes` lists exactly
 `power-state`, `auto-pause`, `db-paused`, `bbm-last-deployed-tag`, `paused-at`, `resumed-at`,
 `down-at`, `up-at` and `deployed-at`.
@@ -66,7 +71,7 @@ What each state still bills (see [cost.md](cost.md) for estimates):
 
 | state     | still billed                                                                                                                                |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `running` | nodes (B2als_v2: test 1–3, staging 1, prod 2+), Postgres B1ms compute (not test), prod's Standard-tier control plane, plus everything below |
+| `running` | the node (one B4as_v2 per env), Postgres B1ms compute (not test), prod's Standard-tier control plane, plus everything below |
 | `paused`  | the Standard load balancer and its frontend IP, the static public IP, Postgres storage, managed disks, Key Vault, storage, logs             |
 | `down`    | the static public IP, Postgres storage, Key Vault, storage, logs                                                                            |
 
@@ -79,8 +84,8 @@ tomorrow" and `down` for "off for a week or more".
 
 ## The test env
 
-`test` is a normal `data` + `compute` env (VNet `10.10.0.0/16`, Free tier, one system pool of 1–3
-`B2als_v2` nodes) with no Postgres server. It has no app release of its own. Instead, CI runs and PR
+`test` is a normal `data` + `compute` env (VNet `10.10.0.0/16`, Free tier, `northcentralus`, one
+`Standard_B4as_v2` system node) with no Postgres server. It has no app release of its own. Instead, CI runs and PR
 previews each get a namespace on its cluster:
 
 | Kind       | Namespace                | Host                                         | TTL                             | Created by              |
@@ -214,9 +219,9 @@ All times are UTC and run from the default branch.
 For a multi-day demo or a long load test:
 
 ```sh
-az group update -n rg-bbm-<env>-data-ncus --set tags.auto-pause=false
+az group update -n rg-bbm-<env>-data-<abbr> --set tags.auto-pause=false
 # and afterwards
-az group update -n rg-bbm-<env>-data-ncus --set tags.auto-pause=true
+az group update -n rg-bbm-<env>-data-<abbr> --set tags.auto-pause=true
 ```
 
 Remember to turn it back on. An opted-out environment runs (and bills) until someone pauses it.
@@ -267,7 +272,7 @@ infra/terraform/scripts/env-power.sh staging resume
 | symptom                                                       | cause / fix                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Deploy run is green but says "skipped: env is paused/down"    | Expected. Run `resume` (or `up`), then deploy again. `up` redeploys automatically.                                                                                                                                                               |
-| `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus --query provisioningState`.                                                                                                   |
+| `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr> --query provisioningState`.                                                                                                   |
 | `cluster ... not found: <env> is down`                        | The compute stack was destroyed. Use `up`, not `resume`.                                                                                                                                                                                         |
 | Resume finished but `/health` never answers                   | Pods are still starting or crash-looping. `kubectl -n bbm get pods`, `kubectl -n bbm describe pod ...`. Check Postgres is `Ready`. A failing Key Vault CSI mount usually means a broken federated credential: run `up`, which reapplies compute. |
 | `Postgres ... is 'Updating'; cannot stop it now`              | Azure maintenance on the server. Retry later.                                                                                                                                                                                                    |

@@ -55,9 +55,13 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 | CI compose    | Compose on a GitHub-hosted runner (`ci.yml` `containers`)         | one job                                                       | none (`down -v` always)                                                    | every push and PR, path-filtered                                                     |
 | CI run        | namespace `run-<id>-<attempt>` on `aks-bbm-test-ncus`             | one `integration-azure.yml` run; TTL 6 h as a fallback        | in-cluster Postgres (`emptyDir`), discarded                                | push to `main`, nightly 07:00 UTC, manual dispatch                                   |
 | PR preview    | namespace `pr-<n>` on `aks-bbm-test-ncus`                         | PR opened → PR closed; TTL 168 h, re-stamped on every push    | in-cluster Postgres (`emptyDir`), discarded                                | `preview.yml` on PR events (same-repo, not docs-only)                                |
-| AKS test      | `aks-bbm-test-ncus` (Free tier) + data stack (no Postgres server) | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                            | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
-| AKS staging   | `aks-bbm-staging-ncus` (Free tier) + data stack                   | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob, Queue, Key Vault: persistent across power states | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
-| AKS prod      | `aks-bbm-prod-ncus` (Standard tier) + data stack                  | long-lived, `running` / `paused` / `down`                     | same as staging                                                            | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
+| AKS test      | `aks-bbm-test-ncus` (Free tier, `northcentralus`) + data stack (no Postgres server) | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                            | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
+| AKS staging   | `aks-bbm-staging-frc` (Free tier, `francecentral`) + data stack   | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob, Queue, Key Vault: persistent across power states | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
+| AKS prod      | `aks-bbm-prod-cac` (Standard tier, `canadacentral`) + data stack  | long-lived, `running` / `paused` / `down`                     | same as staging                                                            | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
+
+Each AKS environment has its own region and one `Standard_B4as_v2` node (Azure for Students allows
+6 vCPUs per region; ADR 0002 §8). The shared resources and tfstate live in the home region
+`northcentralus`.
 
 All three AKS environments are paused nightly at 06:00 UTC unless their data resource group is
 tagged `auto-pause=false`. See [env-lifecycle.md](env-lifecycle.md) for the state machine.
@@ -79,7 +83,7 @@ destroyed without losing data, the ingress IP or the DNS records.
 
 ```mermaid
 flowchart TB
-    subgraph Global["Global: rg-bbm-shared-ncus + rg-bbm-tfstate-ncus (stacks bootstrap, global)"]
+    subgraph Global["Global, home region: rg-bbm-shared-ncus + rg-bbm-tfstate-ncus (stacks bootstrap, global)"]
         TFS[("tfstate storage<br/>stbbmtfstateSFX, Entra auth only")]
         ACR["ACR acrbbmSFX (Basic)<br/>bbm/web, bbm/api, bbm/analysis, bbm/contracts, mirror/*"]
         LAW["Log Analytics log-bbm-shared-ncus<br/>daily cap 0.25 GB"]
@@ -89,23 +93,23 @@ flowchart TB
         APPS["Entra app registrations gh-bbm-*<br/>(GitHub OIDC)"]
     end
 
-    subgraph Data["Per env data: rg-bbm-ENV-data-ncus (stack data, persistent)"]
-        VNET["VNet vnet-bbm-ENV-ncus<br/>snet-aks /20, snet-psql /24, snet-pe /24"]
-        PG[("PG Flexible psql-bbm-ENV-ncus<br/>B1ms, v16, private (not test)")]
+    subgraph Data["Per env data: rg-bbm-ENV-data-ABBR in the env's region (stack data, persistent)"]
+        VNET["VNet vnet-bbm-ENV-ABBR<br/>snet-aks /20, snet-psql /24, snet-pe /24"]
+        PG[("PG Flexible psql-bbm-ENV-ABBR<br/>B1ms, v16, private (not test)")]
         KV["Key Vault kv-bbm-tst/stg/prd-SFX<br/>database-url, llm-api-key"]
         ST["Storage stbbm + tst/stg/prd + SFX<br/>blob sources, queue analysis-jobs"]
         PIP["Static PIP pip-bbm-ENV-ingress"]
         EZ["DNS zone ENV.ZONE (test: test.ZONE, preview.ZONE)<br/>apex + wildcard alias A records → PIP"]
         IZ["Private DNS zone ENV.internal.ZONE<br/>postgres CNAME"]
         UAMI["UAMIs id-bbm-ENV-aks, -api, -worker, -sandbox, -certmgr"]
-        ELAW["Log Analytics log-bbm-ENV-ncus"]
+        ELAW["Log Analytics log-bbm-ENV-ABBR"]
         EZ --> PIP
     end
 
-    subgraph Compute["Per env compute: rg-bbm-ENV-compute-ncus (stack compute, disposable)"]
-        AKS["AKS aks-bbm-ENV-ncus (Free; prod Standard)<br/>CNI Overlay + Cilium, OIDC issuer, workload identity"]
-        POOLS["Node pools: system 1-3, apps 0-3 (prod), sandbox 0-1 (Kata, off)"]
-        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI, KEDA,<br/>Container Insights (prod only)"]
+    subgraph Compute["Per env compute: rg-bbm-ENV-compute-ABBR (stack compute, disposable)"]
+        AKS["AKS aks-bbm-ENV-ABBR (Free; prod Standard)<br/>CNI Overlay + Cilium, OIDC issuer, workload identity"]
+        POOLS["Node pools: system 1 x Standard_B4as_v2; apps, sandbox (Kata) off"]
+        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI,<br/>KEDA (keda_enabled, off while analysis is off), Container Insights (prod only)"]
         FIC["Federated credentials for bbm-api, bbm-analysis,<br/>bbm-migrations, bbm-sandbox-runner, keda-operator, cert-manager"]
         AKS --- POOLS
         AKS --- ADDONS
@@ -363,7 +367,8 @@ recreated.
 
 - **Blob storage adapter** for uploads. This removes the API single-replica limit (see above).
 - **Wire the queue.** The API should enqueue analysis jobs and the worker should consume them.
-  Then enable `analysis` and the KEDA ScaledObject in the env values.
+  Then set `keda_enabled = true` in the env's `compute.tfvars` (the add-on is off to save ~0.4 CPU
+  on the one node) and enable `analysis` and the KEDA ScaledObject in the env values.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
 - **Automatic staging deploy** from `main` after `integration-azure.yml` passes.
