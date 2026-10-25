@@ -4,7 +4,7 @@ output "id" {
 }
 
 output "workspace_id" {
-  description = "Workspace (customer) GUID used by agents/ACA."
+  description = "Workspace (customer) GUID used by monitoring agents."
   value       = azurerm_log_analytics_workspace.this.workspace_id
 }
 

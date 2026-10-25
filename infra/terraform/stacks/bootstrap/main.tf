@@ -28,30 +28,19 @@ module "naming_env" {
   location      = var.location
   location_abbr = var.location_abbr
   suffix        = random_string.suffix.result
-  repo          = var.github_repo
-}
-
-module "naming_ephemeral" {
-  source   = "../../modules/naming"
-  for_each = toset(local.ephemeral_kinds)
-
-  env           = each.key
-  layer         = "ephemeral"
-  location      = var.location
-  location_abbr = var.location_abbr
-  suffix        = random_string.suffix.result
+  dns_zone_name = var.dns_zone_name
   repo          = var.github_repo
 }
 
 locals {
-  persistent_envs = ["staging", "prod"]
-  ephemeral_kinds = ["test", "preview"]
+  # Every AKS env (data + compute RGs, CI identity, budgets). test also hosts
+  # the ephemeral CI-run / PR-preview namespaces (ADR 0002).
+  persistent_envs = ["test", "staging", "prod"]
 
   subscription_scope = data.azurerm_subscription.current.id
 
   resource_providers = toset([
     "Microsoft.ContainerService",
-    "Microsoft.App",
     "Microsoft.DBforPostgreSQL",
     "Microsoft.OperationalInsights",
     "Microsoft.KeyVault",
@@ -76,7 +65,7 @@ locals {
 #   terraform import 'azurerm_resource_provider_registration.this["Microsoft.Network"]' \
 #     /subscriptions/<sub>/providers/Microsoft.Network
 import {
-  for_each = toset(var.preregistered_resource_providers)
+  for_each = setintersection(toset(var.preregistered_resource_providers), local.resource_providers)
   to       = azurerm_resource_provider_registration.this[each.key]
   id       = "/subscriptions/${var.subscription_id}/providers/${each.key}"
 }
@@ -91,16 +80,6 @@ resource "azurerm_resource_group" "shared" {
   name     = module.naming.global.shared_resource_group
   location = var.location
   tags     = module.naming.tags
-}
-
-# Containers for the ephemeral ACA stacks (test runs, PR previews). The RGs
-# persist; the ACA environments inside them are created/destroyed per run.
-resource "azurerm_resource_group" "ephemeral" {
-  for_each = module.naming_ephemeral
-
-  name     = each.value.env.ephemeral_resource_group
-  location = var.location
-  tags     = each.value.tags
 }
 
 # Data RGs carry live power state as tags, mutated by scripts/env-power.sh and

@@ -32,6 +32,12 @@ variable "subnets" {
   })
 }
 
+variable "postgres_enabled" {
+  description = "Delegate snet-psql to PostgreSQL Flexible Server and create its private DNS zone + VNet link. False for envs without a PG server (test)."
+  type        = bool
+  default     = true
+}
+
 variable "postgres_private_dns_zone_name" {
   description = "Private DNS zone for the VNet-integrated PostgreSQL server. Must end in .postgres.database.azure.com and must not be privatelink.postgres.database.azure.com (that zone is for private endpoints)."
   type        = string

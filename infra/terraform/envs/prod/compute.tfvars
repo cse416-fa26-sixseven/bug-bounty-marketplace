@@ -8,6 +8,9 @@ env             = "prod"
 # before the first apply: az aks get-versions -l eastus2 -o table
 kubernetes_version = "1.34"
 
+# Uptime SLA for prod only (ADR 0002); test and staging stay on Free.
+aks_sku_tier = "Standard"
+
 # System pool reserved for critical add-ons; workloads go to the apps pool.
 system_vm_size              = "Standard_B2als_v2"
 system_min_count            = 1

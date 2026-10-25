@@ -20,13 +20,23 @@ variable "suffix" {
   type        = string
 }
 
+variable "dns_zone_name" {
+  description = "Parent DNS zone from the bootstrap global_tfvars_hint (e.g. bug-bounty.example.com). Published as an output for the data/compute stacks."
+  type        = string
+
+  validation {
+    condition     = can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$", var.dns_zone_name))
+    error_message = "dns_zone_name must be a lowercase DNS name (copy it from the bootstrap global_tfvars_hint, or run infra/up.sh)."
+  }
+}
+
 variable "alert_emails" {
   description = "Emails that receive resource-group budget alerts."
   type        = list(string)
 }
 
 variable "rg_budget_amount" {
-  description = "Monthly budget (USD) for each staging/prod data and compute resource group."
+  description = "Monthly budget (USD) for each test/staging/prod data and compute resource group."
   type        = number
   default     = 20
 }
@@ -56,7 +66,7 @@ variable "secret_officer_user_object_ids" {
 }
 
 variable "ephemeral_ci_principal_id" {
-  description = "Object ID of the gh-bbm-ephemeral service principal (bootstrap output github_principal_ids). Gets AcrPush, Managed Identity Operator on id-bbm-aca-pull and Log Analytics Contributor on the shared LAW. Null skips these grants."
+  description = "Object ID of the gh-bbm-ephemeral service principal (bootstrap output github_principal_ids). Gets AcrPush on the registry. Null skips the grant."
   type        = string
   default     = null
 }

@@ -45,18 +45,17 @@ override_data {
   target = data.terraform_remote_state.global
   values = {
     outputs = {
-      acr_name                    = "acrbbma1b2"
-      acr_login_server            = "acrbbma1b2.azurecr.io"
-      acr_id                      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ContainerRegistry/registries/acrbbma1b2"
-      law_id                      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-shared-eus2"
-      law_workspace_id            = "55555555-5555-5555-5555-555555555555"
-      shared_resource_group_name  = "rg-bbm-shared-eus2"
-      location                    = "eastus2"
-      suffix                      = "a1b2"
-      aca_pull_identity_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-aca-pull"
-      aca_pull_identity_client_id = "66666666-6666-6666-6666-666666666666"
-      shared_key_vault_name       = "kv-bbm-shared-a1b2"
-      shared_key_vault_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-shared-a1b2"
+      acr_name                   = "acrbbma1b2"
+      acr_login_server           = "acrbbma1b2.azurecr.io"
+      acr_id                     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ContainerRegistry/registries/acrbbma1b2"
+      law_id                     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-shared-eus2"
+      law_workspace_id           = "55555555-5555-5555-5555-555555555555"
+      shared_resource_group_name = "rg-bbm-shared-eus2"
+      location                   = "eastus2"
+      suffix                     = "a1b2"
+      dns_zone_name              = "bbm.example.com"
+      shared_key_vault_name      = "kv-bbm-shared-a1b2"
+      shared_key_vault_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-shared-a1b2"
     }
   }
 }
@@ -65,22 +64,25 @@ override_data {
   target = data.terraform_remote_state.data
   values = {
     outputs = {
-      resource_group_name   = "rg-bbm-staging-data-eus2"
-      location              = "eastus2"
-      tenant_id             = "11111111-1111-1111-1111-111111111111"
-      key_vault_name        = "kv-bbm-stg-a1b2"
-      key_vault_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2"
-      pg_fqdn               = "psql-bbm-staging-eus2.postgres.database.azure.com"
-      pg_server_name        = "psql-bbm-staging-eus2"
-      storage_account_name  = "stbbmstga1b2"
-      storage_blob_endpoint = "https://stbbmstga1b2.blob.core.windows.net/"
-      queue_name            = "analysis-jobs"
-      ingress_pip_name      = "pip-bbm-staging-ingress"
-      ingress_ip            = "20.0.0.1"
-      ingress_fqdn          = "bbm-staging.eastus2.cloudapp.azure.com"
-      subnet_aks_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-eus2/subnets/snet-aks"
-      psql_subnet_cidr      = "10.20.16.0/24"
-      law_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-staging-eus2"
+      resource_group_name    = "rg-bbm-staging-data-eus2"
+      location               = "eastus2"
+      tenant_id              = "11111111-1111-1111-1111-111111111111"
+      key_vault_name         = "kv-bbm-stg-a1b2"
+      key_vault_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2"
+      pg_fqdn                = "psql-bbm-staging-eus2.postgres.database.azure.com"
+      pg_server_name         = "psql-bbm-staging-eus2"
+      storage_account_name   = "stbbmstga1b2"
+      storage_blob_endpoint  = "https://stbbmstga1b2.blob.core.windows.net/"
+      queue_name             = "analysis-jobs"
+      ingress_pip_name       = "pip-bbm-staging-ingress"
+      ingress_ip             = "20.0.0.1"
+      ingress_fqdn           = "bbm-staging.eastus2.cloudapp.azure.com"
+      subnet_aks_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-eus2/subnets/snet-aks"
+      psql_subnet_cidr       = "10.20.16.0/24"
+      postgres_enabled       = true
+      dns_zone_names         = ["staging.bbm.example.com"]
+      internal_dns_zone_name = "staging.internal.bbm.example.com"
+      law_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-staging-eus2"
       uami = {
         aks = {
           id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-staging-aks"
@@ -101,6 +103,11 @@ override_data {
           id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-staging-sandbox"
           client_id    = "a0000000-0000-0000-0000-000000000004"
           principal_id = "b0000000-0000-0000-0000-000000000004"
+        }
+        certmgr = {
+          id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-staging-certmgr"
+          client_id    = "a0000000-0000-0000-0000-000000000005"
+          principal_id = "b0000000-0000-0000-0000-000000000005"
         }
       }
     }
@@ -159,8 +166,9 @@ run "staging_plan" {
       "system:serviceaccount:bbm:bbm-analysis",
       "system:serviceaccount:kube-system:keda-operator",
       "system:serviceaccount:bbm-sandbox:bbm-sandbox-runner",
+      "system:serviceaccount:cert-manager:cert-manager",
     ])
-    error_message = "expected exactly the 5 federated service-account subjects"
+    error_message = "expected exactly the 6 federated service-account subjects"
   }
 
   assert {
@@ -175,17 +183,26 @@ run "staging_plan" {
       yamldecode(output.helm_values).azure.storageAccountName != "",
       yamldecode(output.helm_values).azure.storageBlobEndpoint != "",
       yamldecode(output.helm_values).azure.queueName == "analysis-jobs",
-      yamldecode(output.helm_values).ingress.host == "bbm-staging.eastus2.cloudapp.azure.com",
+      yamldecode(output.helm_values).ingress.host == "staging.bbm.example.com",
       yamldecode(output.helm_values).ingress.publicIpName == "pip-bbm-staging-ingress",
       yamldecode(output.helm_values).ingress.publicIpResourceGroup == "rg-bbm-staging-data-eus2",
       yamldecode(output.helm_values).networkPolicy.postgresCidr == "10.20.16.0/24",
+      yamldecode(output.helm_values).dns.zone == "bbm.example.com",
+      yamldecode(output.helm_values).dns.envZones == ["staging.bbm.example.com"],
+      yamldecode(output.helm_values).dns.internalZone == "staging.internal.bbm.example.com",
+      yamldecode(output.helm_values).platform.subscriptionId == "00000000-0000-0000-0000-000000000000",
+      yamldecode(output.helm_values).platform.dnsResourceGroup == "rg-bbm-staging-data-eus2",
+      yamldecode(output.helm_values).platform.certManagerClientId == "a0000000-0000-0000-0000-000000000005",
     ])
     error_message = "helm_values is missing a key or has a wrong value"
   }
 
   assert {
     condition = alltrue([
-      keys(yamldecode(output.helm_values)) == ["azure", "global", "ingress", "networkPolicy"],
+      keys(yamldecode(output.helm_values)) == ["azure", "dns", "global", "ingress", "networkPolicy", "platform"],
+      keys(yamldecode(output.helm_values).dns) == ["envZones", "internalZone", "zone"],
+      keys(yamldecode(output.helm_values).platform) == ["certManagerClientId", "dnsResourceGroup", "subscriptionId"],
+      alltrue([for v in values(yamldecode(output.helm_values).platform) : v != null && v != ""]),
       keys(yamldecode(output.helm_values).global) == ["image"],
       length(keys(yamldecode(output.helm_values).azure)) == 9,
       length(keys(yamldecode(output.helm_values).ingress)) == 3,
@@ -195,6 +212,11 @@ run "staging_plan" {
     ])
     error_message = "helm_values must contain exactly the pinned keys, all non-empty"
   }
+
+  assert {
+    condition     = module.aks.sku_tier == "Free"
+    error_message = "staging must use the Free AKS tier"
+  }
 }
 
 run "prod_plan" {
@@ -202,6 +224,7 @@ run "prod_plan" {
 
   variables {
     env                         = "prod"
+    aks_sku_tier                = "Standard"
     system_only_critical_addons = true
     apps_pool_enabled           = true
     apps_min_count              = 1
@@ -222,6 +245,11 @@ run "prod_plan" {
   assert {
     condition     = module.aks.container_insights_enabled
     error_message = "prod must enable Container Insights"
+  }
+
+  assert {
+    condition     = module.aks.sku_tier == "Standard" && output.sku_tier == "Standard"
+    error_message = "prod must use the Standard AKS tier"
   }
 }
 
@@ -247,7 +275,98 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = length(module.workload_identity.credentials) == 5
-    error_message = "expected 5 federated credentials"
+    condition     = length(module.workload_identity.credentials) == 6
+    error_message = "expected 6 federated credentials"
   }
+}
+
+run "test_env" {
+  command = plan
+
+  variables {
+    env              = "test"
+    system_max_count = 3
+  }
+
+  override_data {
+    target = data.terraform_remote_state.data
+    values = {
+      outputs = {
+        resource_group_name    = "rg-bbm-test-data-eus2"
+        location               = "eastus2"
+        tenant_id              = "11111111-1111-1111-1111-111111111111"
+        key_vault_name         = "kv-bbm-tst-a1b2"
+        key_vault_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-tst-a1b2"
+        pg_fqdn                = null
+        pg_server_name         = null
+        postgres_enabled       = false
+        storage_account_name   = "stbbmtsta1b2"
+        storage_blob_endpoint  = "https://stbbmtsta1b2.blob.core.windows.net/"
+        queue_name             = "analysis-jobs"
+        ingress_pip_name       = "pip-bbm-test-ingress"
+        ingress_ip             = "20.0.0.2"
+        ingress_fqdn           = "bbm-test.eastus2.cloudapp.azure.com"
+        subnet_aks_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.Network/virtualNetworks/vnet-bbm-test-eus2/subnets/snet-aks"
+        psql_subnet_cidr       = "10.10.16.0/24"
+        dns_zone_names         = ["test.bbm.example.com", "preview.bbm.example.com"]
+        internal_dns_zone_name = "test.internal.bbm.example.com"
+        law_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-test-eus2"
+        uami = {
+          aks = {
+            id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-test-aks"
+            client_id    = "c0000000-0000-0000-0000-000000000000"
+            principal_id = "d0000000-0000-0000-0000-000000000000"
+          }
+          api = {
+            id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-test-api"
+            client_id    = "c0000000-0000-0000-0000-000000000001"
+            principal_id = "d0000000-0000-0000-0000-000000000001"
+          }
+          worker = {
+            id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-test-worker"
+            client_id    = "c0000000-0000-0000-0000-000000000002"
+            principal_id = "d0000000-0000-0000-0000-000000000002"
+          }
+          sandbox = {
+            id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-test-sandbox"
+            client_id    = "c0000000-0000-0000-0000-000000000003"
+            principal_id = "d0000000-0000-0000-0000-000000000003"
+          }
+          certmgr = {
+            id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-test-certmgr"
+            client_id    = "c0000000-0000-0000-0000-000000000004"
+            principal_id = "d0000000-0000-0000-0000-000000000004"
+          }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = output.cluster_name == "aks-bbm-test-eus2" && module.aks.sku_tier == "Free" && output.node_pools == ["system"]
+    error_message = "test cluster must be Free tier with only the system pool"
+  }
+
+  assert {
+    condition = alltrue([
+      yamldecode(output.helm_values).ingress.host == "test.bbm.example.com",
+      yamldecode(output.helm_values).dns.envZones == ["test.bbm.example.com", "preview.bbm.example.com"],
+      yamldecode(output.helm_values).dns.internalZone == "test.internal.bbm.example.com",
+      yamldecode(output.helm_values).platform.dnsResourceGroup == "rg-bbm-test-data-eus2",
+      yamldecode(output.helm_values).platform.certManagerClientId == "c0000000-0000-0000-0000-000000000004",
+      yamldecode(output.helm_values).networkPolicy.postgresCidr == "10.10.16.0/24",
+      yamldecode(output.helm_values).azure.keyVaultName == "kv-bbm-tst-a1b2",
+    ])
+    error_message = "test helm_values wrong"
+  }
+}
+
+run "rejects_bad_sku_tier" {
+  command = plan
+
+  variables {
+    aks_sku_tier = "Premium"
+  }
+
+  expect_failures = [var.aks_sku_tier]
 }

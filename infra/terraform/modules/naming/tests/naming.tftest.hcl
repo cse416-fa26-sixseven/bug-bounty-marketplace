@@ -33,8 +33,13 @@ run "global_names" {
   }
 
   assert {
-    condition     = !contains(keys(output.tags), "ephemeral")
-    error_message = "non-ephemeral tags must not carry ephemeral=true"
+    condition     = !contains(keys(output.global), "aca_pull_identity") && !contains(keys(output.global), "test_resource_group")
+    error_message = "ACA-era names must be gone"
+  }
+
+  assert {
+    condition     = output.dns.zone == null && length(output.dns.env_zones) == 0 && output.dns.host == null
+    error_message = "dns names must be empty without dns_zone_name"
   }
 }
 
@@ -67,8 +72,63 @@ run "staging_names" {
   }
 
   assert {
-    condition     = output.env.vnet_cidr == "10.20.0.0/16" && output.uamis.api == "id-bbm-staging-api"
+    condition     = output.env.vnet_cidr == "10.20.0.0/16" && output.uamis.api == "id-bbm-staging-api" && output.uamis.certmgr == "id-bbm-staging-certmgr"
     error_message = "unexpected VNet CIDR or UAMI name"
+  }
+}
+
+run "staging_dns" {
+  command = plan
+
+  variables {
+    env           = "staging"
+    dns_zone_name = "bbm.example.com"
+  }
+
+  assert {
+    condition = (
+      output.dns.env_zones == tolist(["staging.bbm.example.com"]) &&
+      output.dns.host == "staging.bbm.example.com" &&
+      output.dns.internal_zone == "staging.internal.bbm.example.com"
+    )
+    error_message = "unexpected staging DNS names"
+  }
+}
+
+run "test_env" {
+  command = plan
+
+  variables {
+    env           = "test"
+    layer         = "compute"
+    dns_zone_name = "bbm.example.com"
+  }
+
+  assert {
+    condition = (
+      output.env.data_resource_group == "rg-bbm-test-data-eus2" &&
+      output.env.compute_resource_group == "rg-bbm-test-compute-eus2" &&
+      output.env.aks_cluster == "aks-bbm-test-eus2" &&
+      output.env.vnet_cidr == "10.10.0.0/16" &&
+      output.env.key_vault == "kv-bbm-tst-a1b2" &&
+      output.env_short == "tst"
+    )
+    error_message = "unexpected test env names"
+  }
+
+  assert {
+    condition = (
+      output.dns.env_zones == tolist(["test.bbm.example.com", "preview.bbm.example.com"]) &&
+      output.dns.env_labels == tolist(["test", "preview"]) &&
+      output.dns.host == "test.bbm.example.com" &&
+      output.dns.internal_zone == "test.internal.bbm.example.com"
+    )
+    error_message = "test env must serve test.<zone> and preview.<zone>"
+  }
+
+  assert {
+    condition     = output.tags.layer == "compute" && output.tags.env == "test"
+    error_message = "unexpected test tags"
   }
 }
 
@@ -77,7 +137,7 @@ run "length_limits" {
 
   # Worst case for length: the longest env name and a longer region code.
   variables {
-    env           = "preview"
+    env           = "staging"
     location_abbr = "wus3"
     suffix        = "zz99"
   }
@@ -104,25 +164,14 @@ run "length_limits" {
   }
 }
 
-run "ephemeral_tags" {
+run "rejects_preview_env" {
   command = plan
 
   variables {
-    env                = "test"
-    layer              = "ephemeral"
-    ephemeral_env_name = "run-123-1"
-    expires_on         = "2026-10-20T00:00:00Z"
+    env = "preview"
   }
 
-  assert {
-    condition     = output.aca_environment == "cae-bbm-run-123-1"
-    error_message = "unexpected ACA environment name"
-  }
-
-  assert {
-    condition     = output.tags.ephemeral == "true" && output.tags.expires_on == "2026-10-20T00:00:00Z" && output.tags.layer == "ephemeral"
-    error_message = "ephemeral tags missing"
-  }
+  expect_failures = [var.env]
 }
 
 run "rejects_bad_suffix" {

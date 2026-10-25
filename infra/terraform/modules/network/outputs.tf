@@ -31,9 +31,14 @@ output "subnet_cidrs" {
 }
 
 output "postgres_private_dns_zone_id" {
-  description = "Private DNS zone ID for PostgreSQL. Only resolves once the VNet link exists, so the server never races the link."
-  value       = azurerm_private_dns_zone.postgres.id
+  description = "Private DNS zone ID for PostgreSQL (null when postgres_enabled is false). Only resolves once the VNet link exists, so the server never races the link."
+  value       = one(azurerm_private_dns_zone.postgres[*].id)
   depends_on  = [azurerm_private_dns_zone_virtual_network_link.postgres]
+}
+
+output "psql_delegated" {
+  description = "Whether snet-psql is delegated to PostgreSQL Flexible Server."
+  value       = length(azurerm_subnet.psql.delegation) > 0
 }
 
 output "ingress_destination_address_prefix" {

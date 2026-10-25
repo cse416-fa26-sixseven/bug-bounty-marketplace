@@ -20,3 +20,7 @@ github_reviewer_ids = []
 # --query "[?registrationState=='Registered'].namespace" -o tsv); they are
 # imported instead of re-registered.
 preregistered_resource_providers = []
+
+# Parent DNS zone for every env host (ADR 0002), e.g. "bug-bounty.example.com".
+# Required: infra/up.sh --zone <zone> (or its prompt) writes it here.
+dns_zone_name = ""

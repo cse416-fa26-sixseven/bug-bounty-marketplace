@@ -27,6 +27,13 @@ mock_provider "azurerm" {
     }
   }
 
+  mock_resource "azurerm_dns_zone" {
+    defaults = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Network/dnsZones/mock"
+      name_servers = ["ns1-01.azure-dns.com.", "ns2-01.azure-dns.net.", "ns3-01.azure-dns.org.", "ns4-01.azure-dns.info."]
+    }
+  }
+
   mock_resource "azurerm_role_definition" {
     defaults = {
       role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/33333333-3333-3333-3333-333333333333"
@@ -69,14 +76,15 @@ variables {
   admin_object_ids          = ["55555555-5555-5555-5555-555555555555"]
   power_operator_object_ids = ["55555555-5555-5555-5555-555555555555"]
   github_reviewer_ids       = [12345]
+  dns_zone_name             = "bbm.example.com"
 }
 
 run "apply_with_mocks" {
   command = apply
 
   assert {
-    condition     = length(module.github_oidc.client_ids) == 6
-    error_message = "expected 6 OIDC identities"
+    condition     = length(module.github_oidc.client_ids) == 7
+    error_message = "expected 7 OIDC identities"
   }
 
   assert {
@@ -136,11 +144,20 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      strcontains(local.state_path_match.ephemeral.write, "StringStartsWith 'test/'") &&
-      strcontains(local.state_path_match.ephemeral.write, "StringStartsWith 'preview/'") &&
-      strcontains(local.state_path_match.ephemeral.read, "StringEquals 'global.tfstate'")
+      strcontains(local.state_path_match.ephemeral.read, "StringStartsWith 'test/'") &&
+      strcontains(local.state_path_match.ephemeral.read, "StringEquals 'global.tfstate'") &&
+      !strcontains(local.state_condition.ephemeral, "preview/") &&
+      !strcontains(local.state_condition.ephemeral, "/write")
     )
-    error_message = "ephemeral state condition wrong"
+    error_message = "ephemeral state access must be read-only on test/ + global.tfstate"
+  }
+
+  assert {
+    condition = (
+      local.state_path_match.test.write == "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path] StringStartsWith 'test/'" &&
+      strcontains(local.state_path_match.test.read, "StringEquals 'global.tfstate'")
+    )
+    error_message = "gh-bbm-test must write test/ and read global.tfstate"
   }
 
   assert {
@@ -151,6 +168,9 @@ run "apply_with_mocks" {
   assert {
     condition = (
       !strcontains(local.state_condition.plan, "prod/") &&
+      !strcontains(local.state_condition.plan, "preview/") &&
+      strcontains(local.state_condition.plan, "StringStartsWith 'test/'") &&
+      strcontains(local.state_condition.plan, "StringStartsWith 'staging/'") &&
       !strcontains(local.state_condition.plan, "bootstrap") &&
       !strcontains(local.state_condition.plan, "/write") &&
       strcontains(local.state_condition.plan, "NOT SubOperationMatches{'Blob.List'}")
@@ -160,7 +180,7 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      local.state_role_kind == { ephemeral = "writer", global = "writer", staging = "writer", prod = "writer", plan = "reader" } &&
+      local.state_role_kind == { ephemeral = "reader", global = "writer", test = "writer", staging = "writer", prod = "writer", plan = "reader" } &&
       alltrue([for k, r in local.state_role : r.role_definition_id == azurerm_role_definition.tfstate[local.state_role_kind[k]].role_definition_resource_id])
     )
     error_message = "CI state grants must use the custom BBM tfstate writer/reader roles (plan: reader)"
@@ -211,6 +231,101 @@ run "apply_with_mocks" {
   }
 
   assert {
+    condition     = contains(local.env_delegable_roles, "befefa01-2a29-4197-83a8-272ff33ce314") && strcontains(local.rbac_condition.env, "befefa01-2a29-4197-83a8-272ff33ce314")
+    error_message = "env identities must be able to delegate DNS Zone Contributor (cert-manager)"
+  }
+
+  assert {
+    condition = (
+      !contains(local.global_delegable_roles, local.role_guids.managed_identity_operator) &&
+      contains(local.global_delegable_roles, local.role_guids.acr_push)
+    )
+    error_message = "global identity no longer needs Managed Identity Operator (ACA pull identity is gone)"
+  }
+
+  # ---- test env + ephemeral namespaces -----------------------------------------
+  assert {
+    condition = (
+      module.github_oidc.subjects["gh-bbm-test"] == ["repo:LoistCloist/bug-bounty-marketplace:environment:test-infra"] &&
+      [for ra in local.oidc_identities["gh-bbm-test"].role_assignments : ra.key] == [for ra in local.oidc_identities["gh-bbm-staging"].role_assignments : ra.key] &&
+      local.oidc_identities["gh-bbm-test"].role_assignments[0].scope == azurerm_resource_group.env_data["test"].id
+    )
+    error_message = "gh-bbm-test must trust test-infra and mirror gh-bbm-staging's roles on the test RGs"
+  }
+
+  assert {
+    condition = toset([for ra in local.oidc_identities["gh-bbm-ephemeral"].role_assignments : ra.key]) == toset([
+      "test-compute-aks-admin", "test-compute-aks-user", "test-data-reader",
+      "test-data-power-operator", "test-compute-power-operator", "shared-reader", "tfstate",
+    ])
+    error_message = "gh-bbm-ephemeral role set wrong"
+  }
+
+  assert {
+    condition = alltrue([for ra in local.oidc_identities["gh-bbm-ephemeral"].role_assignments :
+    !contains(["Contributor", "Owner", "Role Based Access Control Administrator", "Managed Identity Operator"], try(ra.role_definition_name, "-"))])
+    error_message = "gh-bbm-ephemeral must not hold Contributor / RBAC admin / MI Operator"
+  }
+
+  assert {
+    condition = (
+      azurerm_resource_group.env_data["test"].name == "rg-bbm-test-data-eus2" &&
+      azurerm_resource_group.env_compute["test"].name == "rg-bbm-test-compute-eus2" &&
+      azurerm_resource_group.env_data["test"].tags["power-state"] == "down" &&
+      azurerm_resource_group.env_data["test"].tags["auto-pause"] == "true"
+    )
+    error_message = "test env resource groups wrong"
+  }
+
+  assert {
+    condition     = !contains(values(output.resource_groups), "rg-bbm-test-eus2") && !contains(values(output.resource_groups), "rg-bbm-preview-eus2") && length(output.resource_groups) == 8
+    error_message = "ACA resource groups must be gone (shared, tfstate + 3 envs x data/compute)"
+  }
+
+  # ---- DNS -------------------------------------------------------------------
+  assert {
+    condition     = azurerm_dns_zone.parent.name == "bbm.example.com" && azurerm_dns_zone.parent.resource_group_name == "rg-bbm-shared-eus2"
+    error_message = "parent zone must be dns_zone_name in the shared RG"
+  }
+
+  assert {
+    condition = (
+      { for k, z in azurerm_dns_zone.child : k => [z.name, z.resource_group_name] } == {
+        prod    = ["prod.bbm.example.com", "rg-bbm-prod-data-eus2"]
+        staging = ["staging.bbm.example.com", "rg-bbm-staging-data-eus2"]
+        test    = ["test.bbm.example.com", "rg-bbm-test-data-eus2"]
+        preview = ["preview.bbm.example.com", "rg-bbm-test-data-eus2"]
+      }
+    )
+    error_message = "child zones / resource groups wrong"
+  }
+
+  assert {
+    condition = alltrue([for k, r in azurerm_dns_ns_record.delegation : (
+      r.name == k && r.zone_name == "bbm.example.com" && r.resource_group_name == "rg-bbm-shared-eus2" && length(r.records) == 4
+    )]) && length(azurerm_dns_ns_record.delegation) == 4
+    error_message = "expected 4 NS delegation records in the parent zone"
+  }
+
+  assert {
+    condition = (
+      output.dns_zone_name == "bbm.example.com" &&
+      length(output.dns_name_servers) == 4 &&
+      output.dns_child_zones == {
+        test    = ["preview.bbm.example.com", "test.bbm.example.com"]
+        staging = ["staging.bbm.example.com"]
+        prod    = ["prod.bbm.example.com"]
+      }
+    )
+    error_message = "DNS outputs wrong"
+  }
+
+  assert {
+    condition     = strcontains(output.global_tfvars_hint, "dns_zone_name                = \"bbm.example.com\"")
+    error_message = "global_tfvars_hint must carry dns_zone_name"
+  }
+
+  assert {
     condition     = azurerm_resource_group.env_data["prod"].tags["power-state"] == "down" && azurerm_resource_group.env_data["prod"].tags["layer"] == "data"
     error_message = "data RG initial tags wrong"
   }
@@ -231,6 +346,18 @@ run "apply_with_mocks" {
   }
 
   assert {
+    condition = (
+      strcontains(output.gh_setup_commands, "# --- environment: test-infra (gh-bbm-test)") &&
+      strcontains(output.gh_setup_commands, "repos/LoistCloist/bug-bounty-marketplace/environments/test-infra/deployment-branch-policies") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo LoistCloist/bug-bounty-marketplace --env test-infra") &&
+      jsondecode(local.env_payload["test-infra"]).reviewers == [] &&
+      alltrue([for e in ["test", "preview", "infra-global", "contracts-sepolia", "staging", "prod", "prod-power"] :
+      strcontains(output.gh_setup_commands, "# --- environment: ${e} (")])
+    )
+    error_message = "gh_setup_commands must create test-infra (main-only, no reviewers) and keep the other envs"
+  }
+
+  assert {
     condition     = strcontains(output.global_tfvars_hint, "secret_officer_sp_object_ids = [\"77777777-7777-7777-7777-777777777777\"]") && !strcontains(output.global_tfvars_hint, "secret_officer_object_ids")
     error_message = "global_tfvars_hint must emit secret_officer_sp_object_ids with the gh-bbm-global SP"
   }
@@ -241,12 +368,12 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = length(azurerm_resource_provider_registration.this) == 15
-    error_message = "expected 15 resource provider registrations"
+    condition     = length(azurerm_resource_provider_registration.this) == 14 && !contains(keys(azurerm_resource_provider_registration.this), "Microsoft.App")
+    error_message = "expected 14 resource provider registrations (no Microsoft.App)"
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.power_operator) == 4 && length(azurerm_role_assignment.admin_aks) == 2
+    condition     = length(azurerm_role_assignment.power_operator) == 6 && length(azurerm_role_assignment.admin_aks) == 3
     error_message = "unexpected human role assignment count"
   }
 }
@@ -276,5 +403,39 @@ run "no_reviewer_ids" {
   assert {
     condition     = strcontains(output.gh_setup_commands, "NOTE: github_reviewer_ids is empty")
     error_message = "missing manual-reviewer note"
+  }
+}
+
+run "rejects_empty_dns_zone" {
+  command = plan
+
+  variables {
+    dns_zone_name = ""
+  }
+
+  expect_failures = [var.dns_zone_name]
+}
+
+run "rejects_bad_dns_zone" {
+  command = plan
+
+  variables {
+    dns_zone_name = "Not A Zone."
+  }
+
+  expect_failures = [var.dns_zone_name]
+}
+
+# up.sh may list every registered namespace; unknown ones must be ignored.
+run "preregistered_providers_filtered" {
+  command = plan
+
+  variables {
+    preregistered_resource_providers = ["Microsoft.Network", "Microsoft.ResourceHealth"]
+  }
+
+  assert {
+    condition     = length(azurerm_resource_provider_registration.this) == 14
+    error_message = "preregistered providers outside the managed list must be ignored"
   }
 }

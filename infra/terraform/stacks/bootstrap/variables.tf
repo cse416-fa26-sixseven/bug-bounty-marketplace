@@ -33,7 +33,7 @@ variable "admin_object_ids" {
 }
 
 variable "power_operator_object_ids" {
-  description = "Entra object IDs granted the custom 'BBM Power Operator' role on staging/prod RGs (pause/resume without Contributor)."
+  description = "Entra object IDs granted the custom 'BBM Power Operator' role on the test/staging/prod RGs (pause/resume without Contributor)."
   type        = list(string)
   default     = []
 }
@@ -59,6 +59,21 @@ variable "github_reviewer_ids" {
   description = "GitHub user IDs (numeric) added as required reviewers on infra-global, prod and contracts-sepolia in gh_setup_commands. Empty = add reviewers manually."
   type        = list(number)
   default     = []
+}
+
+variable "dns_zone_name" {
+  description = "Parent DNS zone for every env host, e.g. bug-bounty.example.com (ADR 0002). Bootstrap creates it plus the prod/staging/test/preview child zones."
+  type        = string
+
+  validation {
+    condition     = var.dns_zone_name != ""
+    error_message = "dns_zone_name is empty: set it in envs/global/bootstrap.tfvars (e.g. dns_zone_name = \"bug-bounty.example.com\") or run infra/up.sh --zone <zone>."
+  }
+
+  validation {
+    condition     = var.dns_zone_name == "" || (can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$", var.dns_zone_name)) && length(var.dns_zone_name) <= 200)
+    error_message = "dns_zone_name must be a lowercase DNS name with at least two labels and no trailing dot, e.g. bug-bounty.example.com."
+  }
 }
 
 variable "preregistered_resource_providers" {

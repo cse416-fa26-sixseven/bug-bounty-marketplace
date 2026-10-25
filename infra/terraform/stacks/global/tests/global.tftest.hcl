@@ -31,17 +31,12 @@ mock_provider "azurerm" {
     }
   }
 
-  mock_resource "azurerm_user_assigned_identity" {
-    defaults = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-aca-pull"
-      principal_id = "88888888-8888-8888-8888-888888888888"
-    }
-  }
 }
 
 variables {
   subscription_id                = "00000000-0000-0000-0000-000000000000"
   suffix                         = "a1b2"
+  dns_zone_name                  = "bbm.example.com"
   alert_emails                   = ["admin@example.com"]
   ephemeral_ci_principal_id      = "77777777-7777-7777-7777-777777777777"
   secret_officer_sp_object_ids   = ["99999999-9999-9999-9999-999999999999"]
@@ -63,8 +58,8 @@ run "plan_names" {
   }
 
   assert {
-    condition     = length(module.rg_budget) == 4
-    error_message = "expected 4 RG budgets (staging/prod x data/compute)"
+    condition     = length(module.rg_budget) == 6 && contains(keys(module.rg_budget), "test-data") && contains(keys(module.rg_budget), "test-compute")
+    error_message = "expected 6 RG budgets (test/staging/prod x data/compute)"
   }
 
   assert {
@@ -91,12 +86,22 @@ run "apply_with_mocks" {
   command = apply
 
   assert {
-    condition     = length(azurerm_role_assignment.ephemeral_ci) == 3
-    error_message = "expected AcrPush, MI Operator and LAW grants for the ephemeral identity"
+    condition     = length(azurerm_role_assignment.ephemeral_ci_acr_push) == 1 && azurerm_role_assignment.ephemeral_ci_acr_push[0].role_definition_name == "AcrPush"
+    error_message = "the ephemeral identity needs exactly AcrPush"
   }
 
   assert {
-    condition     = output.aca_pull_identity_id != "" && output.suffix == "a1b2"
+    condition     = output.suffix == "a1b2" && output.dns_zone_name == "bbm.example.com" && output.acr_id != ""
     error_message = "outputs missing"
   }
+}
+
+run "rejects_empty_dns_zone" {
+  command = plan
+
+  variables {
+    dns_zone_name = ""
+  }
+
+  expect_failures = [var.dns_zone_name]
 }

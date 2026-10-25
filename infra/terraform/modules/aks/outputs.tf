@@ -13,6 +13,11 @@ output "oidc_issuer_url" {
   value       = azurerm_kubernetes_cluster.this.oidc_issuer_url
 }
 
+output "sku_tier" {
+  description = "AKS control-plane tier (Free or Standard)."
+  value       = azurerm_kubernetes_cluster.this.sku_tier
+}
+
 output "kubernetes_version" {
   description = "Kubernetes version currently running (including patch)."
   value       = azurerm_kubernetes_cluster.this.current_kubernetes_version

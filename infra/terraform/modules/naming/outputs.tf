@@ -9,7 +9,7 @@ output "location" {
 }
 
 output "global" {
-  description = "Names of global/shared resources (tfstate, shared RG, ACR, shared LAW/KV, ACA pull identity, test/preview RGs)."
+  description = "Names of global/shared resources (tfstate, shared RG, ACR, shared LAW/KV)."
   value       = local.global
 }
 
@@ -19,18 +19,18 @@ output "env" {
 }
 
 output "uamis" {
-  description = "Per-environment user-assigned managed identity names keyed by role (aks, api, worker, sandbox)."
+  description = "Per-environment user-assigned managed identity names keyed by role (aks, api, worker, sandbox, certmgr)."
   value       = local.uamis
 }
 
 output "env_short" {
-  description = "Short environment code used in length-limited names (stg, prd, ...)."
+  description = "Short environment code used in length-limited names (tst, stg, prd, glb)."
   value       = local.env_short
 }
 
-output "aca_environment" {
-  description = "Container Apps environment name (cae-bbm-<env_name>), or null when ephemeral_env_name is unset."
-  value       = var.ephemeral_env_name == null ? null : "cae-${local.p}-${var.ephemeral_env_name}"
+output "dns" {
+  description = "DNS names for var.env from var.dns_zone_name: zone, env_labels, env_zones (test: test.<zone> + preview.<zone>), host (first env zone), internal_zone (<env>.internal.<zone>). Empty/null when dns_zone_name is null."
+  value       = local.dns
 }
 
 output "tags" {
@@ -39,6 +39,6 @@ output "tags" {
 }
 
 output "tags_by_layer" {
-  description = "Standard tags for every layer (global, data, compute, ephemeral), for stacks that span layers."
+  description = "Standard tags for every layer (global, data, compute), for stacks that span layers."
   value       = local.tags_by_layer
 }

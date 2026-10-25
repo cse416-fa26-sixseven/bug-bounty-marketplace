@@ -33,6 +33,17 @@ variable "kubernetes_version" {
   }
 }
 
+variable "sku_tier" {
+  description = "AKS control-plane tier: Free (no SLA) or Standard (uptime SLA; prod only, ADR 0002)."
+  type        = string
+  default     = "Free"
+
+  validation {
+    condition     = contains(["Free", "Standard"], var.sku_tier)
+    error_message = "sku_tier must be Free or Standard."
+  }
+}
+
 variable "tenant_id" {
   description = "Entra tenant for AKS-managed Entra ID integration with Azure RBAC."
   type        = string

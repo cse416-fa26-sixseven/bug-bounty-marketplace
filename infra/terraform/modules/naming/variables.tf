@@ -10,13 +10,13 @@ variable "project" {
 }
 
 variable "env" {
-  description = "Environment the names/tags are for: global, test, preview, staging or prod."
+  description = "Environment the names/tags are for: global, test, staging or prod."
   type        = string
   default     = "global"
 
   validation {
-    condition     = contains(["global", "test", "preview", "staging", "prod"], var.env)
-    error_message = "env must be one of global, test, preview, staging, prod."
+    condition     = contains(["global", "test", "staging", "prod"], var.env)
+    error_message = "env must be one of global, test, staging, prod."
   }
 }
 
@@ -43,24 +43,18 @@ variable "suffix" {
 }
 
 variable "layer" {
-  description = "Layer tag for the `tags` output: global, data, compute or ephemeral."
+  description = "Layer tag for the `tags` output: global, data or compute."
   type        = string
   default     = "global"
 
   validation {
-    condition     = contains(["global", "data", "compute", "ephemeral"], var.layer)
-    error_message = "layer must be one of global, data, compute, ephemeral."
+    condition     = contains(["global", "data", "compute"], var.layer)
+    error_message = "layer must be one of global, data, compute."
   }
 }
 
-variable "ephemeral_env_name" {
-  description = "ACA ephemeral environment name (run-<id>-<attempt> or pr-<n>); only used for the aca_environment output."
-  type        = string
-  default     = null
-}
-
-variable "expires_on" {
-  description = "RFC3339 expiry timestamp; when set, tags gain ephemeral=true and expires_on."
+variable "dns_zone_name" {
+  description = "Parent DNS zone (e.g. bug-bounty.example.com) for the `dns` output. Null leaves the DNS names empty."
   type        = string
   default     = null
 }

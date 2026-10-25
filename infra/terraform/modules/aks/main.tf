@@ -1,4 +1,4 @@
-# AKS cluster for one persistent env (staging/prod). Disposable: everything
+# AKS cluster for one env (test/staging/prod). Disposable: everything
 # durable (VNet, PIP, PG, KV, storage, UAMIs) lives in the data stack, so this
 # can be destroyed and re-applied ("down"/"up") without data loss.
 
@@ -55,7 +55,7 @@ resource "azurerm_kubernetes_cluster" "this" {
   node_resource_group = var.node_resource_group_name
   dns_prefix          = var.dns_prefix
   kubernetes_version  = var.kubernetes_version
-  sku_tier            = "Free"
+  sku_tier            = var.sku_tier
   support_plan        = "KubernetesOfficial"
 
   # Patch channel moves only the patch level within var.kubernetes_version,

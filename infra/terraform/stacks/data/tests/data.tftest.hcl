@@ -13,6 +13,12 @@ mock_provider "azurerm" {
     }
   }
 
+  mock_data "azurerm_dns_zone" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/dnsZones/staging.bbm.example.com"
+    }
+  }
+
   mock_resource "azurerm_virtual_network" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-eus2"
@@ -95,10 +101,21 @@ mock_provider "random" {}
 
 mock_provider "time" {}
 
+override_data {
+  target = data.terraform_remote_state.global
+  values = {
+    outputs = {
+      dns_zone_name = "bbm.example.com"
+      suffix        = "a1b2"
+    }
+  }
+}
+
 variables {
   subscription_id = "00000000-0000-0000-0000-000000000000"
   env             = "staging"
   suffix          = "a1b2"
+  tfstate_account = "stbbmtfstatea1b2"
   vnet_cidr       = "10.20.0.0/16"
   subnet_cidrs = {
     aks  = "10.20.0.0/20"
@@ -113,7 +130,7 @@ run "plan_names_and_settings" {
   assert {
     condition = (
       module.network.vnet_name == "vnet-bbm-staging-eus2" &&
-      module.postgres.name == "psql-bbm-staging-eus2" &&
+      module.postgres[0].name == "psql-bbm-staging-eus2" &&
       module.keyvault.name == "kv-bbm-stg-a1b2" &&
       module.storage.name == "stbbmstga1b2" &&
       module.law.name == "log-bbm-staging-eus2" &&
@@ -138,17 +155,17 @@ run "plan_names_and_settings" {
 
   assert {
     condition = (
-      module.postgres.administrator_login == "bbmadmin" &&
-      module.postgres.database_name == "bbm"
+      module.postgres[0].administrator_login == "bbmadmin" &&
+      module.postgres[0].database_name == "bbm"
     )
     error_message = "PG admin/database wrong"
   }
 
   assert {
     condition = (
-      module.postgres.sku_name == "B_Standard_B1ms" &&
-      module.postgres.postgres_version == "16" &&
-      module.postgres.public_network_access_enabled == false
+      module.postgres[0].sku_name == "B_Standard_B1ms" &&
+      module.postgres[0].postgres_version == "16" &&
+      module.postgres[0].public_network_access_enabled == false
     )
     error_message = "PG must be private B_Standard_B1ms v16"
   }
@@ -174,8 +191,30 @@ run "plan_names_and_settings" {
   }
 
   assert {
-    condition     = length(module.identity.role_assignment_ids) == 8
-    error_message = "expected 8 role assignments (api 3, worker 4, aks 1, sandbox 0)"
+    condition     = length(module.identity.role_assignment_ids) == 9
+    error_message = "expected 9 role assignments (api 3, worker 4, aks 1, certmgr 1, sandbox 0)"
+  }
+
+  assert {
+    condition = (
+      toset(keys(azurerm_dns_a_record.ingress)) == toset(["@.staging.bbm.example.com", "*.staging.bbm.example.com"]) &&
+      alltrue([for r in azurerm_dns_a_record.ingress : r.zone_name == "staging.bbm.example.com" && r.resource_group_name == "rg-bbm-staging-data-eus2"])
+    )
+    error_message = "expected apex + wildcard alias A records in staging.<zone>"
+  }
+
+  assert {
+    condition = (
+      azurerm_private_dns_zone.internal.name == "staging.internal.bbm.example.com" &&
+      length(azurerm_private_dns_cname_record.postgres) == 1 &&
+      azurerm_private_dns_cname_record.postgres[0].name == "postgres"
+    )
+    error_message = "internal zone / postgres CNAME wrong"
+  }
+
+  assert {
+    condition     = module.network.psql_delegated
+    error_message = "with postgres the psql subnet must be delegated and have its private zone"
   }
 
   assert {
@@ -195,16 +234,27 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      module.postgres.fqdn == "psql-bbm-staging-eus2.postgres.database.azure.com" &&
-      output.pg_fqdn == module.postgres.fqdn &&
+      module.postgres[0].fqdn == "psql-bbm-staging-eus2.postgres.database.azure.com" &&
+      output.pg_fqdn == module.postgres[0].fqdn &&
       output.pg_server_name == "psql-bbm-staging-eus2"
     )
     error_message = "PG outputs wrong"
   }
 
   assert {
-    condition     = toset(keys(output.uami)) == toset(["aks", "api", "worker", "sandbox"])
-    error_message = "uami output must have aks, api, worker, sandbox"
+    condition     = toset(keys(output.uami)) == toset(["aks", "api", "worker", "sandbox", "certmgr"])
+    error_message = "uami output must have aks, api, worker, sandbox, certmgr"
+  }
+
+  assert {
+    condition = (
+      azurerm_dns_a_record.ingress["@.staging.bbm.example.com"].target_resource_id == azurerm_public_ip.ingress.id &&
+      azurerm_private_dns_cname_record.postgres[0].record == "psql-bbm-staging-eus2.postgres.database.azure.com" &&
+      output.dns_zone_names == tolist(["staging.bbm.example.com"]) &&
+      output.internal_dns_zone_name == "staging.internal.bbm.example.com" &&
+      output.postgres_enabled
+    )
+    error_message = "DNS records / outputs wrong"
   }
 
   assert {
@@ -230,7 +280,7 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = startswith(nonsensitive(module.postgres.database_url), "postgres://bbmadmin:") && endswith(nonsensitive(module.postgres.database_url), "@psql-bbm-staging-eus2.postgres.database.azure.com:5432/bbm?sslmode=require")
+    condition     = startswith(nonsensitive(module.postgres[0].database_url), "postgres://bbmadmin:") && endswith(nonsensitive(module.postgres[0].database_url), "@psql-bbm-staging-eus2.postgres.database.azure.com:5432/bbm?sslmode=require")
     error_message = "database-url format wrong"
   }
 
@@ -262,4 +312,77 @@ run "prod_cidrs" {
     condition     = module.keyvault.name == "kv-bbm-prd-a1b2" && module.storage.name == "stbbmprda1b2" && output.psql_subnet_cidr == "10.30.16.0/24"
     error_message = "prod names/CIDRs wrong"
   }
+}
+
+# test: no PG server, two public zones (CI runs + PR previews).
+run "test_env_without_postgres" {
+  command = apply
+
+  variables {
+    env              = "test"
+    postgres_enabled = false
+    vnet_cidr        = "10.10.0.0/16"
+    subnet_cidrs = {
+      aks  = "10.10.0.0/20"
+      psql = "10.10.16.0/24"
+      pe   = "10.10.17.0/24"
+    }
+  }
+
+  assert {
+    condition     = length(module.postgres) == 0 && output.pg_fqdn == null && output.pg_server_name == null && !output.postgres_enabled
+    error_message = "test must not create a PG server"
+  }
+
+  assert {
+    condition     = length(module.keyvault.secret_names) == 0 && module.keyvault.name == "kv-bbm-tst-a1b2"
+    error_message = "test KV must not hold database-url / pg-admin-password"
+  }
+
+  assert {
+    condition     = !module.network.psql_delegated && module.network.postgres_private_dns_zone_id == null && output.psql_subnet_cidr == "10.10.16.0/24"
+    error_message = "without PG: plain psql subnet, no PG private zone, CIDR still exported"
+  }
+
+  assert {
+    condition     = length(azurerm_private_dns_cname_record.postgres) == 0 && azurerm_private_dns_zone.internal.name == "test.internal.bbm.example.com"
+    error_message = "test internal zone must exist without a postgres CNAME"
+  }
+
+  assert {
+    condition = (
+      output.dns_zone_names == tolist(["test.bbm.example.com", "preview.bbm.example.com"]) &&
+      toset(keys(azurerm_dns_a_record.ingress)) == toset([
+        "@.test.bbm.example.com", "*.test.bbm.example.com",
+        "@.preview.bbm.example.com", "*.preview.bbm.example.com",
+      ])
+    )
+    error_message = "test must serve apex + wildcard in test.<zone> and preview.<zone>"
+  }
+
+  assert {
+    condition = (
+      toset(keys(module.identity.role_assignment_ids)) == toset([
+        "api-kv-secrets-user", "api-sources-blob-contributor", "api-queue-sender",
+        "worker-kv-secrets-user", "worker-queue-processor", "worker-queue-reader", "worker-sources-blob-reader",
+        "aks-network-contributor", "certmgr-dns-test", "certmgr-dns-preview",
+      ])
+    )
+    error_message = "certmgr needs DNS Zone Contributor on both test zones"
+  }
+
+  assert {
+    condition     = output.uami.certmgr.client_id != "" && output.resource_group_name != ""
+    error_message = "certmgr identity output missing"
+  }
+}
+
+run "rejects_preview_env" {
+  command = plan
+
+  variables {
+    env = "preview"
+  }
+
+  expect_failures = [var.env]
 }

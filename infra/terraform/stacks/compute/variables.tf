@@ -4,12 +4,12 @@ variable "subscription_id" {
 }
 
 variable "env" {
-  description = "Persistent environment: staging or prod."
+  description = "Environment: test, staging or prod."
   type        = string
 
   validation {
-    condition     = contains(["staging", "prod"], var.env)
-    error_message = "env must be staging or prod."
+    condition     = contains(["test", "staging", "prod"], var.env)
+    error_message = "env must be test, staging or prod."
   }
 }
 
@@ -45,6 +45,17 @@ variable "tfstate_container" {
 variable "kubernetes_version" {
   description = "Kubernetes minor version, e.g. \"1.33\". Pick a GA, non-LTS-only version from `az aks get-versions -l eastus2 -o table`."
   type        = string
+}
+
+variable "aks_sku_tier" {
+  description = "AKS control-plane tier: Free, or Standard (uptime SLA, prod only)."
+  type        = string
+  default     = "Free"
+
+  validation {
+    condition     = contains(["Free", "Standard"], var.aks_sku_tier)
+    error_message = "aks_sku_tier must be Free or Standard."
+  }
 }
 
 variable "system_vm_size" {

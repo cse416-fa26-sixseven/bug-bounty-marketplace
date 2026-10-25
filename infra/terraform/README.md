@@ -1,8 +1,12 @@
 # infra/terraform
 
 Terraform for the BBM Azure deployment (region `eastus2`, project code `bbm`).
-First-time subscription setup, including Entra and GitHub prerequisites, is
-in [docs/devops/azure-bootstrap.md](../../docs/devops/azure-bootstrap.md).
+Three AKS environments (`test`, `staging`, `prod`) behind Azure DNS, per
+[ADR 0002](../../docs/adr/0002-aks-everywhere-and-azure-dns.md) (which
+supersedes the ACA parts of ADR 0001). `infra/up.sh` / `infra/down.sh` drive
+the whole bring-up and teardown; first-time subscription setup, including
+Entra and GitHub prerequisites, is in
+[docs/devops/azure-bootstrap.md](../../docs/devops/azure-bootstrap.md).
 
 ## Layout
 
@@ -15,18 +19,21 @@ infra/terraform/
     budget/              subscription or resource-group cost budget with email alerts
     acr/                 container registry (Basic, admin user disabled)
     observability/       Log Analytics workspace (daily cap, 30-day retention)
-    aca-app-stack/       ACA environment + api (Postgres sidecar), web, optional analysis
+    network/ keyvault/ postgres-flexible/ storage/ identity/
+    aks/ workload-identity-federation/
   stacks/
-    bootstrap/           state storage, long-lived RGs, providers, OIDC identities, sub budget
-    global/              ACR, shared LAW, id-bbm-aca-pull, shared Key Vault, RG budgets
-    aca-ephemeral/       per-run / per-PR Container Apps environment (test, preview)
+    bootstrap/           state storage, every RG, providers, OIDC identities, DNS zones, sub budget
+    global/              ACR, shared LAW, shared Key Vault, RG budgets
+    data/                per env: VNet, PG (not test), KV, storage, UAMIs, ingress PIP, DNS records
+    compute/             per env: AKS, node pools, federated credentials, helm_values
   envs/
     global/              bootstrap.tfvars, global.tfvars, backend.hcl
-    test/, preview/      aca.tfvars, backend.hcl (state key from $TF_STATE_KEY)
+    test/ staging/ prod/ data.tfvars, compute.tfvars, backend-data.hcl, backend-compute.hcl
   scripts/
     tf.sh                wrapper: picks stack dir, var-file, backend config and state key
     ci-static.sh         fmt + validate + test + tflint + shellcheck (what CI runs)
-    janitor.sh           deletes expired ephemeral ACA resources and stale test state
+    env-power.sh         status / pause / resume / down / up per env
+    janitor.sh           deletes expired ephemeral namespaces on the test cluster
 ```
 
 ## Running Terraform: `scripts/tf.sh`
@@ -39,17 +46,16 @@ cd infra/terraform
 ./scripts/tf.sh global global plan -out=tfplan      # -out is relative to stacks/global
 ./scripts/tf.sh global global apply tfplan
 ./scripts/tf.sh global global validate              # init -backend=false + validate (no creds)
-TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
-./scripts/tf.sh aca-ephemeral test validate         # no TF_STATE_KEY needed
+TFSTATE_ACCOUNT=stbbmtfstate<sfx> ./scripts/tf.sh data test plan
+./scripts/tf.sh compute prod apply tfplan
 ```
 
-| stack           | envs             | var-file                       | backend file                                | state key                  |
-| --------------- | ---------------- | ------------------------------ | ------------------------------------------- | -------------------------- |
-| `bootstrap`     | `global`         | `envs/global/bootstrap.tfvars` | `envs/global/backend.hcl` (after migration) | `bootstrap.tfstate`        |
-| `global`        | `global`         | `envs/global/global.tfvars`    | `envs/global/backend.hcl`                   | `global.tfstate`           |
-| `data`          | `staging`,`prod` | `envs/<env>/data.tfvars`       | `envs/<env>/backend-data.hcl`               | `<env>/data.tfstate`       |
-| `compute`       | `staging`,`prod` | `envs/<env>/compute.tfvars`    | `envs/<env>/backend-compute.hcl`            | `<env>/compute.tfstate`    |
-| `aca-ephemeral` | `test`,`preview` | `envs/<env>/aca.tfvars`        | `envs/<env>/backend.hcl`                    | `$TF_STATE_KEY` (required) |
+| stack       | envs                    | var-file                       | backend file                                | state key               |
+| ----------- | ----------------------- | ------------------------------ | ------------------------------------------- | ----------------------- |
+| `bootstrap` | `global`                | `envs/global/bootstrap.tfvars` | `envs/global/backend.hcl` (after migration) | `bootstrap.tfstate`     |
+| `global`    | `global`                | `envs/global/global.tfvars`    | `envs/global/backend.hcl`                   | `global.tfstate`        |
+| `data`      | `test`,`staging`,`prod` | `envs/<env>/data.tfvars`       | `envs/<env>/backend-data.hcl`               | `<env>/data.tfstate`    |
+| `compute`   | `test`,`staging`,`prod` | `envs/<env>/compute.tfvars`    | `envs/<env>/backend-compute.hcl`            | `<env>/compute.tfstate` |
 
 - `$TFSTATE_RG` and `$TFSTATE_ACCOUNT` (the GitHub repo variables) override
   the resource group and storage account in the backend file, so CI never
@@ -58,12 +64,11 @@ TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
   `TF_VAR_tfstate_resource_group` / `TF_VAR_tfstate_account` (unless those are
   already set), so stacks that use `terraform_remote_state` get the backend
   coordinates without extra plumbing.
-- `TF_VAR_*` environment variables pass straight through. CI uses them for
-  values like `image_tag`.
-- `TF_STATE_KEY` is only read for `aca-ephemeral` and must match
-  `<env>/run-<run_id>-<attempt>.tfstate` or `<env>/pr-<n>.tfstate`
-  (e.g. `test/run-123-1.tfstate`, `preview/pr-42.tfstate`). `validate` does
-  not need it (it runs `init -backend=false`).
+- `data` and `compute` read `global.tfstate` (and compute reads
+  `<env>/data.tfstate`), so plans need `TFSTATE_ACCOUNT` (or
+  `TF_VAR_tfstate_account`) set; without it they fail asking for
+  `tfstate_account`.
+- `TF_VAR_*` environment variables pass straight through.
 - `apply <planfile>` (first extra arg is an existing file, relative to
   `stacks/<stack>` or absolute) applies the saved plan without `-var-file`;
   plain `apply` adds the env var-file as usual.
@@ -81,8 +86,9 @@ TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
   protects the account.
 - One state file per stack and env (keys above). Stacks read each other's
   outputs through `terraform_remote_state`: compute reads data, and
-  data/compute/aca read global. The exception is `global`, which takes the
-  bootstrap outputs it needs (`suffix`, principal IDs) as tfvars.
+  data/compute read global. The exception is `global`, which takes the
+  bootstrap outputs it needs (`suffix`, principal IDs, `dns_zone_name`) as
+  tfvars, from the bootstrap-hint block of `envs/global/global.tfvars`.
 - **Bootstrap starts on a local backend** because it creates the state
   account. After the first apply:
   1. Uncomment `backend "azurerm" {}` in `stacks/bootstrap/versions.tf`.
@@ -101,14 +107,15 @@ TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
   `blobs/write` on the key's own blob, so locking works wherever writes are
   allowed.
 
-  | identity            | role (on `tfstate`)  | read + write          | read only                                            |
-  | ------------------- | -------------------- | --------------------- | ---------------------------------------------------- |
-  | `gh-bbm-ephemeral`  | `BBM tfstate writer` | `test/*`, `preview/*` | `global.tfstate`                                     |
-  | `gh-bbm-global`     | `BBM tfstate writer` | `global.tfstate`      | —                                                    |
-  | `gh-bbm-staging`    | `BBM tfstate writer` | `staging/*`           | `global.tfstate`                                     |
-  | `gh-bbm-prod`       | `BBM tfstate writer` | `prod/*`              | `global.tfstate`                                     |
-  | `gh-bbm-plan`       | `BBM tfstate reader` | —                     | `global.tfstate`, `staging/*`, `test/*`, `preview/*` |
-  | `gh-bbm-prod-power` | none                 | —                     | —                                                    |
+  | identity            | role (on `tfstate`)  | read + write     | read only                               |
+  | ------------------- | -------------------- | ---------------- | --------------------------------------- |
+  | `gh-bbm-ephemeral`  | `BBM tfstate reader` | —                | `global.tfstate`, `test/*`              |
+  | `gh-bbm-global`     | `BBM tfstate writer` | `global.tfstate` | —                                       |
+  | `gh-bbm-test`       | `BBM tfstate writer` | `test/*`         | `global.tfstate`                        |
+  | `gh-bbm-staging`    | `BBM tfstate writer` | `staging/*`      | `global.tfstate`                        |
+  | `gh-bbm-prod`       | `BBM tfstate writer` | `prod/*`         | `global.tfstate`                        |
+  | `gh-bbm-plan`       | `BBM tfstate reader` | —                | `global.tfstate`, `staging/*`, `test/*` |
+  | `gh-bbm-prod-power` | none                 | —                | —                                       |
 
   The two custom roles (defined on `rg-bbm-tfstate-eus2`) carry only
   `containers/read` as a control-plane action plus blob data actions
@@ -128,100 +135,92 @@ TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
   Accepted trade-off: `gh-bbm-plan` (PRs and `main`) can read `staging/*`,
   which contains the Terraform-generated staging secrets (PostgreSQL admin
   password, `database-url`). Staging holds no real data; `prod/*` is excluded
-  for this reason.
+  for this reason. `test/*` holds no database secrets (no PG server).
 
 ## Bootstrap order (summary)
 
+Normally `infra/up.sh` does all of this; the manual steps are:
+
 1. `az login` as a subscription Owner who can create Entra app registrations.
 2. Edit `envs/global/bootstrap.tfvars` (subscription, `admin_object_ids`,
-   alert emails, `preregistered_resource_providers`).
+   alert emails, `preregistered_resource_providers`, `dns_zone_name`).
 3. Run `./scripts/tf.sh bootstrap global init`, then `plan -out=tfplan`, then
    `apply tfplan`.
 4. Migrate the bootstrap state as described above.
 5. Run `./scripts/tf.sh bootstrap global output -raw gh_setup_commands > /tmp/gh-setup.sh`,
    review the file, then run `bash /tmp/gh-setup.sh`.
-6. Copy the `global_tfvars_hint` output into `envs/global/global.tfvars`, then
-   apply `global`, either locally or through the `infra-global` workflow.
+6. Delegate the zone: add the `dns_name_servers` output as NS records for
+   `dns_zone_name` at the domain's DNS host.
+7. Replace the lines between `# >>> bootstrap hint` and `# <<< bootstrap hint`
+   in `envs/global/global.tfvars` with
+   `./scripts/tf.sh bootstrap global output -raw global_tfvars_hint`, and set
+   `suffix` in every `envs/<env>/data.tfvars`. Then apply `global`, either
+   locally or through the `infra-global` workflow.
+8. Per env: `data`, set `llm-api-key` in the env Key Vault, `compute`, then
+   `deploy/platform/install.sh <env>`.
+
+`preregistered_resource_providers` may list any registered namespace; names
+the stack does not manage are ignored.
 
 If an apply fails because a resource provider is already registered, list its
 namespace in `preregistered_resource_providers`; the stack then imports it
 instead of registering it. You can also import it by hand:
 `terraform import 'azurerm_resource_provider_registration.this["Microsoft.Network"]' /subscriptions/<sub>/providers/Microsoft.Network`.
 
-## Ephemeral environments: `aca-ephemeral`
+## Environments and DNS
 
-One Consumption Container Apps environment `cae-bbm-<env_name>` (no VNet,
-logs to the shared LAW) in the bootstrap-owned RG `rg-bbm-<kind>-eus2`, with:
+| env       | AKS tier | system pool         | PG server | public zones (in the env data RG) | VNet           |
+| --------- | -------- | ------------------- | --------- | --------------------------------- | -------------- |
+| `test`    | Free     | B2als_v2, 1–3 nodes | no        | `test.<zone>`, `preview.<zone>`   | `10.10.0.0/16` |
+| `staging` | Free     | B2als_v2, 1–2 nodes | yes       | `staging.<zone>`                  | `10.20.0.0/16` |
+| `prod`    | Standard | B2als_v2 + `apps`   | yes       | `prod.<zone>`                     | `10.30.0.0/16` |
 
-- `<env_name>-api`: api (port 3001, `/health`) plus a `postgres` sidecar
-  (`<acr>/mirror/postgres:16-alpine`) on `localhost:5432`. The password is a
-  `random_password` held as an ACA secret; `DATABASE_URL` is a secret ref.
-  min = max = 1 replica because the database lives in the replica, and data
-  dies with the environment.
-- `<env_name>-web`: web (port 3000, `/healthz`). `API_INTERNAL_URL` is
-  `https://<api ingress FQDN>`. Calls between apps in one environment stay
-  inside it. Plain `http://<app>` would be redirected to HTTPS because
-  ingress has `allow_insecure_connections = false`. min replicas: 1 for
-  test, 0 for preview. max replicas: 2.
-- `<env_name>-analysis` (only with `analysis_enabled = true`): internal ingress on 8000.
-- Every app pulls from ACR as `id-bbm-aca-pull`. Everything is tagged
-  `ephemeral=true` and `expires_on=<RFC3339>`. The expiry is a `time_static`
-  timestamp plus `ttl_hours` (test 6, preview 168). It is re-stamped when
-  the image tags change, so a preview that keeps getting pushes stays alive.
+- **Bootstrap** (`dns.tf`) creates the parent zone `dns_zone_name` in
+  `rg-bbm-shared-eus2`, the child zones above, and NS delegation records for
+  them in the parent. Outputs: `dns_zone_name`, `dns_name_servers` (to set at
+  the domain's DNS host), `dns_child_zones` (env => zones).
+- **Data** (`dns.tf`) reads `dns_zone_name` from global state, looks up its
+  env zones and writes apex `@` and `*` alias A records to the ingress PIP. It
+  also creates the private zone `<env>.internal.<zone>` linked to the VNet,
+  with `postgres` CNAME → the PG FQDN when `postgres_enabled`. UAMI
+  `id-bbm-<env>-certmgr` gets DNS Zone Contributor on each env zone.
+- **`postgres_enabled = false`** (test): no PG server, no `snet-psql`
+  delegation or PG private zone, no `database-url` / `pg-admin-password`
+  secrets; `pg_fqdn` / `pg_server_name` are null. `psql_subnet_cidr` is still
+  set so `networkPolicy.postgresCidr` stays valid.
+- **Compute** federates `system:serviceaccount:cert-manager:cert-manager` to the
+  certmgr UAMI and takes `aks_sku_tier` (`Free` | `Standard`, prod sets
+  `Standard`).
 
-App names are `<env_name>-<app>` because container app names are unique per
-RG. `env_name` must match `run-<id>-<attempt>` or `pr-<n>` and be at most 23
-characters.
+`helm_values` (compute output, `values-infra.yaml`):
 
-Inputs come from `envs/<kind>/aca.tfvars` plus `TF_VAR_*` set by the workflow:
-
-| variable                         | test (`integration-azure.yml`)                       | preview (`preview.yml`)  |
-| -------------------------------- | ---------------------------------------------------- | ------------------------ |
-| `TF_VAR_subscription_id`         | `vars.AZURE_SUBSCRIPTION_ID`                         | same                     |
-| `TF_VAR_env_name`                | `run-${{ github.run_id }}-${{ github.run_attempt }}` | `pr-<n>`                 |
-| `TF_VAR_image_tag`               | `sha-<7>`                                            | `pr-<n>-sha-<7>`         |
-| `TF_VAR_web_image_tag`           | (unset, so `image_tag`)                              | `pr-<n>-sha-<7>-mocked`  |
-| `TFSTATE_RG` / `TFSTATE_ACCOUNT` | `vars.TFSTATE_RG` / `vars.TFSTATE_ACCOUNT`           | same                     |
-| `TF_STATE_KEY`                   | `test/run-<run_id>-<attempt>.tfstate`                | `preview/pr-<n>.tfstate` |
-
-`tfstate_resource_group` and `tfstate_account` tell the stack where to read
-`global.tfstate` (ACR login server, LAW ID, pull identity, suffix). The
-workflow does not set them as `TF_VAR_`s: `tf.sh` exports
-`TF_VAR_tfstate_resource_group` / `TF_VAR_tfstate_account` from `TFSTATE_RG` /
-`TFSTATE_ACCOUNT` (see above). `tfstate_resource_group` defaults to
-`rg-bbm-tfstate-eus2`; `tfstate_account` has no default, so a run without
-`TFSTATE_ACCOUNT` fails at plan time with a pointer to it.
-
-Outputs: `web_url`, `api_url` (both `https://...`), `resource_group`, `environment_name`.
-
-**Pipeline test run:**
-
-```sh
-export TF_STATE_KEY=test/run-$RUN_ID-$ATTEMPT.tfstate
-./scripts/tf.sh aca-ephemeral test init
-./scripts/tf.sh aca-ephemeral test apply -auto-approve
-WEB_URL=$(./scripts/tf.sh aca-ephemeral test output -raw web_url)
-# ... smoke / integration / e2e against $WEB_URL and api_url ...
-./scripts/tf.sh aca-ephemeral test destroy -auto-approve   # if: always()
+```yaml
+global:
+  image: { registry: <acr>.azurecr.io }
+azure: {} # tenantId, keyVaultName, *ClientId, storage*, queueName (unchanged)
+ingress:
+  host: <env>.<zone> # test: test.<zone>
+  publicIpName: pip-bbm-<env>-ingress
+  publicIpResourceGroup: rg-bbm-<env>-data-eus2
+networkPolicy:
+  postgresCidr: <snet-psql CIDR>
+dns:
+  zone: <zone>
+  envZones: [<env>.<zone>] # test: [test.<zone>, preview.<zone>]
+  internalZone: <env>.internal.<zone>
+platform:
+  subscriptionId: <subscription>
+  dnsResourceGroup: rg-bbm-<env>-data-eus2
+  certManagerClientId: <client id> # id-bbm-<env>-certmgr
 ```
 
-**Preview:** on every push to the PR, run `apply` with
-`TF_STATE_KEY=preview/pr-<n>.tfstate`. The sticky PR comment uses
-`web_url`. When the PR closes, run `destroy` with the same key.
-
-**Janitor** (`scripts/janitor.sh`, run by `infra-janitor.yml` on a schedule):
-dry run by default. `--apply` deletes container apps, then managed
-environments, in `rg-bbm-{test,preview}-eus2` that are tagged
-`ephemeral=true` and past `expires_on`. It also deletes `test/` state blobs
-older than 24 hours in `$TFSTATE_ACCOUNT`. Requires `az login`; any `az`
-listing failure (auth, throttling) fails the run.
-
-The janitor does not touch ACR. The image purge is a separate job in
-`infra-janitor.yml` that runs as `gh-bbm-global` in the reviewer-gated
-`infra-global` environment. It first delete-locks the staging/prod
-`bbm-last-deployed-tag` tags, then runs `acr purge --filter 'bbm/.*:pr-.*'
---filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged`, and fails closed if
-the protected tags cannot be locked.
+**Ephemeral namespaces** (CI runs `run-<id>-<attempt>`, PR previews `pr-<n>`)
+live on the test cluster and are not Terraform-managed. `gh-bbm-ephemeral`
+(GitHub Environments `test`, `preview`) has AKS RBAC Cluster Admin + Cluster
+User on the test compute RG, Reader on the test data RG, BBM Power Operator on
+both test RGs, read access to `test/*` state (for `helm_values`) and AcrPush.
+Terraform for the test env runs as `gh-bbm-test` (GitHub Environment
+`test-infra`, `main` only).
 
 ## Static checks (no Azure credentials needed)
 
@@ -242,8 +241,8 @@ terraform fmt -check -recursive .
 (cd modules/naming && terraform init -backend=false && terraform test)
 (cd stacks/bootstrap && terraform test)   # mock providers
 (cd stacks/global && terraform test)      # mock providers
-(cd modules/aca-app-stack && terraform init -backend=false && terraform test)
-(cd stacks/aca-ephemeral && terraform init -backend=false && terraform test)
+(cd stacks/data && terraform test)        # mock providers + overridden remote state
+(cd stacks/compute && terraform test)     # mock providers + overridden remote state
 tflint --init && tflint --recursive --config "$(pwd)/.tflint.hcl"
 shellcheck scripts/*.sh
 ```

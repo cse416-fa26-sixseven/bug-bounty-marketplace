@@ -7,6 +7,7 @@ locals {
   github_environments = {
     "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = false }
     "preview"           = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = false }
+    "test-infra"        = { identity = "gh-bbm-test", reviewers = false, main_only = true }
     "infra-global"      = { identity = "gh-bbm-global", reviewers = true, main_only = true }
     "contracts-sepolia" = { identity = "gh-bbm-global", reviewers = true, main_only = false }
     "staging"           = { identity = "gh-bbm-staging", reviewers = false, main_only = true }

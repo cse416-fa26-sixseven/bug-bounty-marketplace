@@ -4,12 +4,12 @@ variable "subscription_id" {
 }
 
 variable "env" {
-  description = "Persistent environment: staging or prod."
+  description = "Environment: test, staging or prod."
   type        = string
 
   validation {
-    condition     = contains(["staging", "prod"], var.env)
-    error_message = "env must be staging or prod."
+    condition     = contains(["test", "staging", "prod"], var.env)
+    error_message = "env must be test, staging or prod."
   }
 }
 
@@ -30,18 +30,41 @@ variable "suffix" {
   type        = string
 }
 
+variable "tfstate_resource_group" {
+  description = "Resource group of the Terraform state account (for terraform_remote_state). tf.sh sets TF_VAR_tfstate_resource_group from TFSTATE_RG."
+  type        = string
+  default     = "rg-bbm-tfstate-eus2"
+}
+
+variable "tfstate_account" {
+  description = "Terraform state storage account (stbbmtfstate<sfx>) holding global.tfstate. tf.sh sets TF_VAR_tfstate_account from TFSTATE_ACCOUNT."
+  type        = string
+}
+
+variable "tfstate_container" {
+  description = "Blob container holding Terraform state."
+  type        = string
+  default     = "tfstate"
+}
+
 variable "vnet_cidr" {
-  description = "VNet address space (staging 10.20.0.0/16, prod 10.30.0.0/16)."
+  description = "VNet address space (test 10.10.0.0/16, staging 10.20.0.0/16, prod 10.30.0.0/16)."
   type        = string
 }
 
 variable "subnet_cidrs" {
-  description = "Subnet CIDRs inside vnet_cidr: aks (/20 for nodes), psql (/24, delegated to PostgreSQL), pe (/24, private endpoints)."
+  description = "Subnet CIDRs inside vnet_cidr: aks (/20 for nodes), psql (/24, delegated to PostgreSQL when postgres_enabled), pe (/24, private endpoints)."
   type = object({
     aks  = string
     psql = string
     pe   = string
   })
+}
+
+variable "postgres_enabled" {
+  description = "Create the PostgreSQL Flexible Server (and its database-url / pg-admin-password secrets). False for test, whose namespaces run in-cluster Postgres."
+  type        = bool
+  default     = true
 }
 
 variable "postgres_sku_name" {

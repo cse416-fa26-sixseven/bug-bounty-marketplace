@@ -1,4 +1,4 @@
-# Disposable compute layer for staging/prod: the AKS cluster, its node pools,
+# Disposable compute layer for test/staging/prod: the AKS cluster, its node pools,
 # kubelet AcrPull and the workload-identity federated credentials. Everything
 # durable lives in stacks/data (read through remote state), so `down`
 # (terraform destroy of this stack) and `up` (apply) lose no data, IP or DNS.
@@ -56,6 +56,7 @@ module "aks" {
   node_resource_group_name = module.naming.env.aks_node_resource_group
   location                 = var.location
   kubernetes_version       = var.kubernetes_version
+  sku_tier                 = var.aks_sku_tier
   tenant_id                = local.d.tenant_id
   cluster_identity_id      = local.d.uami.aks.id
   # Not in modules/naming (yet): kubelet identity is compute-layer only.
@@ -120,12 +121,20 @@ module "workload_identity" {
         "bbm-sandbox-bbm-sandbox-runner" = "system:serviceaccount:bbm-sandbox:bbm-sandbox-runner"
       }
     }
+    # cert-manager DNS-01 solver (deploy/platform), DNS Zone Contributor on the env zones.
+    certmgr = {
+      user_assigned_identity_id = local.d.uami.certmgr.id
+      credentials = {
+        "cert-manager-cert-manager" = "system:serviceaccount:cert-manager:cert-manager"
+      }
+    }
   }
 }
 
 locals {
-  # Consumed by deploy.yml as values-infra.yaml for deploy/helm/bbm. Keys are
-  # pinned in docs/adr/0001-azure-environment-topology.md; the chart runs with
+  # Consumed by deploy.yml as values-infra.yaml for deploy/helm/bbm (and by
+  # deploy/helm/bbm-platform: dns, platform, ingress.publicIp*). Keys are pinned
+  # in docs/adr/0001 and 0002; the app chart runs with
   # global.requireInfraValues=true and fails on any missing key.
   helm_values = {
     global = {
@@ -144,13 +153,25 @@ locals {
       storageBlobEndpoint = local.d.storage_blob_endpoint
       queueName           = local.d.queue_name
     }
+    # staging/prod: <env>.<zone>; test: test.<zone> (ephemeral workflows
+    # override it per namespace).
     ingress = {
-      host                  = local.d.ingress_fqdn
+      host                  = local.d.dns_zone_names[0]
       publicIpName          = local.d.ingress_pip_name
       publicIpResourceGroup = local.d.resource_group_name
     }
     networkPolicy = {
       postgresCidr = local.d.psql_subnet_cidr
+    }
+    dns = {
+      zone         = local.g.dns_zone_name
+      envZones     = local.d.dns_zone_names
+      internalZone = local.d.internal_dns_zone_name
+    }
+    platform = {
+      subscriptionId      = var.subscription_id
+      dnsResourceGroup    = local.d.resource_group_name
+      certManagerClientId = local.d.uami.certmgr.client_id
     }
   }
 }

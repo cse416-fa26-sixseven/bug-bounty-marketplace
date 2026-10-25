@@ -10,9 +10,9 @@ locals {
     acr_push                    = "8311e382-0749-4cb8-b61a-304f252e45ec"
     aks_rbac_cluster_admin      = "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b"
     aks_rbac_writer             = "a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb"
+    dns_zone_contributor        = "befefa01-2a29-4197-83a8-272ff33ce314"
     kv_secrets_officer          = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
     kv_secrets_user             = "4633458b-17de-408a-b874-0445c86b69e6"
-    log_analytics_contributor   = "92aaf0da-9dab-42b6-94a3-d43ce8d16293"
     managed_identity_operator   = "f1a07417-d97a-45cb-824c-7a7467783830"
     monitoring_metrics_pub      = "3913510d-42f4-4e42-8a64-420c390055eb"
     network_contributor         = "4d97b98b-1d4f-4787-a291-c67834d212e7"
@@ -25,20 +25,20 @@ locals {
     storage_queue_msg_sender    = "c6a89b2d-59bc-44d0-9896-0f6e12d7b80a"
   }
 
-  # Roles the env (staging/prod) identities may assign inside their own RGs:
-  # workload identities -> KV/storage/queue, AKS identity -> network/DNS/MI.
+  # Roles the env (test/staging/prod) identities may assign inside their own
+  # RGs: workload identities -> KV/storage/queue, AKS identity -> network/DNS/MI,
+  # cert-manager identity -> DNS Zone Contributor on the env's public zones.
   env_delegable_roles = [for k in [
-    "acr_pull", "aks_rbac_cluster_admin", "aks_rbac_writer", "kv_secrets_officer", "kv_secrets_user",
+    "acr_pull", "aks_rbac_cluster_admin", "aks_rbac_writer", "dns_zone_contributor", "kv_secrets_officer", "kv_secrets_user",
     "managed_identity_operator", "monitoring_metrics_pub", "network_contributor", "private_dns_zone_contrib",
     "storage_blob_data_contrib", "storage_blob_data_reader", "storage_queue_data_contrib",
     "storage_queue_data_reader", "storage_queue_msg_processor", "storage_queue_msg_sender",
   ] : local.role_guids[k]]
 
-  # Roles the global identity may assign inside the shared RG (ACA pull UAMI
-  # -> AcrPull, ephemeral CI -> AcrPush / MI Operator / LAW, KV readers).
+  # Roles the global identity may assign inside the shared RG (ephemeral CI and
+  # build identities -> AcrPush, shared KV officers/readers).
   global_delegable_roles = [for k in [
-    "acr_pull", "acr_push", "managed_identity_operator", "log_analytics_contributor",
-    "kv_secrets_officer", "kv_secrets_user",
+    "acr_push", "kv_secrets_officer", "kv_secrets_user",
   ] : local.role_guids[k]]
 
   # Env identities may only grant AcrPull (kubelet identity) in the shared RG.
@@ -72,12 +72,14 @@ locals {
   blob_path_attr = "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path]"
 
   state_access = {
-    ephemeral = { write = ["test/", "preview/"], read_only = ["global.tfstate"] }
+    # Ephemeral namespaces only read helm_values from the test env's state.
+    ephemeral = { write = [], read_only = ["global.tfstate", "test/"] }
     global    = { write = ["global.tfstate"], read_only = [] }
+    test      = { write = ["test/"], read_only = ["global.tfstate"] }
     staging   = { write = ["staging/"], read_only = ["global.tfstate"] }
     prod      = { write = ["prod/"], read_only = ["global.tfstate"] }
     # PR/main plans never see prod: prod plans run in the `prod` environment as gh-bbm-prod.
-    plan = { write = [], read_only = ["global.tfstate", "staging/", "test/", "preview/"] }
+    plan = { write = [], read_only = ["global.tfstate", "staging/", "test/"] }
   }
 
   state_path_match = { for k, a in local.state_access : k => {
@@ -118,12 +120,10 @@ locals {
   } }
 
   rg_ids = {
-    shared  = azurerm_resource_group.shared.id
-    test    = azurerm_resource_group.ephemeral["test"].id
-    preview = azurerm_resource_group.ephemeral["preview"].id
+    shared = azurerm_resource_group.shared.id
   }
 
-  # Grants shared by gh-bbm-staging and gh-bbm-prod, parameterised by env.
+  # Grants shared by gh-bbm-test, gh-bbm-staging and gh-bbm-prod, parameterised by env.
   env_identity_roles = { for env in local.persistent_envs : env => [
     { key = "data-contributor", scope = azurerm_resource_group.env_data[env].id, role_definition_name = "Contributor" },
     { key = "compute-contributor", scope = azurerm_resource_group.env_compute[env].id, role_definition_name = "Contributor" },
@@ -221,7 +221,7 @@ locals {
   # Kept as a local (not inline in the module call) so tests can assert on it.
   oidc_identities = {
     # Read-only plan identity for PRs and main. It only READS state (global,
-    # staging, test, preview; never prod or bootstrap), so plan jobs must run
+    # staging, test; never prod or bootstrap), so plan jobs must run
     # with -lock=false. No Key Vault data-plane access: stacks that refresh
     # secret values (data) are planned by their env identity instead.
     # Accepted trade-off: staging/ state holds TF-generated staging secrets
@@ -235,14 +235,18 @@ locals {
       ]
     }
 
-    # test + preview ACA stacks. AcrPush, Managed Identity Operator on
-    # id-bbm-aca-pull and LAW access are granted by stacks/global (those
-    # resources do not exist yet at bootstrap time).
+    # CI-run / PR-preview namespaces on the test cluster (no Terraform): helm
+    # installs into its own namespaces, resumes a paused test env, reads
+    # helm_values from test/ state. AcrPush is granted by stacks/global (the
+    # registry does not exist yet at bootstrap time).
     "gh-bbm-ephemeral" = {
       environments = ["test", "preview"]
       role_assignments = [
-        { key = "test-contributor", scope = local.rg_ids.test, role_definition_name = "Contributor" },
-        { key = "preview-contributor", scope = local.rg_ids.preview, role_definition_name = "Contributor" },
+        { key = "test-compute-aks-admin", scope = azurerm_resource_group.env_compute["test"].id, role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin" },
+        { key = "test-compute-aks-user", scope = azurerm_resource_group.env_compute["test"].id, role_definition_name = "Azure Kubernetes Service Cluster User Role" },
+        { key = "test-data-reader", scope = azurerm_resource_group.env_data["test"].id, role_definition_name = "Reader" },
+        { key = "test-data-power-operator", scope = azurerm_resource_group.env_data["test"].id, role_definition_id = azurerm_role_definition.power_operator.role_definition_resource_id },
+        { key = "test-compute-power-operator", scope = azurerm_resource_group.env_compute["test"].id, role_definition_id = azurerm_role_definition.power_operator.role_definition_resource_id },
         { key = "shared-reader", scope = local.rg_ids.shared, role_definition_name = "Reader" },
         local.state_role.ephemeral,
       ]
@@ -266,6 +270,12 @@ locals {
         { key = "sub-cost-mgmt", scope = local.subscription_scope, role_definition_name = "Cost Management Contributor" },
         local.state_role.global,
       ]
+    }
+
+    # test env infra (terraform.yml, env-power.yml, platform installs).
+    "gh-bbm-test" = {
+      environments     = ["test-infra"]
+      role_assignments = local.env_identity_roles.test
     }
 
     "gh-bbm-staging" = {

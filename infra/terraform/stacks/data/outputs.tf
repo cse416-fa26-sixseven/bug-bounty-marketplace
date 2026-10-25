@@ -26,14 +26,19 @@ output "key_vault_id" {
   value       = module.keyvault.id
 }
 
+output "postgres_enabled" {
+  description = "Whether this env has a PostgreSQL Flexible Server (false for test)."
+  value       = var.postgres_enabled
+}
+
 output "pg_fqdn" {
-  description = "PostgreSQL server FQDN (private DNS)."
-  value       = module.postgres.fqdn
+  description = "PostgreSQL server FQDN (private DNS); null when postgres_enabled is false."
+  value       = one(module.postgres[*].fqdn)
 }
 
 output "pg_server_name" {
-  description = "PostgreSQL server name (for az postgres flexible-server stop/start)."
-  value       = module.postgres.name
+  description = "PostgreSQL server name (for az postgres flexible-server stop/start); null when postgres_enabled is false."
+  value       = one(module.postgres[*].name)
 }
 
 output "storage_account_name" {
@@ -72,7 +77,7 @@ output "subnet_aks_id" {
 }
 
 output "psql_subnet_cidr" {
-  description = "PostgreSQL subnet CIDR (Helm networkPolicy.postgresCidr)."
+  description = "PostgreSQL subnet CIDR (Helm networkPolicy.postgresCidr). Set even without a PG server so the policy stays valid."
   value       = module.network.subnet_cidrs.psql
 }
 
@@ -81,8 +86,18 @@ output "law_id" {
   value       = module.law.id
 }
 
+output "dns_zone_names" {
+  description = "Public env zones served by this env's ingress (staging: [staging.<zone>]; test: [test.<zone>, preview.<zone>])."
+  value       = local.dns.env_zones
+}
+
+output "internal_dns_zone_name" {
+  description = "Private DNS zone <env>.internal.<zone> linked to the env VNet."
+  value       = azurerm_private_dns_zone.internal.name
+}
+
 output "uami" {
-  description = "Env managed identities keyed by role (aks, api, worker, sandbox): { id, client_id, principal_id }."
+  description = "Env managed identities keyed by role (aks, api, worker, sandbox, certmgr): { id, client_id, principal_id }."
   value = {
     for k, v in module.identity.identities : k => {
       id           = v.id
