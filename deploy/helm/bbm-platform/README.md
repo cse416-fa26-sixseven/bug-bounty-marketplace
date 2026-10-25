@@ -40,11 +40,11 @@ dns:
   envZones: [<env>.<zone>]          # test: [test.<zone>, preview.<zone>]
 platform:
   subscriptionId: <guid>
-  dnsResourceGroup: rg-bbm-<env>-data-ncus
+  dnsResourceGroup: rg-bbm-<env>-data-<abbr>
   certManagerClientId: <guid>       # id-bbm-<env>-certmgr
 ingress:
   publicIpName: pip-bbm-<env>-ingress
-  publicIpResourceGroup: rg-bbm-<env>-data-ncus
+  publicIpResourceGroup: rg-bbm-<env>-data-<abbr>
 ```
 
 All other keys in the file (`global`, `azure`, `ingress.host`, ...) are
@@ -130,12 +130,12 @@ kubectl get httproute -A                              # per-route Accepted / Res
 
 - No GatewayClass `approuting-istio`: the Gateway API settings are not on
   the cluster. `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr>
-  --query ingressProfile` (`<abbr>`: the env's region code, `ncus` / `frc` / `cac`) should show `gatewayApi.installation: Standard` and
+  --query ingressProfile` (`<abbr>`: the env's region code, test `cac` / staging `dke` / prod `ncus`) should show `gatewayApi.installation: Standard` and
   `webAppRouting.gatewayApiImplementations.appRoutingIstio.mode: Enabled`;
   re-apply the compute stack.
 - Gateway not `Programmed`, Service `EXTERNAL-IP` pending, events
   `AuthorizationFailed` / `PublicIPNotFound`: the cluster identity lacks
-  Network Contributor on `rg-bbm-<env>-data-ncus`, or the annotations name the
+  Network Contributor on `rg-bbm-<env>-data-<abbr>`, or the annotations name the
   wrong PIP / resource group.
 - Listener `ResolvedRefs=False` (`InvalidCertificateRef`): Secret
   `bbm-wildcard-tls` does not exist yet (Certificate not issued).

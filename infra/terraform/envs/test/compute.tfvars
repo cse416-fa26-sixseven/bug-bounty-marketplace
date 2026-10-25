@@ -3,8 +3,8 @@
 # Do not set tfstate_* here: -var-file values would override the TF_VAR_* that CI exports.
 subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
 env             = "test"
-location        = "northcentralus" # this env's region: infra/up.sh --env-location test=<region>
-location_abbr   = "ncus"
+location        = "canadacentral" # this env's region: infra/up.sh --env-location test=<region>
+location_abbr   = "cac"
 
 # Minor version only (patch channel keeps the patch current). Check GA versions
 # before the first apply: az aks get-versions -l <location> -o table (infra/up.sh checks it)
@@ -21,7 +21,7 @@ sandbox_pool_enabled = false
 container_insights   = false
 
 # Azure for Students: 6 vCPUs per region, so each env has its own region and
-# one Standard_B4as_v2 node (4 vCPU / 16 GiB): 4 of 6 vCPU per region. Two
+# one Standard_B4ps_v2 node (arm64, 4 vCPU / 16 GiB): 4 of 6 vCPU per region. Two
 # vCPUs (B2als_v2) could not fit the AKS system pods plus the app routing
 # Gateway API's istiod (2 x 500m / 2 GiB, fixed by Azure); ADR 0002 section 8.
 # A 4-vCPU surge node does not fit in the remaining 2 (and max unavailable

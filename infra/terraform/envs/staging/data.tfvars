@@ -1,8 +1,8 @@
 # stacks/data for staging — persistent data layer (VNet, PG, KV, storage, UAMIs, PIP, LAW).
 subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
 env             = "staging"
-location        = "francecentral" # this env's region: infra/up.sh --env-location staging=<region>
-location_abbr   = "frc"
+location        = "denmarkeast" # this env's region: infra/up.sh --env-location staging=<region>
+location_abbr   = "dke"
 suffix          = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.20.0.0/16"
@@ -17,7 +17,7 @@ postgres_storage_mb            = 32768
 postgres_backup_retention_days = 7
 
 law_daily_quota_gb = 0.5
-ingress_pip_zones  = ["1", "2", "3"] # infra/up.sh: ["1", "2", "3"] if francecentral has availability zones, else []
+ingress_pip_zones  = ["1", "2", "3"] # set by infra/up.sh from the env region's availability zones
 
 # Key Vault Secrets Officer on the env KV (mirrors envs/global/global.tfvars).
 # gh-bbm-staging already has Secrets Officer on the data RG via bootstrap.

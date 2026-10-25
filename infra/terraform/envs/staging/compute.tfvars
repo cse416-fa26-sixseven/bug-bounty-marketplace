@@ -3,8 +3,8 @@
 # Do not set tfstate_* here: -var-file values would override the TF_VAR_* that CI exports.
 subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
 env             = "staging"
-location        = "francecentral" # this env's region: infra/up.sh --env-location staging=<region>
-location_abbr   = "frc"
+location        = "denmarkeast" # this env's region: infra/up.sh --env-location staging=<region>
+location_abbr   = "dke"
 
 # Minor version only (patch channel keeps the patch current). Check GA versions
 # before the first apply: az aks get-versions -l <location> -o table (infra/up.sh checks it)

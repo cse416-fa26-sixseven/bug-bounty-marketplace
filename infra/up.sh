@@ -15,8 +15,8 @@
 #   --location-abbr short code of the home region (default: from the region
 #                   map in modules/naming/main.tf; required for regions not in it)
 #   --env-location  region of one env (repeatable; env test, staging, prod or
-#                   all), e.g. --env-location staging=francecentral
-#                   --env-location prod=canadacentral; append :<code> for a
+#                   all), e.g. --env-location staging=denmarkeast
+#                   --env-location prod=northcentralus; append :<code> for a
 #                   region outside the naming map. Default: location in
 #                   envs/<env>/data.tfvars. Written into that env's data and
 #                   compute tfvars and the env_locations map of

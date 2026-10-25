@@ -16,9 +16,9 @@ location_abbr = "ncus"
 # Env regions (same as bootstrap.tfvars; infra/up.sh copies them from
 # envs/<env>/data.tfvars). Used to find the env RGs for their budgets.
 env_locations = {
-  test    = { location = "northcentralus", location_abbr = "ncus" }
-  staging = { location = "francecentral", location_abbr = "frc" }
-  prod    = { location = "canadacentral", location_abbr = "cac" }
+  test    = { location = "canadacentral", location_abbr = "cac" }
+  staging = { location = "denmarkeast", location_abbr = "dke" }
+  prod    = { location = "northcentralus", location_abbr = "ncus" }
 }
 
 alert_emails       = ["alerts@bug-bounty.cse416-group.pranavjothivel.com"]

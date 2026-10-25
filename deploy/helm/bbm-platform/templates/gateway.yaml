@@ -5,7 +5,7 @@ Gateway the add-on's istiod provisions, in this namespace, an Envoy
 Deployment, a LoadBalancer Service, an HPA and a PDB named
 <gateway>-approuting-istio. spec.infrastructure.annotations are copied onto
 that Service, which is how it binds the static public IP the data stack owns
-(pip-bbm-<env>-ingress in rg-bbm-<env>-data-ncus). The AKS cluster identity
+(pip-bbm-<env>-ingress in rg-bbm-<env>-data-<abbr>). The AKS cluster identity
 has Network Contributor on that resource group (stacks/data identity.tf).
 
 Listeners:

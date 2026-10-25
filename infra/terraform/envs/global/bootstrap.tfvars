@@ -14,9 +14,9 @@ location_abbr = "ncus" # modules/naming local.location_abbrs
 # from envs/<env>/data.tfvars (the source of truth; --env-location <env>=<region>
 # rewrites it) here and into global.tfvars. Keep one line per env.
 env_locations = {
-  test    = { location = "northcentralus", location_abbr = "ncus" }
-  staging = { location = "francecentral", location_abbr = "frc" }
-  prod    = { location = "canadacentral", location_abbr = "cac" }
+  test    = { location = "canadacentral", location_abbr = "cac" }
+  staging = { location = "denmarkeast", location_abbr = "dke" }
+  prod    = { location = "northcentralus", location_abbr = "ncus" }
 }
 
 github_repo = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs it with gh repo view
