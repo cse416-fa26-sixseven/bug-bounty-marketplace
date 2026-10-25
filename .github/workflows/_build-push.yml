@@ -2,14 +2,18 @@ name: Build and push images
 
 # ---------------------------------------------------------------------
 # Reusable workflow: build the service images and push them to the
-# shared ACR as <acr>.azurecr.io/bbm/<svc>:<tag>. Callers pass the
-# GitHub Environment whose OIDC identity may push (test/preview →
-# gh-bbm-ephemeral, which holds AcrPush).
+# shared ACR as <acr>.azurecr.io/<prefix>/<svc>:<tag>. Callers pass the
+# GitHub Environment whose OIDC identity may push, and the matching
+# repository prefix:
+#   test    (main only) → gh-bbm-ephemeral, Repository Writer on the
+#           registry → bbm/<svc> (the sha-* tags staging/prod deploy)
+#   preview (PR branches) → gh-bbm-preview, Repository Writer ABAC-scoped
+#           to bbm-preview/* → bbm-preview/<svc> (it cannot push bbm/*)
 #
 # Layer cache: the same GHA cache scopes as ci.yml's containers job
 # (api/web/analysis/contracts), so a main push reuses the layers CI
-# just built, plus a registry cache (bbm/<svc>:buildcache) that survives
-# GHA cache eviction. Images carry max provenance and an SBOM.
+# just built, plus a registry cache (<prefix>/<svc>:buildcache) that
+# survives GHA cache eviction. Images carry max provenance and an SBOM.
 #
 # The caller job must grant `id-token: write` and `contents: read`.
 # Skips cleanly (every job skipped) while vars.ACR_NAME is unset.
@@ -36,10 +40,18 @@ on:
         description: GitHub Environment holding the AZURE_CLIENT_ID allowed to push.
         required: true
         type: string
+      repository-prefix:
+        description: ACR repository namespace (bbm for environment test, bbm-preview for preview).
+        required: false
+        type: string
+        default: bbm
     outputs:
       registry:
         description: Registry login server (<acr>.azurecr.io).
         value: ${{ jobs.plan.outputs.registry }}
+      repository-prefix:
+        description: Repository namespace the images were pushed under (<registry>/<prefix>/<svc>).
+        value: ${{ jobs.plan.outputs.prefix }}
       tag:
         description: The tag that was pushed (mocked web is <tag>-mocked).
         value: ${{ jobs.plan.outputs.tag }}
@@ -59,6 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       registry: ${{ steps.plan.outputs.registry }}
+      prefix: ${{ steps.plan.outputs.prefix }}
       tag: ${{ steps.plan.outputs.tag }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
@@ -69,6 +82,8 @@ jobs:
           TAG: ${{ inputs.tag }}
           SERVICES: ${{ inputs.services }}
           WEB_MOCKED: ${{ inputs.web-mocked }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          PREFIX: ${{ inputs.repository-prefix }}
         run: |
           set -euo pipefail
           # OCI tag grammar; also keeps the value safe to interpolate below.
@@ -76,6 +91,12 @@ jobs:
             echo "::error::invalid image tag '$TAG'"
             exit 1
           fi
+          # The registry enforces this too (ABAC on gh-bbm-preview); failing
+          # here gives a clear message instead of a 403 on push.
+          case "$ENVIRONMENT/$PREFIX" in
+            test/bbm | preview/bbm-preview) ;;
+            *) echo "::error::environment '$ENVIRONMENT' cannot push to repository prefix '$PREFIX' (test → bbm, preview → bbm-preview)"; exit 1 ;;
+          esac
           matrix=$(jq -cn --argjson services "$SERVICES" --arg tag "$TAG" --arg mocked "$WEB_MOCKED" '
             def spec:
               { api:       { context: ".",                file: "apps/api/Dockerfile" },
@@ -93,6 +114,7 @@ jobs:
           {
             echo "matrix=$matrix"
             echo "registry=${ACR_NAME}.azurecr.io"
+            echo "prefix=$PREFIX"
             echo "tag=$TAG"
           } >> "$GITHUB_OUTPUT"
           echo "$matrix" | jq .
@@ -113,7 +135,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      IMAGE: ${{ needs.plan.outputs.registry }}/bbm/${{ matrix.service }}
+      IMAGE: ${{ needs.plan.outputs.registry }}/${{ needs.plan.outputs.prefix }}/${{ matrix.service }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

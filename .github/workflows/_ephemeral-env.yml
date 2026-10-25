@@ -8,14 +8,19 @@ name: Ephemeral namespace
 # the zone's wildcard record and the platform's wildcard certificate.
 #
 #   deploy  ensure the test cluster runs (auto-resume when paused, fail
-#           when down), read helm_values from test/compute.tfstate, install
-#           the platform if missing, create + label + annotate the
-#           namespace, helm upgrade --install release `bbm`, wait for https
+#           when down), read helm_values from test/compute.tfstate, ensure
+#           the platform (environment `test`: install/upgrade it every run;
+#           `preview`: only check it, fail when missing or outdated), create
+#           + label + annotate the namespace, helm upgrade --install release
+#           `bbm`, wait for https
 #   delete  helm uninstall + delete the namespace; skipped green when the
 #           cluster is not running (infra-janitor.yml deletes it after
 #           bbm.io/expires-on once the cluster runs again)
 #
-# Runs in GitHub Environment `test` or `preview` (both gh-bbm-ephemeral).
+# Runs in GitHub Environment `test` (main only, gh-bbm-ephemeral: may push
+# bbm/* and manage the platform) or `preview` (any PR branch, gh-bbm-preview:
+# may push only bbm-preview/* and never installs or upgrades the platform,
+# which is cluster-wide and shared by every namespace).
 # The caller job must grant `id-token: write` and `contents: read`.
 # ---------------------------------------------------------------------
 
@@ -50,6 +55,12 @@ on:
         description: Optional web.image.tag override (preview's mocked web).
         type: string
         default: ''
+      image_repository_prefix:
+        description: >-
+          ACR repository namespace of the api/web images (bbm for environment
+          test, bbm-preview for preview), i.e. <prefix>/api and <prefix>/web.
+        type: string
+        default: bbm
     outputs:
       url:
         description: https://<host> (deploy only).
@@ -87,6 +98,8 @@ jobs:
       NS: ${{ inputs.namespace }}
       KIND: ${{ inputs.kind }}
       TTL_HOURS: ${{ inputs.ttl_hours }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      IMAGE_PREFIX: ${{ inputs.image_repository_prefix }}
       ACR_NAME: ${{ vars.ACR_NAME }}
       TFSTATE_RG: ${{ vars.TFSTATE_RG }}
       TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
@@ -99,11 +112,15 @@ jobs:
       - name: Check inputs and configuration
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
           case "$ACTION" in deploy | delete) ;; *) echo "::error::action must be deploy or delete"; exit 1 ;; esac
           case "$KIND" in test | preview) ;; *) echo "::error::kind must be test or preview"; exit 1 ;; esac
+          # Each environment's identity can only use its own repositories.
+          case "$ENVIRONMENT/$IMAGE_PREFIX" in
+            test/bbm | preview/bbm-preview) ;;
+            *) echo "::error::environment '$ENVIRONMENT' must use image_repository_prefix $([[ "$ENVIRONMENT" == preview ]] && echo bbm-preview || echo bbm) (got '$IMAGE_PREFIX')"; exit 1 ;;
+          esac
           if [[ ! "$NS" =~ ^(run-[0-9]+-[0-9]+|pr-[0-9]+)$ ]]; then
             echo "::error::namespace must be run-<id>-<attempt> or pr-<n> (got '$NS')"
             exit 1
@@ -208,22 +225,43 @@ jobs:
           kubectl get nodes -o wide
 
       # cert-manager + bbm-platform (Gateway bbm, wildcard cert).
-      # install.sh is idempotent; run it only when the release is missing
-      # or not deployed, so normal runs don't touch cluster-wide objects.
+      # environment `test` (main only): always run install.sh. It is
+      # idempotent, so a merged platform change reaches the test cluster on
+      # the next main run, as deploy.yml does for staging/prod.
+      # environment `preview` (any PR branch): never install or upgrade the
+      # cluster-wide platform; only check that the release is deployed at the
+      # revision this checkout pins (install.sh --print-rev), and fail otherwise.
       - name: Ensure platform
         if: inputs.action == 'deploy'
         run: |
           set -euo pipefail
-          status=$(helm status bbm-platform -n bbm-platform -o json 2>/dev/null | jq -r '.info.status' || true)
-          if [[ "$status" == "deployed" ]]; then
-            echo "bbm-platform is deployed"
-            # After a resume the Gateway's Envoy pods may still be rescheduling.
-            kubectl -n bbm-platform wait gateways.gateway.networking.k8s.io/bbm \
-              --for=condition=Programmed --timeout=10m
-          else
-            echo "bbm-platform is '${status:-missing}': installing the platform"
+          if [[ "$ENVIRONMENT" == test ]]; then
             deploy/platform/install.sh test --values "$VALUES_INFRA" --wait
+            exit 0
           fi
+          missing() {
+            echo "::error::bbm-platform on $CLUSTER is $1. Previews never install the platform: it is installed by main CI (integration-azure.yml) or by env-power.yml env=test action=up. Re-run this preview after one of them succeeds."
+            exit 1
+          }
+          # A main run may be upgrading the platform right now.
+          status=""
+          for _ in $(seq 1 40); do
+            status=$(helm status bbm-platform -n bbm-platform -o json 2>/dev/null | jq -r '.info.status' || true)
+            [[ "$status" == pending-* ]] || break
+            echo "bbm-platform is $status; waiting for the running install/upgrade"
+            sleep 15
+          done
+          [[ "$status" == deployed ]] || missing "'${status:-missing}'"
+          # install.sh stamps bbm.io/platform-rev (hash of cert-manager version
+          # + values and the bbm-platform chart) after every successful install.
+          want=$(deploy/platform/install.sh --print-rev)
+          have=$(kubectl get namespace bbm-platform -o jsonpath='{.metadata.annotations.bbm\.io/platform-rev}' 2>/dev/null || true)
+          echo "platform rev: deployed ${have:-none}, this checkout $want"
+          [[ "$have" == "$want" ]] ||
+            missing "outdated (bbm.io/platform-rev ${have:-unset}, this checkout needs $want; a PR that changes deploy/platform or deploy/helm/bbm-platform cannot be previewed until it is merged)"
+          # After a resume the Gateway's Envoy pods may still be rescheduling.
+          kubectl -n bbm-platform wait gateways.gateway.networking.k8s.io/bbm \
+            --for=condition=Programmed --timeout=10m
 
       - name: Namespace
         id: namespace
@@ -255,7 +293,8 @@ jobs:
           echo "::add-mask::$pw"
           secret_values="$RUNNER_TEMP/values-db.yaml"
           (umask 077 && printf 'postgres:\n  inCluster:\n    enabled: true\n    password: "%s"\n' "$pw" > "$secret_values")
-          extra=()
+          [[ "$IMAGE_PREFIX" =~ ^bbm(-preview)?$ ]] || { echo "::error::invalid image_repository_prefix"; exit 1; }
+          extra=(--set "api.image.repository=$IMAGE_PREFIX/api" --set "web.image.repository=$IMAGE_PREFIX/web")
           if [[ -n "$WEB_TAG" ]]; then
             [[ "$WEB_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "::error::invalid web_image_tag"; exit 1; }
             extra+=(--set "web.image.tag=$WEB_TAG")

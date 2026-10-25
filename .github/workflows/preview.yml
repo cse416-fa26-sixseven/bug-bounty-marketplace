@@ -10,6 +10,10 @@ name: Preview
 #   closed (merged or not)           -> delete the namespace, sticky
 #                                       comment "deleted"
 #
+# Images go to bbm-preview/{api,web} (GitHub Environment `preview`,
+# identity gh-bbm-preview, which may push only bbm-preview/*), never to the
+# bbm/* repositories staging/prod deploy from.
+#
 # The web image is the MOCKED variant (`<tag>-mocked`, built with
 # NEXT_PUBLIC_API_MOCKING=enabled): the real API only serves
 # /api/contracts today, so a preview wired to the real API would show a
@@ -17,9 +21,10 @@ name: Preview
 # same host still reaches the real api and the smoke suite's create+read
 # round-trip (BBM_SMOKE_WRITE=1) exercises api + in-cluster Postgres.
 #
-# ACR tags `pr-<n>-sha-*` are NOT deleted here; infra-janitor.yml purges
-# old `pr-*` tags and deletes any namespace past bbm.io/expires-on if
-# teardown is missed (or the cluster was paused when the PR closed).
+# ACR tags `bbm-preview/*:pr-<n>-sha-*` are NOT deleted here;
+# infra-janitor.yml purges old ones, and deletes any namespace past
+# bbm.io/expires-on if teardown is missed (or the cluster was paused when
+# the PR closed).
 # ---------------------------------------------------------------------
 
 on:
@@ -100,7 +105,7 @@ jobs:
               - '!**/*.md'
 
   # ---------------------------------------------------------------------
-  # Build and push api + web tagged `pr-<n>-sha-<7>`, plus the mocked
+  # Build and push bbm-preview/{api,web} tagged `pr-<n>-sha-<7>`, plus the mocked
   # web variant `pr-<n>-sha-<7>-mocked` (the one actually deployed; the
   # reusable workflow only builds the mocked variant alongside web).
   # analysis/contracts are skipped: previews run without analysis and
@@ -120,6 +125,7 @@ jobs:
       services: '["api","web"]'
       web-mocked: true
       environment: preview
+      repository-prefix: bbm-preview
 
   # ---------------------------------------------------------------------
   # helm upgrade --install in pr-<n>. Re-runs on every push: the release
@@ -142,6 +148,7 @@ jobs:
       ttl_hours: 168
       image_tag: ${{ needs.gate.outputs.tag }}
       web_image_tag: ${{ needs.gate.outputs.web_tag }}
+      image_repository_prefix: bbm-preview
 
   # ---------------------------------------------------------------------
   # Smoke suite against https://pr-<n>.preview.<zone>. No Azure access.
@@ -247,7 +254,7 @@ jobs:
               echo '| | |'
               echo '|---|---|'
               echo "| App (mocked UI, \`/api\`, \`/health\`) | $URL |"
-              echo "| Images | \`$TAG\` (web \`$WEB_TAG\`) |"
+              echo "| Images | \`bbm-preview/{api,web}:$TAG\` (web \`$WEB_TAG\`) |"
               echo "| Expires | $EXPIRES (extended on every push) |"
               echo
               if [[ "$SMOKE" == "success" ]]; then

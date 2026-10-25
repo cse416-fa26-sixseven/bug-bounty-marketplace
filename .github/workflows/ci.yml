@@ -117,10 +117,13 @@ jobs:
               - 'workers/**'
               - 'contracts/**'
 
-            # Terraform (separate toolchain, no JS deps): static checks only,
+            # Terraform (separate toolchain, no JS deps) and the bring-up /
+            # teardown scripts: static checks and offline self-tests only,
             # never touches Azure.
             infra:
               - 'infra/terraform/**'
+              - 'infra/*.sh'
+              - 'infra/lib/**'
               - '.github/workflows/ci.yml'
 
             # Helm chart: lint + render + schema validation, no cluster.
@@ -597,7 +600,9 @@ jobs:
   # terraform test (mock providers) wherever a tests/ dir exists, TFLint
   # with the shared config, shellcheck. The loop lives in
   # scripts/ci-static.sh so it runs the same locally; new stacks and
-  # modules are picked up automatically.
+  # modules are picked up automatically. Then shellcheck and the offline
+  # self-tests of infra/up.sh, infra/down.sh and infra/lib (PATH shims
+  # for az/gh/terraform/kubectl/curl/dig: no Azure, GitHub or network).
   # ---------------------------------------------------------------------
   terraform-static:
     name: terraform-static
@@ -642,6 +647,15 @@ jobs:
           # an authenticated request avoids the anonymous rate limit.
           GITHUB_TOKEN: ${{ github.token }}
         run: infra/terraform/scripts/ci-static.sh
+
+      # Needs bash, awk, jq, tar and setsid (preinstalled on ubuntu-latest);
+      # the real terraform from Setup Terraform is only used for its fmt
+      # check (skipped when absent).
+      - name: Bring-up/teardown scripts (shellcheck + self-tests)
+        run: |
+          set -euo pipefail
+          shellcheck -x infra/*.sh infra/lib/*.sh
+          bash infra/lib/test-common.sh
 
   # ---------------------------------------------------------------------
   # deploy/helm - lint every values layer, render staging/prod/ci with
@@ -723,6 +737,18 @@ jobs:
           helm template bbm "$CHART" -n run-1-1 "${args[@]}" |
             kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default \
               -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          # PR previews pull from bbm-preview/* (the preview identity cannot push bbm/*).
+          preview=$(helm template bbm "$CHART" -n pr-1 "${args[@]}" \
+            --set ingress.host=pr-1.preview.bbm.example.com \
+            --set api.image.repository=bbm-preview/api --set web.image.repository=bbm-preview/web)
+          for svc in api web; do
+            grep -q "image: \"\?acrbbm[a-z0-9]*\.azurecr\.io/bbm-preview/$svc:" <<<"$preview" ||
+              { echo "::error::preview render does not use bbm-preview/$svc"; exit 1; }
+          done
+          if grep -q 'azurecr\.io/bbm/' <<<"$preview"; then
+            echo "::error::preview render still pulls from bbm/*"
+            exit 1
+          fi
 
       - name: Platform chart (bbm-platform)
         run: |

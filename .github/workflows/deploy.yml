@@ -225,10 +225,12 @@ jobs:
       # pushed with provenance+SBOM, so each tag is an OCI index (image +
       # attestation manifests); `imagetools inspect --format '{{json .Image}}'`
       # then returns a per-platform map, so pick linux/amd64.
-      # Remaining gap: the ephemeral identity's AcrPush (PR previews, test
-      # envs) can still overwrite a sha-* tag with an image whose label lies.
-      # A separate main-only push identity is a future bootstrap change
-      # (docs/devops/env-lifecycle.md).
+      # Only main-only identities can write bbm/*: gh-bbm-ephemeral
+      # (environment `test`, main only) and the build identities. PR previews
+      # push as gh-bbm-preview, whose Repository Writer is ABAC-scoped to
+      # bbm-preview/* (docs/devops/env-lifecycle.md), so a PR cannot
+      # overwrite a sha-* tag; this check still guards against mislabelled
+      # images.
       - name: Verify image provenance (built from main)
         if: steps.gate.outputs.go == 'true'
         env:

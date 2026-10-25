@@ -19,7 +19,9 @@ name: Env power
 # (main only, no reviewer); staging needs none.
 #
 # Schedules (UTC, default branch):
-#   06:00 daily     auto-pause any running env (test too) unless its data RG has auto-pause=false
+#   06:00 daily     auto-pause any running env (test too) unless its data RG has auto-pause=false;
+#                   test first waits (up to 30 min) for in-flight integration-azure /
+#                   preview runs, and is skipped until the next schedule if they are still busy
 #   06:30 daily     stop Postgres again if Azure auto-started it (7-day limit) while paused/down
 #                   (staging, prod: test has no Postgres server)
 #   11:00 Sunday    retry auto-pause after the AKS maintenance window (Sun 06:00-10:00),
@@ -399,7 +401,12 @@ jobs:
     concurrency:
       group: env-power-scheduled-${{ matrix.env }}
       cancel-in-progress: false
-    timeout-minutes: 45
+    timeout-minutes: 75
+    permissions:
+      id-token: write
+      contents: read
+      # gh run list (in-flight runs on the test cluster).
+      actions: read
     steps:
       - name: Check configuration
         id: cfg
@@ -426,8 +433,42 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Pausing test under a running CI run or preview deploy would fail it
+      # mid-flight (their namespaces live on this cluster). Wait for them,
+      # then pause; if they are still busy after 30 minutes, skip tonight.
+      - name: Wait for in-flight runs on the test cluster
+        id: inflight
+        if: steps.cfg.outputs.ok == 'true' && matrix.env == 'test'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          busy() {
+            local n=0 wf st c
+            for wf in integration-azure.yml preview.yml; do
+              for st in in_progress queued waiting; do
+                c=$(gh run list --workflow "$wf" --status "$st" --limit 50 --json databaseId --jq 'length')
+                n=$((n + c))
+              done
+            done
+            echo "$n"
+          }
+          for i in $(seq 1 30); do
+            n=$(busy)
+            if [[ "$n" -eq 0 ]]; then
+              echo "no integration-azure / preview runs in flight"
+              echo "go=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "$n integration-azure / preview run(s) in flight; waiting ($i/30)"
+            sleep 60
+          done
+          echo "::warning::integration-azure / preview runs still in flight after 30 min; not pausing test now (next schedule retries)."
+          echo "go=false" >>"$GITHUB_OUTPUT"
+
       - name: Auto-pause
-        if: steps.cfg.outputs.ok == 'true'
+        if: steps.cfg.outputs.ok == 'true' && steps.inflight.outputs.go != 'false'
         env:
           ENV_NAME: ${{ matrix.env }}
         run: |

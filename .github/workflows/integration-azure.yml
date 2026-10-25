@@ -11,7 +11,11 @@ name: Integration (Azure)
 #
 # Runs on every push to main, nightly, and on demand (dispatch from main
 # only). Everything is OIDC (GitHub Environment `test` →
-# gh-bbm-ephemeral); there are no secrets.
+# gh-bbm-ephemeral); there are no secrets. `test` is a main-only
+# Environment (it pushes the bbm/*:sha-* images staging/prod deploy), so a
+# run from any other ref could not get a token even without the gate.
+# Each deploy also runs deploy/platform/install.sh on the test cluster, so
+# merged platform changes reach it like staging/prod.
 # Until the repo vars from the bootstrap stack exist, `gate` skips the
 # whole run. Only push/schedule/dispatch trigger this, so fork PRs never
 # reach Azure.
