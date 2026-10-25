@@ -32,8 +32,8 @@ Currently exposes `GET /health` (`{"status":"ok"}`) and a stub
 
 It runs as the `analysis` service in the compose stack (`pnpm stack:up`, port
 `8000`). CI's `analysis` job runs ruff, pytest and the generated-models drift
-check. On Azure it is internal-only: optional on ACA (`analysis_enabled`) and
-off by default in the Helm chart (`analysis.enabled`, scaled by KEDA when on),
+check. On Azure (AKS) it is internal-only and off by default in the Helm chart
+(`analysis.enabled`, scaled by KEDA when on),
 so the system tests run there with `BBM_SKIP_ANALYSIS=1`.
 
 Run locally (uv installs Python 3.12 if needed):

@@ -28,8 +28,10 @@ Finding statuses: `Flagged → Submitted → Verified → Disputed/Rejected → 
 ├── workers/
 │   └── analysis/         # Python (uv, FastAPI) Slither + LLM worker; not a pnpm package
 ├── contracts/            # Foundry: AuditorStaking, BountyEscrow, DisputeResolution, Deploy.s.sol
-├── infra/terraform/      # Azure: modules, stacks (bootstrap/global/data/compute/aca-ephemeral), envs
-├── deploy/helm/bbm/      # Helm chart for the staging/prod AKS clusters
+├── infra/                # Azure: up.sh / down.sh (one-command bring-up/teardown), lib/
+│   └── terraform/        # modules, stacks (bootstrap/global/data/compute), envs, scripts
+├── deploy/helm/          # charts: bbm (the app), bbm-platform (cert-manager issuers, TLS, ingress)
+├── deploy/platform/      # install.sh: cert-manager + bbm-platform, once per cluster
 ├── docs/                 # Package docs, ADRs, DevOps runbooks
 ├── uml/                  # Mermaid sources + rendered class/sequence/deployment diagrams
 ├── .github/workflows/    # ci.yml plus the Azure workflows
@@ -218,35 +220,41 @@ applying it).
 All authenticate with GitHub OIDC (no secrets) and skip green until the
 bootstrap repo variables exist.
 
-| Workflow                | Trigger                         | What it does                                                                               |
-| ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
-| `_build-push.yml`       | reusable                        | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance                    |
-| `integration-azure.yml` | push to `main`, nightly, manual | ephemeral ACA test env: smoke, integration, e2e (+ k6 nightly/on demand), always destroyed |
-| `preview.yml`           | PR open/push/close              | per-PR ACA preview (mocked web), sticky comment, destroyed on close                        |
-| `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, apply `global` on `main` (infra-global approval), manual plan/apply per stack |
-| `deploy.yml`            | manual, called by env-power     | Helm deploy to staging/prod AKS, then smoke                                                |
-| `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for staging/prod, nightly auto-pause         |
-| `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                                       |
-| `infra-janitor.yml`     | every 6 h, weekly, manual       | sweep expired ephemeral envs and state, weekly ACR purge                                   |
+| Workflow                | Trigger                         | What it does                                                                                       |
+| ----------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `_build-push.yml`       | reusable                        | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance                            |
+| `_ephemeral-env.yml`    | reusable                        | deploy or delete one namespace on the test AKS cluster (auto-resumes a paused cluster)             |
+| `integration-azure.yml` | push to `main`, nightly, manual | namespace `run-<id>-<attempt>` on the test cluster: smoke, integration, e2e (+ k6), always deleted |
+| `preview.yml`           | PR open/push/close              | namespace `pr-<n>` on the test cluster (mocked web), sticky comment, deleted on close              |
+| `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, apply `global` on `main` (infra-global approval), manual plan/apply per stack         |
+| `deploy.yml`            | manual, called by env-power     | platform install check, Helm deploy to staging/prod AKS, then smoke                                |
+| `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for test/staging/prod, nightly auto-pause            |
+| `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                                               |
+| `infra-janitor.yml`     | every 6 h, weekly, manual       | delete expired ephemeral namespaces, weekly ACR purge                                              |
 
 ## Infrastructure and environments
 
-| Environment | Platform                         | Lifetime                        |
-| ----------- | -------------------------------- | ------------------------------- |
-| `test`      | Azure Container Apps (ephemeral) | one `integration-azure.yml` run |
-| `preview`   | Azure Container Apps (ephemeral) | PR open → close                 |
-| `staging`   | own AKS cluster                  | long-lived, powered on demand   |
-| `prod`      | own AKS cluster                  | long-lived, powered on demand   |
+| Environment  | Platform                               | Host                             | Lifetime                        |
+| ------------ | -------------------------------------- | -------------------------------- | ------------------------------- |
+| `test`       | own AKS cluster (Free tier)            | (no app release of its own)      | long-lived, powered on demand   |
+| ↳ CI run     | namespace `run-<id>-<attempt>` on test | `run-<id>-<attempt>.test.<zone>` | one `integration-azure.yml` run |
+| ↳ PR preview | namespace `pr-<n>` on test             | `pr-<n>.preview.<zone>`          | PR open → close                 |
+| `staging`    | own AKS cluster (Free tier)            | `staging.<zone>`                 | long-lived, powered on demand   |
+| `prod`       | own AKS cluster (Standard tier)        | `prod.<zone>`                    | long-lived, powered on demand   |
 
-Staging and prod are split into a persistent `data` stack (Postgres, Key
-Vault, storage, IP) and a disposable `compute` stack (AKS). They are turned
-off and on with the **Env power** workflow without losing data, and pause
-automatically every night.
+Each env is split into a persistent `data` stack (Postgres, Key Vault,
+storage, IP, DNS records) and a disposable `compute` stack (AKS). They are
+turned off and on with the **Env power** workflow without losing data, and
+pause automatically every night. All hosts are HTTPS (Let's Encrypt wildcard
+per env) under one Azure DNS zone, `dns_zone_name`. `infra/up.sh` brings the
+whole footprint up on a subscription and `infra/down.sh` tears it down.
 
 - [ADR 0001](docs/adr/0001-azure-environment-topology.md): topology and pinned interfaces
+- [ADR 0002](docs/adr/0002-aks-everywhere-and-azure-dns.md): AKS for every env, Azure DNS, TLS, one-command bring-up
 - [Architecture](docs/devops/architecture.md) and [cost](docs/devops/cost.md)
-- [Environment lifecycle](docs/devops/env-lifecycle.md): power runbook, demo-day checklist
-- [Azure bootstrap](docs/devops/azure-bootstrap.md): one-time subscription and OIDC setup
+- [Environment lifecycle](docs/devops/env-lifecycle.md): power runbook, test env, demo-day checklist
+- [Azure bootstrap](docs/devops/azure-bootstrap.md): bring-up with `infra/up.sh`, what stays manual
+- [Switching accounts or domains](docs/devops/switching-accounts.md)
 - [infra/terraform/README.md](infra/terraform/README.md) and [deploy/helm/README.md](deploy/helm/README.md)
 
 ## Contributing

@@ -73,11 +73,11 @@ flowchart TB
 
     subgraph Azure["Azure deploy targets - infra/terraform + deploy/helm/bbm (defined, applied after bootstrap)"]
         ACR["ACR bbm/* images (sha-7, pr-N-sha-7)"]
-        ACATest["ACA pipeline test env<br/>integration-azure.yml: build, provision, test, destroy"]
-        ACAPreview["ACA PR preview env<br/>preview.yml: per PR, destroyed on close"]
+        TestRun["AKS test: CI-run namespace run-ID-ATTEMPT<br/>integration-azure.yml: build, deploy, test, delete"]
+        TestPreview["AKS test: PR preview namespace pr-N<br/>preview.yml: per PR, deleted on close"]
         AKSStaging["AKS staging (Helm chart bbm)<br/>deploy.yml + env-power.yml"]
         AKSProd["AKS prod (Helm chart bbm)<br/>deploy.yml, reviewer-gated"]
-        ACR --> ACATest & ACAPreview & AKSStaging & AKSProd
+        ACR --> TestRun & TestPreview & AKSStaging & AKSProd
     end
     Compose -. "same Dockerfiles, pushed by _build-push.yml over OIDC" .-> ACR
     Analysis -. "KEDA queue scaling (planned)" .-> AKSStaging
@@ -93,7 +93,7 @@ flowchart TB
     classDef built fill:#0d9488,stroke:#134e4a,color:#fff;
     classDef future fill:#9ca3af,stroke:#4b5563,color:#1f2937,stroke-dasharray: 5 3;
     class UI,RQ,APIClient,MSWWorker,Handlers,MockDB,Zod,JSONSchema,Health,PathFilter,WebJob,SharedJob,ApiJob,ContractsJob,AnalysisJob,ContainersJob,TfJob,HelmJob,WfJob,Gate,CWeb,CApi,CDb,CAnalysis,CAnvil,Escrow current;
-    class ACR,ACATest,ACAPreview,AKSStaging,AKSProd,LBuilt built;
+    class ACR,TestRun,TestPreview,AKSStaging,AKSProd,LBuilt built;
     class LCur current;
     class LFut future;
     class FutureRoutes,Analysis,OtherWorker,PoCTests,Sandbox future;

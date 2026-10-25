@@ -17,12 +17,14 @@ shows it on the repo front page. Contributor conventions are in
   - [contracts/](contracts/overview.md): Foundry smart-contract project.
     - [Foundry setup](contracts/foundry-setup.md): installing Foundry and building and testing `contracts/`.
 - [adr/](adr/): architecture decision records.
-  - [ADR 0001: Azure environment topology](adr/0001-azure-environment-topology.md): ACA ephemeral envs, AKS per env, data/compute split, OIDC, pinned stack interfaces.
+  - [ADR 0001: Azure environment topology](adr/0001-azure-environment-topology.md): AKS per env, data/compute split, OIDC, pinned stack interfaces (its ACA ephemeral envs are superseded by ADR 0002).
+  - [ADR 0002: AKS for every environment, Azure DNS and one-command bring-up](adr/0002-aks-everywhere-and-azure-dns.md): test cluster with CI/preview namespaces, DNS zones, cert-manager TLS, `infra/up.sh` / `infra/down.sh`.
 - [devops/](devops/README.md): Azure infrastructure, deployment and operations.
   - [Architecture](devops/architecture.md): diagrams of the layers, identity flow and request path.
-  - [Environment lifecycle](devops/env-lifecycle.md): powering staging and prod on and off.
+  - [Environment lifecycle](devops/env-lifecycle.md): powering test, staging and prod on and off; CI and preview namespaces.
   - [Cost](devops/cost.md): estimated monthly cost per environment and power state.
-  - [Azure bootstrap](devops/azure-bootstrap.md): one-time subscription and GitHub OIDC setup.
+  - [Azure bootstrap](devops/azure-bootstrap.md): bring-up with `infra/up.sh`, teardown with `infra/down.sh`.
+  - [Switching accounts or domains](devops/switching-accounts.md): moving to another subscription or DNS zone.
 
 Elsewhere in the repo:
 

@@ -31,8 +31,8 @@ docker run --rm -i --network host -e BASE_URL=http://localhost:3001 \
 docker run --rm -i -e BASE_URL=http://host.docker.internal:3001 \
   grafana/k6:2.3.0 run - < tests/load/api-baseline.js
 
-# Against a deployed env (e.g. the ACA pipeline-test env's api_url output)
-docker run --rm -i -e BASE_URL=https://<api fqdn> \
+# Against a deployed env (e.g. a CI-run namespace: https://run-<id>-<attempt>.test.<zone>)
+docker run --rm -i -e BASE_URL=https://<host> \
   grafana/k6:2.3.0 run - < tests/load/api-baseline.js
 
 # Baseline + 10-minute soak
