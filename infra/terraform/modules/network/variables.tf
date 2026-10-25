@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Virtual network name (vnet-bbm-<env>-eus2)."
+  description = "Virtual network name (vnet-bbm-<env>-<abbr>)."
   type        = string
 }
 
@@ -30,6 +30,12 @@ variable "subnets" {
     psql = object({ name = string, cidr = string })
     pe   = object({ name = string, cidr = string })
   })
+}
+
+variable "postgres_enabled" {
+  description = "Delegate snet-psql to PostgreSQL Flexible Server and create its private DNS zone + VNet link. False for envs without a PG server (test)."
+  type        = bool
+  default     = true
 }
 
 variable "postgres_private_dns_zone_name" {

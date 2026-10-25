@@ -1,4 +1,4 @@
-# Per-RG budgets for the persistent staging/prod resource groups (created by
+# Per-RG budgets for the test/staging/prod resource groups (created by
 # stacks/bootstrap). The subscription-wide budget lives in bootstrap.
 
 data "azurerm_resource_group" "env" {

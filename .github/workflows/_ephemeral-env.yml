@@ -1,0 +1,389 @@
+name: Ephemeral namespace
+
+# ---------------------------------------------------------------------
+# Reusable workflow: deploy or delete one ephemeral namespace on the test
+# AKS cluster (ADR 0002). Used by integration-azure.yml (kind test,
+# namespace run-<run_id>-<attempt>) and preview.yml (kind preview,
+# namespace pr-<n>). The host is <namespace>.<kind>.<dns.zone>, covered by
+# the zone's wildcard record and the platform's wildcard certificate.
+#
+#   deploy  ensure the test cluster runs (auto-resume when paused, fail
+#           when down), read helm_values from test/compute.tfstate, ensure
+#           the platform (environment `test`: install/upgrade it every run;
+#           `preview`: only check it, fail when missing or outdated), create
+#           + label + annotate the namespace, helm upgrade --install release
+#           `bbm`, wait for https
+#   delete  helm uninstall + delete the namespace; skipped green when the
+#           cluster is not running (infra-janitor.yml deletes it after
+#           bbm.io/expires-on once the cluster runs again)
+#
+# Runs in GitHub Environment `test` (main only, gh-bbm-ephemeral: may push
+# bbm/* and manage the platform) or `preview` (any PR branch, gh-bbm-preview:
+# may push only bbm-preview/* and never installs or upgrades the platform,
+# which is cluster-wide and shared by every namespace).
+# The caller job must grant `id-token: write` and `contents: read`.
+# ---------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        description: deploy | delete
+        type: string
+        required: true
+      environment:
+        description: GitHub Environment (test | preview).
+        type: string
+        required: true
+      namespace:
+        description: run-<run_id>-<attempt> | pr-<n>
+        type: string
+        required: true
+      kind:
+        description: test | preview (label bbm.io/kind and host subdomain).
+        type: string
+        required: true
+      ttl_hours:
+        description: Hours until bbm.io/expires-on (re-stamped on every deploy).
+        type: number
+        default: 6
+      image_tag:
+        description: global.image.tag (deploy only).
+        type: string
+        default: ''
+      web_image_tag:
+        description: Optional web.image.tag override (preview's mocked web).
+        type: string
+        default: ''
+      image_repository_prefix:
+        description: >-
+          ACR repository namespace of the api/web images (bbm for environment
+          test, bbm-preview for preview), i.e. <prefix>/api and <prefix>/web.
+        type: string
+        default: bbm
+    outputs:
+      url:
+        description: https://<host> (deploy only).
+        value: ${{ jobs.ns.outputs.url }}
+      expires_on:
+        description: bbm.io/expires-on that was stamped (deploy only).
+        value: ${{ jobs.ns.outputs.expires_on }}
+      result:
+        description: deployed | deleted | skipped | failed
+        value: ${{ jobs.ns.outputs.result }}
+
+permissions:
+  contents: read
+
+# Names follow modules/naming; the region comes from the repo variables
+# AZURE_LOCATION / AZURE_LOCATION_ABBR (bootstrap gh_setup_commands). The
+# callers' gate jobs skip the run while they are unset.
+env:
+  DATA_RG: rg-bbm-test-data-${{ vars.AZURE_LOCATION_ABBR }}
+  COMPUTE_RG: rg-bbm-test-compute-${{ vars.AZURE_LOCATION_ABBR }}
+  CLUSTER: aks-bbm-test-${{ vars.AZURE_LOCATION_ABBR }}
+  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
+
+jobs:
+  ns:
+    name: ${{ inputs.action }} ${{ inputs.namespace }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      url: ${{ steps.release.outputs.url }}
+      expires_on: ${{ steps.namespace.outputs.expires_on }}
+      result: ${{ steps.result.outputs.result }}
+    env:
+      ACTION: ${{ inputs.action }}
+      NS: ${{ inputs.namespace }}
+      KIND: ${{ inputs.kind }}
+      TTL_HOURS: ${{ inputs.ttl_hours }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      IMAGE_PREFIX: ${{ inputs.image_repository_prefix }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      TFSTATE_RG: ${{ vars.TFSTATE_RG }}
+      TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Check inputs and configuration
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          case "$ACTION" in deploy | delete) ;; *) echo "::error::action must be deploy or delete"; exit 1 ;; esac
+          case "$KIND" in test | preview) ;; *) echo "::error::kind must be test or preview"; exit 1 ;; esac
+          # Each environment's identity can only use its own repositories.
+          case "$ENVIRONMENT/$IMAGE_PREFIX" in
+            test/bbm | preview/bbm-preview) ;;
+            *) echo "::error::environment '$ENVIRONMENT' must use image_repository_prefix $([[ "$ENVIRONMENT" == preview ]] && echo bbm-preview || echo bbm) (got '$IMAGE_PREFIX')"; exit 1 ;;
+          esac
+          if [[ ! "$NS" =~ ^(run-[0-9]+-[0-9]+|pr-[0-9]+)$ ]]; then
+            echo "::error::namespace must be run-<id>-<attempt> or pr-<n> (got '$NS')"
+            exit 1
+          fi
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::Environment '$ENVIRONMENT' has no AZURE_CLIENT_ID variable. Run the bootstrap gh_setup_commands."
+            exit 1
+          fi
+          if [[ -z "$BBM_REGION_ABBR" || -z "$BBM_LOCATION" ]]; then
+            echo "::error::Repo variables AZURE_LOCATION / AZURE_LOCATION_ABBR are not set. Run the bootstrap gh_setup_commands."
+            exit 1
+          fi
+          echo "VALUES_INFRA=$RUNNER_TEMP/values-infra.yaml" >>"$GITHUB_ENV"
+
+      # delete needs no repo files (and a closed PR's merge ref may be gone).
+      - name: Checkout
+        if: inputs.action == 'deploy'
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # deploy: auto-resume a paused cluster (env-power.sh resume is
+      # idempotent and waits for a start already in flight, so concurrent
+      # runs are safe). delete: never resume just to delete.
+      - name: Test cluster power
+        id: power
+        run: |
+          set -euo pipefail
+          ps=$(az group show -n "$DATA_RG" --query 'tags."power-state"' -o tsv 2>/dev/null || true)
+          aks=$(az aks list -g "$COMPUTE_RG" \
+            --query "[?name=='$CLUSTER'] | [0].[powerState.code, provisioningState]" -o tsv 2>/dev/null | tr '\t' ' ' || true)
+          echo "power-state tag: ${ps:-unset}; $CLUSTER: ${aks:-not found}"
+          if [[ "$ACTION" == delete ]]; then
+            if [[ "$aks" == "Running Succeeded" ]]; then
+              echo "go=true" >>"$GITHUB_OUTPUT"
+            else
+              echo "go=false" >>"$GITHUB_OUTPUT"
+              echo "::notice::$CLUSTER is '${aks:-not found}'; not deleting $NS now. infra-janitor.yml deletes it after it expires, once the cluster runs."
+            fi
+            exit 0
+          fi
+          if [[ "$ps" == "down" || -z "$aks" ]]; then
+            echo "::error::The test env is down (no cluster $CLUSTER). Run env-power.yml with env=test action=up first."
+            exit 1
+          fi
+          if [[ "$ps" != "running" || "$aks" != "Running Succeeded" ]]; then
+            echo "Resuming the test env (first run after a pause takes ~5-10 min)"
+            infra/terraform/scripts/env-power.sh test resume
+          fi
+          echo "go=true" >>"$GITHUB_OUTPUT"
+
+      # The in-cluster Postgres pulls <acr>/mirror/postgres:16-alpine (no
+      # Docker Hub at runtime); this identity cannot `az acr import`.
+      - name: Check Postgres mirror in ACR
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+          if ! az acr repository show --name "$ACR_NAME" --image mirror/postgres:16-alpine --only-show-errors >/dev/null; then
+            echo "::error::$ACR_NAME.azurecr.io/mirror/postgres:16-alpine is missing. Seed it once with the 'az acr import' step in docs/devops/azure-bootstrap.md."
+            exit 1
+          fi
+
+      - name: Setup Terraform
+        if: inputs.action == 'deploy'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      # Read-only: this identity has tfstate reader on test/ (no lease).
+      - name: Infra values from the test compute stack
+        id: infra
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+          infra/terraform/scripts/tf.sh compute test init -lock=false
+          infra/terraform/scripts/tf.sh compute test output -raw helm_values > "$VALUES_INFRA"
+          test -s "$VALUES_INFRA" || { echo "::error::helm_values output is empty"; exit 1; }
+          zone=$(yq -r '.dns.zone // ""' "$VALUES_INFRA")
+          [[ -n "$zone" ]] || { echo "::error::helm_values has no dns.zone"; exit 1; }
+          echo "host=$NS.$KIND.$zone" >>"$GITHUB_OUTPUT"
+
+      - name: Setup Helm
+        if: steps.power.outputs.go == 'true'
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Setup kubelogin
+        if: steps.power.outputs.go == 'true'
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.1.4
+
+      - name: Cluster credentials
+        if: steps.power.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          az aks get-credentials -g "$COMPUTE_RG" -n "$CLUSTER" --format azure --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+          kubectl get nodes -o wide
+
+      # cert-manager + bbm-platform (Gateway bbm, wildcard cert).
+      # environment `test` (main only): always run install.sh. It is
+      # idempotent, so a merged platform change reaches the test cluster on
+      # the next main run, as deploy.yml does for staging/prod.
+      # environment `preview` (any PR branch): never install or upgrade the
+      # cluster-wide platform; only check that the release is deployed at the
+      # revision this checkout pins (install.sh --print-rev), and fail otherwise.
+      - name: Ensure platform
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+          if [[ "$ENVIRONMENT" == test ]]; then
+            deploy/platform/install.sh test --values "$VALUES_INFRA" --wait
+            exit 0
+          fi
+          missing() {
+            echo "::error::bbm-platform on $CLUSTER is $1. Previews never install the platform: it is installed by main CI (integration-azure.yml) or by env-power.yml env=test action=up. Re-run this preview after one of them succeeds."
+            exit 1
+          }
+          # A main run may be upgrading the platform right now.
+          status=""
+          for _ in $(seq 1 40); do
+            status=$(helm status bbm-platform -n bbm-platform -o json 2>/dev/null | jq -r '.info.status' || true)
+            [[ "$status" == pending-* ]] || break
+            echo "bbm-platform is $status; waiting for the running install/upgrade"
+            sleep 15
+          done
+          [[ "$status" == deployed ]] || missing "'${status:-missing}'"
+          # install.sh stamps bbm.io/platform-rev (hash of cert-manager version
+          # + values and the bbm-platform chart) after every successful install.
+          want=$(deploy/platform/install.sh --print-rev)
+          have=$(kubectl get namespace bbm-platform -o jsonpath='{.metadata.annotations.bbm\.io/platform-rev}' 2>/dev/null || true)
+          echo "platform rev: deployed ${have:-none}, this checkout $want"
+          [[ "$have" == "$want" ]] ||
+            missing "outdated (bbm.io/platform-rev ${have:-unset}, this checkout needs $want; a PR that changes deploy/platform or deploy/helm/bbm-platform cannot be previewed until it is merged)"
+          # After a resume the Gateway's Envoy pods may still be rescheduling.
+          kubectl -n bbm-platform wait gateways.gateway.networking.k8s.io/bbm \
+            --for=condition=Programmed --timeout=10m
+
+      - name: Namespace
+        id: namespace
+        if: inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+          expires=$(date -u -d "+${TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          # bbm.io/gateway-access: lets the HTTPRoute attach to the bbm-platform
+          # Gateway's HTTPS listeners (gateway.routeNamespaceLabel).
+          kubectl label namespace "$NS" --overwrite bbm.io/ephemeral=true "bbm.io/kind=$KIND" bbm.io/gateway-access=true
+          kubectl annotate namespace "$NS" --overwrite "bbm.io/expires-on=$expires"
+          echo "expires_on=$expires" >>"$GITHUB_OUTPUT"
+
+      # Per-namespace random DB password, reused on upgrades (previews) so
+      # the running Postgres keeps matching. Passed in a file, not argv.
+      - name: Helm upgrade
+        id: release
+        if: inputs.action == 'deploy'
+        env:
+          HOST: ${{ steps.infra.outputs.host }}
+          TAG: ${{ inputs.image_tag }}
+          WEB_TAG: ${{ inputs.web_image_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "::error::invalid image_tag '$TAG'"; exit 1; }
+          pw=$(helm get values bbm -n "$NS" -o json 2>/dev/null | jq -r '.postgres.inCluster.password // empty' || true)
+          [[ -n "$pw" ]] || pw=$(openssl rand -hex 24)
+          echo "::add-mask::$pw"
+          secret_values="$RUNNER_TEMP/values-db.yaml"
+          (umask 077 && printf 'postgres:\n  inCluster:\n    enabled: true\n    password: "%s"\n' "$pw" > "$secret_values")
+          [[ "$IMAGE_PREFIX" =~ ^bbm(-preview)?$ ]] || { echo "::error::invalid image_repository_prefix"; exit 1; }
+          extra=(--set "api.image.repository=$IMAGE_PREFIX/api" --set "web.image.repository=$IMAGE_PREFIX/web")
+          if [[ -n "$WEB_TAG" ]]; then
+            [[ "$WEB_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "::error::invalid web_image_tag"; exit 1; }
+            extra+=(--set "web.image.tag=$WEB_TAG")
+          fi
+          helm upgrade --install bbm deploy/helm/bbm -n "$NS" \
+            -f "$VALUES_INFRA" \
+            -f deploy/helm/bbm/values-test.yaml \
+            -f "$secret_values" \
+            --set "ingress.host=$HOST" \
+            --set "global.image.tag=$TAG" \
+            ${extra[@]+"${extra[@]}"} \
+            --wait --atomic --timeout 15m --history-max 3
+          rm -f "$secret_values"
+          echo "url=https://$HOST" >>"$GITHUB_OUTPUT"
+
+      # DNS (wildcard alias record) and the wildcard cert already exist; the
+      # Gateway may still be programming the new HTTPRoute.
+      - name: Wait for https
+        if: inputs.action == 'deploy'
+        env:
+          URL: ${{ steps.release.outputs.url }}
+        run: |
+          set -euo pipefail
+          accepted=""
+          for _ in $(seq 1 24); do
+            accepted=$(kubectl -n "$NS" get httproute bbm \
+              -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null || true)
+            [[ "$accepted" == True ]] && break
+            sleep 5
+          done
+          if [[ "$accepted" != True ]]; then
+            kubectl -n "$NS" describe httproute bbm || true
+            echo "::error::HTTPRoute $NS/bbm was not accepted by Gateway bbm-platform/bbm"
+            exit 1
+          fi
+          for path in /health /healthz; do
+            for i in $(seq 1 30); do
+              if curl -fsS --max-time 10 -o /dev/null "$URL$path"; then
+                echo "$URL$path is healthy (attempt $i)"
+                continue 2
+              fi
+              sleep 10
+            done
+            echo "::error::$URL$path not healthy after 5 minutes"
+            exit 1
+          done
+
+      - name: Delete namespace
+        if: inputs.action == 'delete' && steps.power.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          if ! kubectl get namespace "$NS" -o name 2>/dev/null; then
+            echo "namespace $NS not found; nothing to delete"
+            exit 0
+          fi
+          helm uninstall bbm -n "$NS" --wait --timeout 5m || echo "::warning::helm uninstall bbm -n $NS failed; deleting the namespace anyway"
+          kubectl delete namespace "$NS" --wait=true --timeout=10m
+
+      - name: Result
+        id: result
+        if: always()
+        env:
+          GO: ${{ steps.power.outputs.go }}
+          JOB_STATUS: ${{ job.status }}
+          URL: ${{ steps.release.outputs.url }}
+          EXPIRES: ${{ steps.namespace.outputs.expires_on }}
+        run: |
+          if [[ "$JOB_STATUS" != "success" ]]; then
+            result=failed
+          elif [[ "$GO" != "true" ]]; then
+            result=skipped
+          elif [[ "$ACTION" == deploy ]]; then
+            result=deployed
+          else
+            result=deleted
+          fi
+          echo "result=$result" >>"$GITHUB_OUTPUT"
+          {
+            echo "### Ephemeral namespace \`$NS\` ($KIND): $ACTION"
+            echo "- result: $result"
+            [[ -z "$URL" ]] || echo "- url: $URL"
+            [[ -z "$EXPIRES" ]] || echo "- expires: $EXPIRES"
+          } >>"$GITHUB_STEP_SUMMARY"

@@ -787,97 +787,138 @@
     },
     "ingress": {
       "type": "object",
+      "description": "Exposure through the bbm-platform Gateway (HTTPRoute). TLS terminates at the Gateway with the env wildcard certificate.",
       "properties": {
         "enabled": {
           "type": "boolean"
         },
-        "className": {
-          "type": "string",
-          "minLength": 1
-        },
         "host": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^$|^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "HTTPRoute hostname (values-infra.yaml or --set). Must fall under one of the Gateway's env-zone listeners."
         },
-        "annotations": {
+        "gateway": {
           "type": "object",
-          "additionalProperties": true
-        },
-        "tls": {
-          "type": "object",
+          "description": "parentRef of the HTTPRoute: the Gateway from deploy/helm/bbm-platform.",
           "properties": {
-            "mode": {
+            "name": {
               "type": "string",
-              "enum": [
-                "none",
-                "certManager"
-              ]
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "maxLength": 63
             },
-            "clusterIssuer": {
-              "type": "string"
-            },
-            "secretName": {
-              "type": "string"
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "maxLength": 63
             }
           },
           "required": [
-            "mode"
+            "name",
+            "namespace"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         "publicIpName": {
-          "type": "string"
+          "type": "string",
+          "description": "Ignored by this chart; consumed by bbm-platform (accepted because values-infra.yaml sets it)."
         },
         "publicIpResourceGroup": {
-          "type": "string"
-        },
-        "appRouting": {
+          "type": "string",
+          "description": "Ignored by this chart; consumed by bbm-platform."
+        }
+      },
+      "required": [
+        "enabled",
+        "gateway"
+      ],
+      "additionalProperties": false
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "inCluster": {
           "type": "object",
           "properties": {
             "enabled": {
               "type": "boolean"
             },
-            "name": {
-              "type": "string",
-              "minLength": 1
-            },
-            "controllerNamePrefix": {
-              "type": "string",
-              "pattern": "^[a-z0-9][-a-z0-9]*[a-z0-9]$",
-              "maxLength": 60
-            },
-            "scaling": {
+            "image": {
               "type": "object",
               "properties": {
-                "minReplicas": {
-                  "type": "integer",
-                  "minimum": 1
+                "repository": {
+                  "type": "string",
+                  "minLength": 1
                 },
-                "maxReplicas": {
-                  "type": "integer",
-                  "minimum": 1
+                "tag": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
                 },
-                "threshold": {
+                "pullPolicy": {
                   "type": "string",
                   "enum": [
-                    "rapid",
-                    "balanced",
-                    "steady"
+                    "",
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
                   ]
                 }
               },
+              "required": [
+                "repository"
+              ],
               "additionalProperties": false
+            },
+            "database": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "password": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._~-]*$",
+              "description": "URL-safe characters only: embedded unescaped in DATABASE_URL."
+            },
+            "runAsUser": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "runAsGroup": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "storageSizeLimit": {
+              "type": "string"
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
             }
           },
           "required": [
-            "enabled"
+            "enabled",
+            "image",
+            "database",
+            "user"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         }
       },
-      "required": [
-        "enabled"
-      ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "networkPolicy": {
       "type": "object",
@@ -891,15 +932,12 @@
         "postgresCidr": {
           "type": "string",
           "pattern": "^$|^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-        },
-        "ingressControllerNamespace": {
-          "type": "string"
         }
       },
       "required": [
         "enabled"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "tests": {
       "type": "object",
@@ -913,6 +951,16 @@
           "minLength": 1
         }
       },
+      "additionalProperties": true
+    },
+    "dns": {
+      "type": "object",
+      "description": "From values-infra.yaml (ADR 0002 section 5). Ignored by this chart; consumed by bbm-platform.",
+      "additionalProperties": true
+    },
+    "platform": {
+      "type": "object",
+      "description": "From values-infra.yaml (ADR 0002 section 5). Ignored by this chart; consumed by bbm-platform.",
       "additionalProperties": true
     }
   },

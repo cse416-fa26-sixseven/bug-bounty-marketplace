@@ -1,0 +1,6 @@
+# Test cluster (aks-bbm-test-ncus): CI run and PR preview namespaces.
+# dns.envZones from values-infra.yaml: [test.<zone>, preview.<zone>].
+gateway:
+  scaling:
+    minReplicas: 2
+    maxReplicas: 3

@@ -37,7 +37,6 @@ output "resource_groups" {
   description = "Long-lived resource group names keyed by purpose."
   value = merge(
     { shared = azurerm_resource_group.shared.name, tfstate = azurerm_resource_group.tfstate.name },
-    { for k, v in azurerm_resource_group.ephemeral : k => v.name },
     { for k, v in azurerm_resource_group.env_data : "${k}-data" => v.name },
     { for k, v in azurerm_resource_group.env_compute : "${k}-compute" => v.name },
   )
@@ -49,7 +48,7 @@ output "github_client_ids" {
 }
 
 output "github_principal_ids" {
-  description = "Service principal object ID per OIDC identity (stacks/global needs gh-bbm-global and gh-bbm-ephemeral)."
+  description = "Service principal object ID per OIDC identity (stacks/global needs gh-bbm-global, gh-bbm-ephemeral and gh-bbm-preview)."
   value       = module.github_oidc.principal_ids
 }
 
@@ -58,14 +57,36 @@ output "power_operator_role_definition_id" {
   value       = azurerm_role_definition.power_operator.role_definition_resource_id
 }
 
+output "dns_zone_name" {
+  description = "Parent DNS zone (in the shared RG)."
+  value       = azurerm_dns_zone.parent.name
+}
+
+output "dns_name_servers" {
+  description = "Name servers of the parent zone: add these as NS records for dns_zone_name at the domain's DNS host (infra/up.sh does it for Cloudflare)."
+  value       = sort(tolist(azurerm_dns_zone.parent.name_servers))
+}
+
+output "dns_child_zones" {
+  description = "Delegated child zones per env (test: test.<zone>, preview.<zone>), each in that env's data RG."
+  value = {
+    for env in local.persistent_envs : env => [
+      for label, z in local.dns_child_zones : azurerm_dns_zone.child[label].name if z.env == env
+    ]
+  }
+}
+
+# Pasted verbatim between the bootstrap-hint markers in envs/global/global.tfvars
+# by infra/up.sh. Keep the `=` aligned so the file stays `terraform fmt` clean.
 output "global_tfvars_hint" {
-  description = "Values to paste into envs/global/global.tfvars."
+  description = "Values for the bootstrap-hint block of envs/global/global.tfvars."
   value       = <<-EOT
-    subscription_id           = "${var.subscription_id}"
-    suffix                    = "${random_string.suffix.result}"
-    ephemeral_ci_principal_id = "${module.github_oidc.principal_ids["gh-bbm-ephemeral"]}"
+    subscription_id              = "${var.subscription_id}"
+    suffix                       = "${random_string.suffix.result}"
+    ephemeral_ci_principal_id    = "${module.github_oidc.principal_ids["gh-bbm-ephemeral"]}"
+    preview_ci_principal_id      = "${module.github_oidc.principal_ids["gh-bbm-preview"]}"
     secret_officer_sp_object_ids = ["${module.github_oidc.principal_ids["gh-bbm-global"]}"]
-    # Add admin users to secret_officer_user_object_ids and apply locally as an Owner.
+    dns_zone_name                = "${var.dns_zone_name}"
   EOT
 }
 

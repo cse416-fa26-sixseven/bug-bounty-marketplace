@@ -9,21 +9,26 @@ variable "subscription_id" {
 }
 
 variable "location" {
-  description = "Azure region for all long-lived resource groups."
+  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
   type        = string
-  default     = "eastus2"
+  default     = "northcentralus"
 }
 
 variable "location_abbr" {
-  description = "Short region code used in names."
+  description = "Short region code used in names (e.g. ncus). Null derives it from location (modules/naming local.location_abbrs)."
   type        = string
-  default     = "eus2"
+  default     = null
 }
 
 variable "github_repo" {
   description = "GitHub repository (owner/name) trusted by the OIDC identities."
   type        = string
-  default     = "LoistCloist/bug-bounty-marketplace"
+  default     = "cse416-fa26-sixseven/bug-bounty-marketplace"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repo))
+    error_message = "github_repo must be owner/name (infra/up.sh writes it from gh repo view)."
+  }
 }
 
 variable "admin_object_ids" {
@@ -33,7 +38,7 @@ variable "admin_object_ids" {
 }
 
 variable "power_operator_object_ids" {
-  description = "Entra object IDs granted the custom 'BBM Power Operator' role on staging/prod RGs (pause/resume without Contributor)."
+  description = "Entra object IDs granted the custom 'BBM Power Operator' role on the test/staging/prod RGs (pause/resume without Contributor)."
   type        = list(string)
   default     = []
 }
@@ -59,6 +64,21 @@ variable "github_reviewer_ids" {
   description = "GitHub user IDs (numeric) added as required reviewers on infra-global, prod and contracts-sepolia in gh_setup_commands. Empty = add reviewers manually."
   type        = list(number)
   default     = []
+}
+
+variable "dns_zone_name" {
+  description = "Parent DNS zone for every env host, e.g. bug-bounty.example.com (ADR 0002). Bootstrap creates it plus the prod/staging/test/preview child zones."
+  type        = string
+
+  validation {
+    condition     = var.dns_zone_name != ""
+    error_message = "dns_zone_name is empty: set it in envs/global/bootstrap.tfvars (e.g. dns_zone_name = \"bug-bounty.example.com\") or run infra/up.sh --zone <zone>."
+  }
+
+  validation {
+    condition     = var.dns_zone_name == "" || (can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$", var.dns_zone_name)) && length(var.dns_zone_name) <= 200)
+    error_message = "dns_zone_name must be a lowercase DNS name with at least two labels and no trailing dot, e.g. bug-bounty.example.com."
+  }
 }
 
 variable "preregistered_resource_providers" {

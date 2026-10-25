@@ -1,0 +1,5 @@
+# Prod cluster (aks-bbm-prod-ncus).
+gateway:
+  scaling:
+    minReplicas: 2
+    maxReplicas: 5

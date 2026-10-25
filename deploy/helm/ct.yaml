@@ -3,7 +3,10 @@
 #   ct install --config deploy/helm/ct.yaml --all \
 #     --helm-extra-set-args "--set=global.image.tag=<tag-loaded-into-kind>"
 #
-# ct picks up deploy/helm/bbm/ci/*-values.yaml (a symlink to values-ci.yaml).
+# ct picks up deploy/helm/bbm/ci/*-values.yaml (a symlink to values-ci.yaml)
+# and deploy/helm/bbm-platform/ci/*-values.yaml (fake values-infra.yaml).
+# Only lint bbm-platform: `ct install` would need cert-manager, the Gateway
+# API CRDs and the AKS app routing GatewayClass, which kind does not have.
 target-branch: main
 chart-dirs:
   - deploy/helm

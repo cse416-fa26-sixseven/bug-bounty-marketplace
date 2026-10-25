@@ -1,0 +1,80 @@
+# Default values for bbm-platform. Release `bbm-platform`, namespace
+# `bbm-platform`, one per cluster. Layering (deploy/platform/install.sh):
+#
+#   values.yaml -> values-<env>.yaml -> values-infra.yaml -> [--set certificate.issuer=...]
+#
+# values-infra.yaml is the compute stack's `helm_values` output (the same file
+# the app chart gets). This chart reads dns.*, platform.* and
+# ingress.publicIpName / ingress.publicIpResourceGroup from it and ignores the
+# other keys. The infra keys are REQUIRED (values.schema.json): rendering
+# without them fails.
+
+# ---- from values-infra.yaml (ADR 0002 section 5) ----
+dns:
+  # -- Parent zone, e.g. bug-bounty.example.com (informational).
+  zone: ""
+  # -- The env's public zones: one solver per zone, and the wildcard
+  # certificate covers <z> and *.<z> for each. test: [test.<zone>, preview.<zone>].
+  envZones: []
+  # -- Private zone <env>.internal.<zone> (unused here).
+  internalZone: ""
+
+platform:
+  # -- Subscription holding the env zones.
+  subscriptionId: ""
+  # -- Resource group of the env zones (rg-bbm-<env>-data-ncus).
+  dnsResourceGroup: ""
+  # -- Client ID of id-bbm-<env>-certmgr (DNS Zone Contributor on the env
+  # zones, federated with system:serviceaccount:cert-manager:cert-manager).
+  certManagerClientId: ""
+
+ingress:
+  # -- Static public IP the Gateway's LoadBalancer Service binds (pip-bbm-<env>-ingress).
+  publicIpName: ""
+  # -- Resource group of that IP (rg-bbm-<env>-data-ncus).
+  publicIpResourceGroup: ""
+
+# ---- chart settings ----
+acme:
+  # -- Optional ACME account e-mail (expiry notices). Empty = no e-mail.
+  email: ""
+  # -- Azure cloud of the DNS zones.
+  environment: AzurePublicCloud
+  issuers:
+    letsencrypt-staging:
+      server: https://acme-staging-v02.api.letsencrypt.org/directory
+    letsencrypt-prod:
+      server: https://acme-v02.api.letsencrypt.org/directory
+
+certificate:
+  # -- Certificate (and Secret) every HTTPS listener of the Gateway serves.
+  name: bbm-wildcard
+  secretName: bbm-wildcard-tls
+  # -- ClusterIssuer that signs it: letsencrypt-prod | letsencrypt-staging
+  # (install.sh --issuer). Use staging while testing a new zone to stay
+  # clear of Let's Encrypt rate limits; browsers will not trust it.
+  issuer: letsencrypt-prod
+
+gateway:
+  # -- Render the Gateway, its options ConfigMap and the HTTP->HTTPS redirect
+  # HTTPRoute. Needs the cluster's Managed Gateway API CRDs and the app
+  # routing Gateway API implementation (modules/aks).
+  enabled: true
+  # -- Gateway name; the app chart's ingress.gateway.name. The add-on names
+  # what it provisions <name>-<className> (Deployment/Service/HPA/PDB
+  # bbm-approuting-istio in this namespace).
+  name: bbm
+  # -- AKS-managed GatewayClass of the app routing Gateway API implementation.
+  className: approuting-istio
+  # -- Namespaces whose HTTPRoutes may attach to the HTTPS listeners must
+  # carry this label (bbm, run-*, pr-*; set by deploy.yml and
+  # _ephemeral-env.yml). The HTTP listener only admits this namespace's
+  # redirect route.
+  routeNamespaceLabel:
+    key: bbm.io/gateway-access
+    value: "true"
+  # -- HPA of the Envoy Deployment, through the per-Gateway ConfigMap
+  # (infrastructure.parametersRef). The add-on rejects minReplicas < 2.
+  scaling:
+    minReplicas: 2
+    maxReplicas: 5

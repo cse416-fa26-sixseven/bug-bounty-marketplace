@@ -1,0 +1,23 @@
+bbm-platform {{ .Chart.Version }} installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+ClusterIssuers: letsencrypt-staging, letsencrypt-prod (DNS-01, Azure DNS, workload identity {{ .Values.platform.certManagerClientId }})
+Certificate:    {{ .Release.Namespace }}/{{ .Values.certificate.name }} -> Secret {{ .Values.certificate.secretName }} (issuer {{ .Values.certificate.issuer }})
+{{- range .Values.dns.envZones }}
+                {{ . }}, *.{{ . }}
+{{- end }}
+{{- if .Values.gateway.enabled }}
+Gateway:        {{ .Release.Namespace }}/{{ .Values.gateway.name }} (GatewayClass {{ .Values.gateway.className }}) on public IP {{ .Values.ingress.publicIpName }} ({{ .Values.ingress.publicIpResourceGroup }})
+                HTTPS listeners admit HTTPRoutes from namespaces labelled {{ .Values.gateway.routeNamespaceLabel.key }}={{ .Values.gateway.routeNamespaceLabel.value }}; HTTP redirects to HTTPS.
+{{- end }}
+
+Check issuance (DNS-01 takes a minute or two):
+  kubectl -n {{ .Release.Namespace }} get certificate {{ .Values.certificate.name }}
+  kubectl -n {{ .Release.Namespace }} describe certificate {{ .Values.certificate.name }}
+  kubectl get challenges -A
+{{- if .Values.gateway.enabled }}
+
+Check the Gateway (Programmed once the Envoy pods run and the static IP is bound):
+  kubectl -n {{ .Release.Namespace }} wait gateway/{{ .Values.gateway.name }} --for=condition=Programmed --timeout=10m
+  kubectl -n {{ .Release.Namespace }} get gateway,httproute,svc,hpa
+  kubectl get httproute -A
+{{- end }}

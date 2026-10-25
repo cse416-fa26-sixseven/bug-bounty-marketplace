@@ -1,5 +1,5 @@
 variable "name" {
-  description = "PostgreSQL Flexible Server name (psql-bbm-<env>-eus2)."
+  description = "PostgreSQL Flexible Server name (psql-bbm-<env>-<abbr>)."
   type        = string
 }
 

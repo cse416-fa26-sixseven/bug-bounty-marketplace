@@ -1,0 +1,220 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bbm-platform chart values",
+  "description": "Top-level keys other than these are allowed: the whole values-infra.yaml (terraform helm_values) is passed in, and its app-chart keys are ignored.",
+  "type": "object",
+  "required": [
+    "dns",
+    "platform",
+    "ingress",
+    "acme",
+    "certificate",
+    "gateway"
+  ],
+  "properties": {
+    "dns": {
+      "type": "object",
+      "required": [
+        "zone",
+        "envZones"
+      ],
+      "properties": {
+        "zone": {
+          "type": "string",
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Parent zone (values-infra.yaml)."
+        },
+        "envZones": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          },
+          "description": "Env public zones (values-infra.yaml)."
+        },
+        "internalZone": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "platform": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "dnsResourceGroup",
+        "certManagerClientId"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "dnsResourceGroup": {
+          "type": "string",
+          "minLength": 1
+        },
+        "certManagerClientId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ingress": {
+      "type": "object",
+      "required": [
+        "publicIpName",
+        "publicIpResourceGroup"
+      ],
+      "properties": {
+        "publicIpName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publicIpResourceGroup": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "acme": {
+      "type": "object",
+      "required": [
+        "issuers"
+      ],
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string",
+          "enum": [
+            "AzurePublicCloud",
+            "AzureChinaCloud",
+            "AzureGermanCloud",
+            "AzureUSGovernmentCloud"
+          ]
+        },
+        "issuers": {
+          "type": "object",
+          "required": [
+            "letsencrypt-staging",
+            "letsencrypt-prod"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "server"
+            ],
+            "properties": {
+              "server": {
+                "type": "string",
+                "pattern": "^https://"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "certificate": {
+      "type": "object",
+      "required": [
+        "name",
+        "secretName",
+        "issuer"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "secretName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "issuer": {
+          "type": "string",
+          "enum": [
+            "letsencrypt-prod",
+            "letsencrypt-staging"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "gateway": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "name",
+        "className",
+        "routeNamespaceLabel",
+        "scaling"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 40,
+          "description": "Gateway name; <name>-approuting-istio must stay under 63 characters."
+        },
+        "className": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "routeNamespaceLabel": {
+          "type": "object",
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+              "maxLength": 63
+            }
+          },
+          "additionalProperties": false
+        },
+        "scaling": {
+          "type": "object",
+          "required": [
+            "minReplicas",
+            "maxReplicas"
+          ],
+          "properties": {
+            "minReplicas": {
+              "type": "integer",
+              "minimum": 2,
+              "description": "The add-on rejects an HPA minReplicas below 2."
+            },
+            "maxReplicas": {
+              "type": "integer",
+              "minimum": 2
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

@@ -7,6 +7,9 @@ Components:
 {{- if .Values.analysis.enabled }}
   analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}
 {{- end }}
+{{- if .Values.postgres.inCluster.enabled }}
+  postgres  {{ include "bbm.fullname" . }}-postgres:5432   (in-cluster, emptyDir: data is lost on restart; test/preview only)
+{{- end }}
 {{- if .Values.sandbox.enabled }}
   sandbox   namespace {{ .Values.sandbox.namespace }} (stub: RBAC, quota, deny-all, Job template)
 {{- end }}
@@ -21,14 +24,14 @@ Migrations: {{ if .Values.migrations.enabled }}pre-install/pre-upgrade hook Job 
 
 {{- if .Values.ingress.enabled }}
 
-Ingress (class {{ .Values.ingress.className }}):
-  {{ if eq .Values.ingress.tls.mode "certManager" }}https{{ else }}http{{ end }}://{{ .Values.ingress.host | default "<any host>" }}/
-{{- if .Values.ingress.appRouting.enabled }}
-  NginxIngressController "{{ .Values.ingress.appRouting.name }}" (cluster-scoped) binds public IP {{ .Values.ingress.publicIpName | default "<unset>" }}.
-{{- end }}
+HTTPRoute {{ include "bbm.fullname" . }} on Gateway {{ .Values.ingress.gateway.namespace }}/{{ .Values.ingress.gateway.name }}:
+  https://{{ .Values.ingress.host | default "<any host>" }}/   (/api, /health -> api; / -> web)
+  TLS terminates at the Gateway (bbm-platform wildcard bbm-platform/bbm-wildcard-tls); HTTP redirects to HTTPS.
+  The route attaches only if namespace {{ .Release.Namespace }} has label bbm.io/gateway-access=true:
+    kubectl -n {{ .Release.Namespace }} get httproute {{ include "bbm.fullname" . }} -o jsonpath='{.status.parents[0].conditions}'
 {{- else }}
 
-No Ingress. Reach the app with:
+No HTTPRoute. Reach the app with:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "bbm.fullname" . }}-web {{ .Values.web.port }}:{{ .Values.web.port }}
 {{- end }}
 
@@ -39,7 +42,7 @@ No Ingress. Reach the app with:
 {{- end }}
 {{- end }}
 {{- if and .Values.ingress.enabled (not .Values.ingress.host) }}{{ $missing = append $missing "ingress.host" }}{{ end }}
-{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.restrictEgress (not .Values.networkPolicy.postgresCidr) }}{{ $missing = append $missing "networkPolicy.postgresCidr (api cannot reach Postgres)" }}{{ end }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.restrictEgress (not .Values.networkPolicy.postgresCidr) (not .Values.postgres.inCluster.enabled) }}{{ $missing = append $missing "networkPolicy.postgresCidr (api cannot reach Postgres)" }}{{ end }}
 {{- with $missing }}
 
 WARNING: values normally provided by values-infra.yaml are missing:

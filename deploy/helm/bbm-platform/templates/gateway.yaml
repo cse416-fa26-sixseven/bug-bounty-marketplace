@@ -1,0 +1,114 @@
+{{- /*
+Gateway `bbm` (GatewayClass approuting-istio: the AKS application routing
+add-on's Gateway API implementation, enabled in modules/aks). For each
+Gateway the add-on's istiod provisions, in this namespace, an Envoy
+Deployment, a LoadBalancer Service, an HPA and a PDB named
+<gateway>-approuting-istio. spec.infrastructure.annotations are copied onto
+that Service, which is how it binds the static public IP the data stack owns
+(pip-bbm-<env>-ingress in rg-bbm-<env>-data-ncus). The AKS cluster identity
+has Network Contributor on that resource group (stacks/data identity.tf).
+
+Listeners:
+  http                     :80, admits only the redirect HTTPRoute below
+                           (allowedRoutes Same), which 301s to https.
+  https-<zone>             :443 <zone>, TLS terminated with the wildcard
+  https-wildcard-<zone>    :443 *.<zone>  Secret (certificate.yaml)
+One apex and one wildcard listener per env zone; both admit HTTPRoutes from
+namespaces labelled gateway.routeNamespaceLabel (bbm, run-*, pr-*). The
+Secret is in this namespace, so no ReferenceGrant is needed.
+*/ -}}
+{{- if .Values.gateway.enabled }}
+{{- $g := .Values.gateway -}}
+{{- $zones := include "bbm-platform.envZones" . | fromJsonArray -}}
+{{- $pip := include "bbm-platform.requireInfra" (dict "key" "ingress.publicIpName" "value" .Values.ingress.publicIpName) -}}
+{{- $pipRg := include "bbm-platform.requireInfra" (dict "key" "ingress.publicIpResourceGroup" "value" .Values.ingress.publicIpResourceGroup) -}}
+{{- $s := $g.scaling -}}
+{{- if lt (int $s.maxReplicas) (int $s.minReplicas) }}{{ fail "gateway.scaling.maxReplicas must be >= minReplicas" }}{{ end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $g.name }}-gateway-options
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm-platform.labels" . | nindent 4 }}
+data:
+  # Per-Gateway overrides of the add-on's istio-gateway-class-defaults
+  # (only allow-listed fields are accepted by the add-on's webhook).
+  horizontalPodAutoscaler: |
+    spec:
+      minReplicas: {{ $s.minReplicas }}
+      maxReplicas: {{ $s.maxReplicas }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ $g.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm-platform.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ $g.className }}
+  infrastructure:
+    annotations:
+      service.beta.kubernetes.io/azure-pip-name: {{ $pip | quote }}
+      service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ $pipRg | quote }}
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: {{ $g.name }}-gateway-options
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - group: gateway.networking.k8s.io
+            kind: HTTPRoute
+    {{- range $zone := $zones }}
+    {{- range $wildcard := list false true }}
+    - name: {{ printf "https-%s%s" (ternary "wildcard-" "" $wildcard) ($zone | replace "." "-") | quote }}
+      protocol: HTTPS
+      port: 443
+      hostname: {{ ternary (printf "*.%s" $zone) $zone $wildcard | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: {{ $.Values.certificate.secretName }}
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              {{ $g.routeNamespaceLabel.key }}: {{ $g.routeNamespaceLabel.value | quote }}
+        kinds:
+          - group: gateway.networking.k8s.io
+            kind: HTTPRoute
+    {{- end }}
+    {{- end }}
+---
+# HTTP -> HTTPS for every host on the Gateway. ACME uses DNS-01, so nothing
+# needs plain HTTP.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $g.name }}-https-redirect
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm-platform.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $g.name }}
+      sectionName: http
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+{{- end }}

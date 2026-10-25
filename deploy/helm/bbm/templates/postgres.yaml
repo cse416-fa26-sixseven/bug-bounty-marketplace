@@ -1,0 +1,127 @@
+{{- /*
+Throwaway in-cluster Postgres for ephemeral test/preview namespaces
+(postgres.inCluster.enabled). Single replica, emptyDir data: the database is
+gone whenever the pod is rescheduled. Never use it for staging/prod.
+
+The api reaches it at <fullname>-postgres:5432; with secrets.provider=plain
+and an empty secrets.plain.databaseUrl, bbm-secrets' database-url points
+here (see bbm.databaseUrl in _helpers.tpl).
+*/ -}}
+{{- if .Values.postgres.inCluster.enabled }}
+{{- $pg := .Values.postgres.inCluster -}}
+{{- if .Values.migrations.enabled }}
+{{- fail "postgres.inCluster.enabled is incompatible with migrations.enabled: the pre-install migrations hook runs before the in-cluster Postgres exists. Use api.migrateOnBoot=true instead." }}
+{{- end }}
+{{- $name := include "bbm.componentName" (dict "root" $ "component" "postgres") -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "postgres") | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ include "bbm.postgresPassword" . | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "bbm.selectorLabels" (dict "root" $ "component" "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "postgres") | nindent 4 }}
+spec:
+  replicas: 1
+  # emptyDir data: never run two instances side by side.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bbm.labels" (dict "root" $ "component" "postgres") | nindent 8 }}
+      annotations:
+        checksum/password: {{ include "bbm.postgresPassword" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "bbm.imagePullSecrets" . | nindent 6 }}
+      {{- include "bbm.podSecurityContext" (dict "uid" $pg.runAsUser "gid" $pg.runAsGroup) | nindent 6 }}
+      {{- include "bbm.nodeSelector" (dict "root" $ "values" dict) | nindent 6 }}
+      {{- include "bbm.tolerations" (dict "root" $ "values" dict) | nindent 6 }}
+      containers:
+        - name: postgres
+          image: {{ include "bbm.image" (dict "root" $ "image" $pg.image) }}
+          imagePullPolicy: {{ include "bbm.imagePullPolicy" (dict "root" $ "image" $pg.image) }}
+          {{- include "bbm.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: {{ $pg.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ $pg.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: password
+            # A subdirectory of the mount, as the image docs recommend.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", {{ $pg.user | quote }}, "-d", {{ $pg.database | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", {{ $pg.user | quote }}, "-d", {{ $pg.database | quote }}]
+            # initdb runs before the server listens on TCP.
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            {{- toYaml $pg.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: {{ $pg.storageSizeLimit }}
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

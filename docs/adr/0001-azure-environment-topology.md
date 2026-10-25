@@ -1,8 +1,20 @@
 # ADR 0001: Azure environment topology
 
-- **Status:** Accepted
+- **Status:** Accepted, partly superseded by [ADR 0002](0002-aks-everywhere-and-azure-dns.md)
 - **Date:** 2026-10-19
 - **Scope:** `infra/terraform/**`, `deploy/helm/bbm/**`, `.github/workflows/**`
+
+> **Note (2026-10-25):** [ADR 0002](0002-aks-everywhere-and-azure-dns.md) replaces the ACA ephemeral envs with namespaces on a third AKS
+> cluster (`test`), adds Azure DNS and TLS, and changes the ingress host, the AKS tier for prod and
+> some identities. The affected sections below are marked "Superseded by ADR 0002". They are kept
+> as the record of the original decision; everything not marked still holds.
+>
+> **Region (2026-10-25):** the `eastus2` / `eus2` region and the `centralus` fallback pinned here
+> are superseded by [ADR 0002 §7](0002-aks-everywhere-and-azure-dns.md#7-region): the Azure for
+> Students subscription allows only five regions, and neither `eastus2` nor `centralus` is one of
+> them, so the deployment runs in `northcentralus` (`ncus`), set once in
+> `envs/global/bootstrap.tfvars` (`infra/up.sh --location`). Names below that end in `-eus2` now
+> end in the region code, e.g. `rg-bbm-<env>-data-ncus`, `aks-bbm-<env>-ncus`.
 
 ## Context
 
@@ -25,11 +37,19 @@ Constraints:
   Foundry tests), so the platform needs a path to strong isolation.
 
 Region is `eastus2` (abbreviation `eus2`), with `centralus` as the fallback if a SKU is restricted
-for the new subscription. Project prefix is `bbm`.
+for the new subscription. Project prefix is `bbm`. _Superseded by ADR 0002 §7: the region is a
+single setting (`location` / `location_abbr` in `envs/global/bootstrap.tfvars`), currently
+`northcentralus` (`ncus`); both `eastus2` and `centralus` are blocked by the Azure for Students
+allowed-regions policy._
 
 ## Decision
 
 ### 1. Two kinds of environment
+
+> **Superseded by [ADR 0002](0002-aks-everywhere-and-azure-dns.md) §1.** All environments run on AKS. `test` is a third cluster
+> (`aks-bbm-test-eus2`) that hosts CI runs (`run-<id>-<attempt>`) and PR previews (`pr-<n>`) as
+> namespaces with in-cluster Postgres. The ACA rows and the "Ephemeral envs on ACA" bullet below
+> no longer apply.
 
 | Environment            | Platform                                    | Lifetime                                    | Data                           |
 | ---------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------ |
@@ -89,6 +109,10 @@ shares the concurrency group `env-<env>` with `deploy.yml`, so a deploy and a po
 
 ### 3. Terraform layout: shared stacks plus per-env tfvars
 
+> **Superseded in part by [ADR 0002](0002-aks-everywhere-and-azure-dns.md).** The `aca-ephemeral` stack and its per-run state keys are
+> removed. Stacks are now `bootstrap`, `global`, `data`, `compute`; `test` uses `data` + `compute`
+> like staging and prod.
+
 One copy of each stack (`stacks/{bootstrap,global,data,compute,aca-ephemeral}`), parameterised by
 `envs/<env>/*.tfvars` and a backend config. `scripts/tf.sh <stack> <env> <action>` is the single entry
 point. Ephemeral envs pass their state key at init (`test/run-<run_id>-<attempt>.tfstate`,
@@ -101,12 +125,14 @@ and data, compute and aca-ephemeral read global.
 ### 4. GitHub to Azure over OIDC
 
 No client secrets anywhere. Each GitHub Environment maps to an app registration with a federated
-credential for `repo:LoistCloist/bug-bounty-marketplace:environment:<env>`:
+credential for `repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:<env>` (the repo
+was transferred from `LoistCloist/bug-bounty-marketplace`; subjects follow the current
+name, which `infra/up.sh` writes into `github_repo`):
 
 | GitHub Environment  | Protection                                      | App registration    |
 | ------------------- | ----------------------------------------------- | ------------------- |
-| `test`              | none                                            | `gh-bbm-ephemeral`  |
-| `preview`           | none                                            | `gh-bbm-ephemeral`  |
+| `test`              | none (_ADR 0002: `main` only_)                  | `gh-bbm-ephemeral`  |
+| `preview`           | none                                            | `gh-bbm-ephemeral` (_ADR 0002: `gh-bbm-preview`_) |
 | `infra-global`      | 1 required reviewer, `main` only                | `gh-bbm-global`     |
 | `staging`           | `main` only                                     | `gh-bbm-staging`    |
 | `prod`              | 1 required reviewer, `main` only                | `gh-bbm-prod`       |
@@ -122,17 +148,32 @@ Terraform-generated staging secrets (PostgreSQL admin password and `database-url
 can read them. Staging holds no real user data and those secrets are rotatable, so this is accepted to
 let PRs plan staging; `prod/` is excluded precisely so prod secrets never reach PR jobs.
 
+> **Superseded in part by [ADR 0002](0002-aks-everywhere-and-azure-dns.md) §4.** A `test-infra` Environment (`main` only, no reviewer)
+> with identity `gh-bbm-test` is added. `gh-bbm-ephemeral` no longer runs Terraform and serves
+> only the now main-only `test` Environment; PR previews (`preview`) use the new `gh-bbm-preview`,
+> which can push only `bbm-preview/*`. `gh-bbm-plan` reads `test/` (now the test env's
+> data/compute state) and no longer `preview/`.
+
 Least privilege per identity:
 
 - `gh-bbm-ephemeral`: Contributor on the test and preview RGs, Reader on the shared RG, AcrPush, Managed
   Identity Operator on `id-bbm-aca-pull` and Log Analytics Contributor on the shared LAW.
+  _Superseded by ADR 0002 §4: AKS RBAC Cluster Admin and Cluster User on the test compute RG,
+  Reader on the test data RG, BBM Power Operator on both test RGs, `BBM tfstate reader` on
+  `global.tfstate` and `test/`, Reader on the shared RG and (the registry now being in ABAC mode)
+  Container Registry Repository Writer instead of AcrPush. `gh-bbm-preview` gets the same
+  test-cluster roles with a Writer ABAC-scoped to `bbm-preview/*`._
 - `gh-bbm-global`: Contributor on the shared RG, a constrained RBAC Administrator on the shared RG
   (AcrPull, AcrPush, Managed Identity Operator, Log Analytics Contributor, Key Vault Secrets
   Officer/User), Key Vault Secrets Officer on the shared RG (contracts-sepolia reads the Sepolia
-  secrets) and Cost Management Contributor on the subscription.
+  secrets) and Cost Management Contributor on the subscription. _ADR 0002 §4: the delegable ACR
+  roles are Container Registry Repository Reader/Writer (ABAC-mode registry), and it also holds
+  Repository Contributor + Catalog Lister for the janitor's image purge._
 - `gh-bbm-staging` and `gh-bbm-prod`: Contributor on their env's data and compute RGs, a constrained
   RBAC Administrator on both, AKS RBAC Cluster Admin on compute, Key Vault Secrets Officer on data,
   Reader on the shared RG plus a constrained RBAC Administrator there that may only grant AcrPull.
+  _ADR 0002 §4: Container Registry Repository Reader instead of AcrPull (kubelet), plus Repository
+  Reader for themselves (deploy image checks)._
 - `gh-bbm-prod-power`: only `BBM Power Operator` on the prod data and compute RGs. No Contributor, no
   RBAC admin and no state access, so the reviewer-free `prod-power` environment can pause and resume
   prod but cannot change it. (Staging's scheduled pause uses `gh-bbm-staging`, which has no reviewer
@@ -156,13 +197,17 @@ Least privilege per identity:
   `principal_type = "ServicePrincipal"` so CI can apply them.
 - **State access is prefix-scoped with ABAC** on the blob path (which excludes the container name):
 
-  | Identity           | Role on `tfstate`    | Read + write        | Read only                                         |
-  | ------------------ | -------------------- | ------------------- | ------------------------------------------------- |
-  | `gh-bbm-ephemeral` | `BBM tfstate writer` | `test/`, `preview/` | `global.tfstate`                                  |
-  | `gh-bbm-global`    | `BBM tfstate writer` | `global.tfstate`    | none                                              |
-  | `gh-bbm-staging`   | `BBM tfstate writer` | `staging/`          | `global.tfstate`                                  |
-  | `gh-bbm-prod`      | `BBM tfstate writer` | `prod/`             | `global.tfstate`                                  |
-  | `gh-bbm-plan`      | `BBM tfstate reader` | none                | `global.tfstate`, `staging/`, `test/`, `preview/` |
+  | Identity                       | Role on `tfstate`    | Read + write        | Read only                                         |
+  | ------------------------------ | -------------------- | ------------------- | ------------------------------------------------- |
+  | `gh-bbm-ephemeral`             | `BBM tfstate writer` | `test/`, `preview/` | `global.tfstate`                                  |
+  | _ADR 0002:_ `gh-bbm-ephemeral` | `BBM tfstate reader` | none                | `global.tfstate`, `test/`                         |
+  | _ADR 0002:_ `gh-bbm-preview`   | `BBM tfstate reader` | none                | `global.tfstate`, `test/`                         |
+  | _ADR 0002:_ `gh-bbm-test`      | `BBM tfstate writer` | `test/`             | `global.tfstate`                                  |
+  | `gh-bbm-global`                | `BBM tfstate writer` | `global.tfstate`    | none                                              |
+  | `gh-bbm-staging`               | `BBM tfstate writer` | `staging/`          | `global.tfstate`                                  |
+  | `gh-bbm-prod`                  | `BBM tfstate writer` | `prod/`             | `global.tfstate`                                  |
+  | `gh-bbm-plan`                  | `BBM tfstate reader` | none                | `global.tfstate`, `staging/`, `test/`, `preview/` |
+  | _ADR 0002:_ `gh-bbm-plan`      | `BBM tfstate reader` | none                | `global.tfstate`, `staging/`, `test/`             |
 
   Read conditions cover `blobs/read` except the `Blob.List` suboperation; write conditions cover
   `blobs/write`, `blobs/add/action`, `blobs/delete` and `blobs/move/action`. List Blobs has no blob
@@ -186,20 +231,30 @@ credentials, quota or uptime. Azure work lives in separate workflows:
 | `_build-push.yml`       | reusable: build and push images to ACR with SBOM/provenance                                     |
 | `integration-azure.yml` | apply `aca-ephemeral` (`kind=test`), run smoke/integration/e2e (+ k6 on demand), always destroy |
 | `preview.yml`           | per-PR `aca-ephemeral` (`kind=preview`, mocked web), sticky comment, destroy on close           |
-| `terraform.yml`         | plan on PR (sticky comment), global auto-apply on `main`, dispatch plan/apply per stack         |
-| `deploy.yml`            | Helm deploy to staging/prod (power gate, image check, `/health` smoke)                          |
-| `env-power.yml`         | on-demand power: `status`, `pause`, `resume`, `down`, `up`, plus schedules                      |
-| `contracts-deploy.yml`  | dispatch-only Sepolia deploy via `Deploy.s.sol`, dry run by default                             |
-| `infra-janitor.yml`     | every 6 h: sweep expired ephemeral resources and orphaned state, ACR purge                      |
+
+_Superseded by ADR 0002: `integration-azure.yml` and `preview.yml` deploy into a namespace on the
+test cluster through `_ephemeral-env.yml`, and `infra-janitor.yml` deletes expired namespaces._
+| `terraform.yml`        | plan on PR (sticky comment), global auto-apply on `main`, dispatch plan/apply per stack |
+| `deploy.yml`           | Helm deploy to staging/prod (power gate, image check, `/health` smoke)                  |
+| `env-power.yml`        | on-demand power: `status`, `pause`, `resume`, `down`, `up`, plus schedules              |
+| `contracts-deploy.yml` | dispatch-only Sepolia deploy via `Deploy.s.sol`, dry run by default                     |
+| `infra-janitor.yml`    | every 6 h: sweep expired ephemeral resources and orphaned state, ACR purge              |
 
 ### 6. Cluster platform
 
 - **AKS** Free tier, OIDC issuer and workload identity enabled, Entra ID RBAC with local accounts off,
   Azure CNI Overlay with Cilium network policy. Default VM size `Standard_B2als_v2`.
+  _Superseded by ADR 0002 §1: the tier is the `compute` input `aks_sku_tier`; prod uses Standard._
 - **Ingress:** the app-routing add-on (managed NGINX). A `NginxIngressController` named `bbm` gives
   the ingress class `bbm-nginx`, bound to the static public IP `pip-bbm-<env>-ingress`. That IP lives
   in the **data** RG so it survives `down`/`up`, and its DNS label gives the stable host
   `bbm-<env>.eastus2.cloudapp.azure.com`.
+  _Superseded by ADR 0002 §2–3: the host is `<env>.<zone>` (alias records in the env's Azure DNS
+  zone) and TLS is a cert-manager wildcard per env. ADR 0002 §3 also replaces the
+  `NginxIngressController` / `bbm-nginx` class with the app routing Gateway API: Gateway
+  `bbm-platform/bbm` (GatewayClass `approuting-istio`) from the per-cluster `bbm-platform` chart
+  binds the static PIP, and the app chart publishes an HTTPRoute. The cloudapp label stays as a
+  fallback._
 - **Secrets:** the Key Vault Secrets Store CSI add-on with workload identity. SecretProviderClass
   `bbm-kv` syncs Key Vault secrets into the K8s Secret `bbm-secrets`. Pods authenticate as
   user-assigned identities (`id-bbm-<env>-{api,worker,sandbox}`) through federated service accounts.
@@ -226,7 +281,8 @@ credentials, quota or uptime. Azure work lives in separate workflows:
   `storageBlobEndpoint` value already exist for it), more than one API replica would split uploads
   across pods. `web` scales freely.
 - **Load testing:** the k6 baseline (`tests/load/api-baseline.js`, p95 < 500 ms, errors < 1%) runs
-  against the pipeline-test env when `integration-azure.yml` is dispatched with `load`.
+  against the pipeline-test env when `integration-azure.yml` is dispatched with `load`. (Since
+  ADR 0002 that env is a namespace on the test cluster.)
 
 ### 8. Sandbox for untrusted PoC execution
 
@@ -266,6 +322,9 @@ family), which costs more and needs quota a new subscription may not have.
 - **Self-managed ingress-nginx via Helm.** It's more configurable, but it's one more component to
   upgrade and patch, and the community ingress-nginx project is in maintenance mode. The app-routing
   add-on is managed and supports a static IP from another RG. Rejected.
+  _ADR 0002 §3 revisits this: the add-on's managed NGINX loses Azure support in November 2026, so
+  ingress moved to the add-on's Gateway API implementation (still managed, still binds the static
+  IP), and self-managed controllers stay rejected._
 - **Kustomize instead of Helm.** It's fine for overlays, but Helm gives hooks (the migration Job,
   ordered SA/SPC creation), `helm test`, `--atomic` rollback, `values.schema.json` validation and
   `ct lint`. Helm was chosen.
@@ -358,6 +417,10 @@ infra/terraform/
   scripts/{tf.sh,env-power.sh,janitor.sh}
 ```
 
+_Superseded by ADR 0002: `modules/aca-app-stack`, `stacks/aca-ephemeral` and `envs/preview/` are
+removed; `envs/test/` has the same four files as staging and prod. `infra/up.sh`, `infra/down.sh`
+and `infra/lib/` drive bring-up and teardown._
+
 `scripts/tf.sh <stack> <env> <init|plan|apply|destroy|output|validate> [extra args]` picks
 `stacks/<stack>`, `envs/<env>/<stack>.tfvars` (or `aca.tfvars`), the backend file, and passes
 `-backend-config=key=...`.
@@ -367,7 +430,7 @@ infra/terraform/
 - They are also exported as `TF_VAR_tfstate_resource_group` / `TF_VAR_tfstate_account` (unless
   already set) for stacks that read other stacks through `terraform_remote_state`.
 - `aca-ephemeral` requires `$TF_STATE_KEY` matching `<env>/run-<run_id>-<attempt>.tfstate` or
-  `<env>/pr-<n>.tfstate` (`validate` excepted).
+  `<env>/pr-<n>.tfstate` (`validate` excepted). _Superseded by ADR 0002: removed with the stack._
 - `apply <planfile>` applies a saved plan without `-var-file`. `init -migrate-state` / `-reconfigure`
   run without `-input=false` so Terraform can prompt.
 - `TF_VAR_*` environment variables pass straight through to Terraform.
@@ -378,15 +441,18 @@ infra/terraform/
 ### Ownership conventions
 
 - **Bootstrap creates every resource group.** That covers shared, test, preview, `<env>-data` and
-  `<env>-compute`.
+  `<env>-compute`. _Superseded by ADR 0002: `rg-bbm-test-eus2` and `rg-bbm-preview-eus2` are gone;
+  `test` has `rg-bbm-test-data-eus2` and `rg-bbm-test-compute-eus2`. Bootstrap also creates the
+  DNS parent zone and the per-env child zones._
   - Later stacks look up their groups with `data "azurerm_resource_group"` and never create them.
   - The data RGs already ignore the power tags.
 - **Every stack takes names and tags from `modules/naming`.**
   - Inputs: `env`, `layer`, `suffix`, and optionally `ephemeral_env_name` / `expires_on`.
   - Outputs: `global.*`, `env.*`, `uamis`, `aca_environment`, `tags`, `tags_by_layer`.
+    _ADR 0002 removes the ACA naming and adds DNS names._
 - **CI env identities may only assign the roles in `env_delegable_roles`**
   (`stacks/bootstrap/identities.tf`):
-  - AcrPull
+  - AcrPull (_ADR 0002: Container Registry Repository Reader; the registry is in ABAC mode_)
   - AKS RBAC Cluster Admin and Writer
   - Key Vault Secrets Officer and User
   - Managed Identity Operator
@@ -397,10 +463,11 @@ infra/terraform/
   - Storage Queue Data Contributor, Reader, Message Processor and Message Sender
 
   Only service principals may be assignees. A stack that needs another role adds it there in the same PR.
+  _ADR 0002 adds DNS Zone Contributor (for `id-bbm-<env>-certmgr`)._
 
 - **`global` takes bootstrap outputs as tfvars, not remote state.** Bootstrap's `global_tfvars_hint`
   output provides `subscription_id`, `suffix`, `ephemeral_ci_principal_id` and
-  `secret_officer_sp_object_ids`. Admin users go in `secret_officer_user_object_ids`, applied locally
+  `secret_officer_sp_object_ids` (ADR 0002 adds `dns_zone_name`). Admin users go in `secret_officer_user_object_ids`, applied locally
   by an Owner.
 
 ### Stack `bootstrap` outputs
@@ -410,12 +477,14 @@ infra/terraform/
 - Identities and groups: `resource_groups`, `github_client_ids`, `github_principal_ids`,
   `power_operator_role_definition_id`.
 - Setup helpers: `global_tfvars_hint`, `gh_setup_commands`.
+- _ADR 0002 adds:_ `dns_zone_name`, `dns_name_servers`, `dns_child_zones`.
 
 ### Stack `global` outputs
 
 - Registry: `acr_name`, `acr_login_server`, `acr_id`.
 - Logs: `law_id`, `law_workspace_id`.
-- ACA pull identity: `aca_pull_identity_id`, `aca_pull_identity_client_id`.
+- ACA pull identity: `aca_pull_identity_id`, `aca_pull_identity_client_id`. _Superseded by
+  ADR 0002: removed with `id-bbm-aca-pull`. `dns_zone_name` is added._
 - Shared vault and group: `shared_key_vault_name`, `shared_key_vault_id`,
   `shared_resource_group_name`.
 - `location`, `suffix`.
@@ -424,38 +493,44 @@ infra/terraform/
 
 `bootstrap.tfstate`, `global.tfstate`, `staging/data.tfstate`, `staging/compute.tfstate`,
 `prod/data.tfstate`, `prod/compute.tfstate`, `test/run-<run_id>-<attempt>.tfstate`,
-`preview/pr-<n>.tfstate`.
+`preview/pr-<n>.tfstate`. _Superseded by ADR 0002: the per-run and per-PR keys are replaced by
+`test/data.tfstate` and `test/compute.tfstate`._
 
 ### Names
 
 `<sfx>` is a 4-character lowercase random string. `modules/naming` emits all of these.
+_Superseded in part by ADR 0002 §7: the `eus2` suffix below is the region code, now `ncus`
+(`modules/naming` maps the region to it); the length-limited Key Vault and storage names carry no
+region code, so they are unchanged._
 
-| Thing                       | Name                                                                                                                                                        |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tfstate RG / SA / container | `rg-bbm-tfstate-eus2` / `stbbmtfstate<sfx>` / `tfstate`                                                                                                     |
-| shared RG                   | `rg-bbm-shared-eus2`                                                                                                                                        |
-| ACR                         | `acrbbm<sfx>` (Basic, admin off)                                                                                                                            |
-| shared Log Analytics        | `log-bbm-shared-eus2`                                                                                                                                       |
-| ACA pull identity           | `id-bbm-aca-pull` (AcrPull)                                                                                                                                 |
-| shared Key Vault            | `kv-bbm-shared-<sfx>` (secrets `sepolia-rpc-url`, `sepolia-deployer-key`, `etherscan-api-key`, set out of band)                                             |
-| ephemeral RGs               | `rg-bbm-test-eus2`, `rg-bbm-preview-eus2` (created by bootstrap)                                                                                            |
-| env RGs                     | `rg-bbm-<env>-data-eus2`, `rg-bbm-<env>-compute-eus2`, nodes `rg-bbm-<env>-aksnodes-eus2`                                                                   |
-| VNet                        | `vnet-bbm-<env>-eus2`: staging `10.20.0.0/16`, prod `10.30.0.0/16`; subnets `snet-aks` /20, `snet-psql` /24 (delegated), `snet-pe` /24                      |
-| Postgres                    | `psql-bbm-<env>-eus2`, `B_Standard_B1ms`, v16, database `bbm`, private (VNet-integrated + private DNS)                                                      |
-| env Key Vault               | `kv-bbm-<stg\|prd>-<sfx>`, RBAC mode, 7-day soft delete, no purge protection; secrets `database-url`, `pg-admin-password` (TF), `llm-api-key` (out of band) |
-| env storage                 | `stbbm<stg\|prd><sfx>`, container `sources`, queue `analysis-jobs`, shared keys disabled                                                                    |
-| env Log Analytics           | `log-bbm-<env>-eus2` (daily cap)                                                                                                                            |
-| identities                  | `id-bbm-<env>-aks`, `id-bbm-<env>-api`, `id-bbm-<env>-worker`, `id-bbm-<env>-sandbox`                                                                       |
-| ingress IP                  | `pip-bbm-<env>-ingress`, Standard static, DNS label `bbm-<env>` (in the data RG)                                                                            |
-| AKS                         | `aks-bbm-<env>-eus2`                                                                                                                                        |
-| ACA environment             | `cae-bbm-<env_name>` (`env_name` = `run-<id>-<attempt>` or `pr-<n>`)                                                                                        |
+| Thing                       | Name                                                                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| tfstate RG / SA / container | `rg-bbm-tfstate-eus2` / `stbbmtfstate<sfx>` / `tfstate`                                                                                                      |
+| shared RG                   | `rg-bbm-shared-eus2`                                                                                                                                         |
+| ACR                         | `acrbbm<sfx>` (Basic, admin off)                                                                                                                             |
+| shared Log Analytics        | `log-bbm-shared-eus2`                                                                                                                                        |
+| ACA pull identity           | `id-bbm-aca-pull` (AcrPull). _Removed by ADR 0002._                                                                                                          |
+| shared Key Vault            | `kv-bbm-shared-<sfx>` (secrets `sepolia-rpc-url`, `sepolia-deployer-key`, `etherscan-api-key`, set out of band)                                              |
+| ephemeral RGs               | `rg-bbm-test-eus2`, `rg-bbm-preview-eus2` (created by bootstrap). _Removed by ADR 0002: test uses `rg-bbm-test-{data,compute}-eus2`._                        |
+| env RGs                     | `rg-bbm-<env>-data-eus2`, `rg-bbm-<env>-compute-eus2`, nodes `rg-bbm-<env>-aksnodes-eus2`                                                                    |
+| VNet                        | `vnet-bbm-<env>-eus2`: staging `10.20.0.0/16`, prod `10.30.0.0/16`; subnets `snet-aks` /20, `snet-psql` /24 (delegated), `snet-pe` /24                       |
+| Postgres                    | `psql-bbm-<env>-eus2`, `B_Standard_B1ms`, v16, database `bbm`, private (VNet-integrated + private DNS)                                                       |
+| env Key Vault               | `kv-bbm-<stg\|prd>-<sfx>`, RBAC mode, 7-day soft delete, no purge protection; secrets `database-url`, `pg-admin-password` (TF), `llm-api-key` (out of band)  |
+| env storage                 | `stbbm<stg\|prd><sfx>`, container `sources`, queue `analysis-jobs`, shared keys disabled                                                                     |
+| env Log Analytics           | `log-bbm-<env>-eus2` (daily cap)                                                                                                                             |
+| identities                  | `id-bbm-<env>-aks`, `id-bbm-<env>-api`, `id-bbm-<env>-worker`, `id-bbm-<env>-sandbox`                                                                        |
+| ingress IP                  | `pip-bbm-<env>-ingress`, Standard static, DNS label `bbm-<env>` (in the data RG). _ADR 0002: app host is `<env>.<zone>`._                                    |
+| AKS                         | `aks-bbm-<env>-eus2`                                                                                                                                         |
+| ACA environment             | `cae-bbm-<env_name>` (`env_name` = `run-<id>-<attempt>` or `pr-<n>`). _Removed by ADR 0002: namespaces `run-<id>-<attempt>` / `pr-<n>` on the test cluster._ |
 
 Tags on everything: `project=bbm`, `env`, `layer=global|data|compute|ephemeral`,
-`managed_by=terraform`, `repo=LoistCloist/bug-bounty-marketplace`, `cost_center=cse416`. Ephemeral
+`managed_by=terraform`, `repo=cse416-fa26-sixseven/bug-bounty-marketplace`, `cost_center=cse416`. Ephemeral
 resources also get `ephemeral=true` and `expires_on=<RFC3339>`. The data RG additionally carries the
 power tags (`power-state`, `bbm-last-deployed-tag`, `auto-pause`) and Terraform ignores them.
 
 ### Stack `aca-ephemeral`
+
+> **Superseded by ADR 0002:** this stack is removed. The section is kept for history.
 
 - **Inputs:**
 
@@ -502,6 +577,7 @@ power tags (`power-state`, `bbm-last-deployed-tag`, `auto-pause`) and Terraform 
   - `system:serviceaccount:bbm:bbm-analysis`
   - `system:serviceaccount:bbm:bbm-migrations`
   - `system:serviceaccount:bbm-sandbox:bbm-sandbox-runner`
+  - _ADR 0002 adds_ `system:serviceaccount:cert-manager:cert-manager` (on `id-bbm-<env>-certmgr`).
 
 ### `helm_values` keys
 
@@ -529,6 +605,9 @@ networkPolicy:
   postgresCidr: 10.x0.1.0/24 # snet-psql CIDR
 ```
 
+_Superseded by ADR 0002 §5: `ingress.host` is `<env>.<zone>`, and the keys `dns.*` and
+`platform.*` are added for the `bbm-platform` chart._
+
 ### What the Helm chart needs from `data` and `compute`
 
 1. **Worker identity.**
@@ -539,10 +618,13 @@ networkPolicy:
 2. **Key Vault access.** Key Vault Secrets User on the env vault for the api UAMI (which migrations
    also use) and for the worker UAMI.
 3. **Ingress IP.** The AKS cluster identity `id-bbm-<env>-aks` gets Network Contributor on
-   `rg-bbm-<env>-data-eus2`, so app-routing's load balancer can bind the static PIP.
+   `rg-bbm-<env>-data-eus2`, so the Gateway's load balancer can bind the static PIP.
 4. **Add-ons and pools.**
    - Add-ons: KV CSI with secret rotation, `web_app_routing`, KEDA, OIDC issuer + workload identity,
      Cilium network policy.
+     _Superseded by ADR 0002 §3: no `web_app_routing` block; the Managed Gateway API CRDs and the
+     app routing Gateway API implementation (`approuting-istio`) are enabled with
+     `azapi_update_resource`, since azurerm has no argument for them._
    - The apps pool has the label `bbm.io/pool=apps`.
    - The sandbox pool has the label `bbm.io/pool=sandbox`, the taint
      `bbm.io/sandbox=true:NoSchedule` and the Kata runtime.
@@ -558,6 +640,10 @@ networkPolicy:
   - Service accounts: `bbm-api`, `bbm-web`, `bbm-analysis`, `bbm-migrations`.
   - Secret `bbm-secrets`, synced by the SecretProviderClass `bbm-kv`.
   - Ingress class `bbm-nginx`, served by the app-routing `NginxIngressController` `bbm`.
+    _Superseded by ADR 0002 §3: no Ingress or ingress class. The chart's HTTPRoute attaches to
+    Gateway `bbm-platform/bbm` (GatewayClass `approuting-istio`) from the per-cluster
+    `bbm-platform` chart, which terminates TLS with the env wildcard certificate. The release
+    namespace must carry the label `bbm.io/gateway-access=true`._
 - **Runtime environment variables:**
   - api: `PORT`, `DATABASE_URL`, `SOURCE_STORAGE_DIR`, `MIGRATE_ON_BOOT`, `PG_POOL_MAX`,
     `MIGRATIONS_DIR`. The migration entry point is `node dist/migrate-cli.js`.

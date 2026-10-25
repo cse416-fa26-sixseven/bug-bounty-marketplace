@@ -1,4 +1,4 @@
-# Staging (AKS aks-bbm-staging-eus2). Layer on top of values.yaml, then
+# Staging (AKS aks-bbm-staging-ncus). Layer on top of values.yaml, then
 # values-infra.yaml (terraform compute output), then the image tag:
 #
 #   helm upgrade --install bbm deploy/helm/bbm -n bbm \
@@ -6,7 +6,7 @@
 #     --set global.image.tag=sha-xxxxxxx --set global.requireInfraValues=true
 #
 # Everything environment-specific that terraform knows (ACR registry, client
-# IDs, Key Vault, storage, ingress host/PIP, Postgres CIDR) comes from
+# IDs, Key Vault, storage, ingress host, Postgres CIDR) comes from
 # values-infra.yaml and is intentionally NOT set here.
 
 global:
@@ -53,15 +53,9 @@ migrations:
 
 ingress:
   enabled: true
-  className: bbm-nginx
-  # host / publicIpName / publicIpResourceGroup: from values-infra.yaml
-  tls:
-    mode: none
-  appRouting:
-    enabled: true
-    scaling:
-      minReplicas: 1
-      maxReplicas: 2
+  # host: from values-infra.yaml. The Gateway bbm-platform/bbm, its static
+  # PIP binding (publicIpName / publicIpResourceGroup) and TLS (the wildcard
+  # for <env>.<zone> and *.<env>.<zone>) belong to the bbm-platform chart.
 
 networkPolicy:
   enabled: true

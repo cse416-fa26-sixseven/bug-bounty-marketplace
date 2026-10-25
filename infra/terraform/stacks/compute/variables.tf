@@ -4,31 +4,31 @@ variable "subscription_id" {
 }
 
 variable "env" {
-  description = "Persistent environment: staging or prod."
+  description = "Environment: test, staging or prod."
   type        = string
 
   validation {
-    condition     = contains(["staging", "prod"], var.env)
-    error_message = "env must be staging or prod."
+    condition     = contains(["test", "staging", "prod"], var.env)
+    error_message = "env must be test, staging or prod."
   }
 }
 
 variable "location" {
-  description = "Azure region."
+  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
   type        = string
-  default     = "eastus2"
+  default     = "northcentralus"
 }
 
 variable "location_abbr" {
-  description = "Short region code used in names."
+  description = "Short region code used in names (e.g. ncus). Null derives it from location (modules/naming local.location_abbrs)."
   type        = string
-  default     = "eus2"
+  default     = null
 }
 
 variable "tfstate_resource_group" {
   description = "Resource group of the Terraform state account (for terraform_remote_state). CI sets TF_VAR_tfstate_resource_group from the TFSTATE_RG repo variable."
   type        = string
-  default     = "rg-bbm-tfstate-eus2"
+  default     = "rg-bbm-tfstate-ncus"
 }
 
 variable "tfstate_account" {
@@ -43,8 +43,19 @@ variable "tfstate_container" {
 }
 
 variable "kubernetes_version" {
-  description = "Kubernetes minor version, e.g. \"1.33\". Pick a GA, non-LTS-only version from `az aks get-versions -l eastus2 -o table`."
+  description = "Kubernetes minor version, e.g. \"1.33\". Pick a GA, non-LTS-only version from `az aks get-versions -l <location> -o table`."
   type        = string
+}
+
+variable "aks_sku_tier" {
+  description = "AKS control-plane tier: Free, or Standard (uptime SLA, prod only)."
+  type        = string
+  default     = "Free"
+
+  validation {
+    condition     = contains(["Free", "Standard"], var.aks_sku_tier)
+    error_message = "aks_sku_tier must be Free or Standard."
+  }
 }
 
 variable "system_vm_size" {

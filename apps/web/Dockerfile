@@ -64,7 +64,7 @@ RUN pnpm --filter @bbm/web build
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 
-LABEL org.opencontainers.image.source="https://github.com/LoistCloist/bug-bounty-marketplace" \
+LABEL org.opencontainers.image.source="https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace" \
       org.opencontainers.image.title="bbm-web" \
       org.opencontainers.image.description="Bug Bounty Marketplace web frontend (Next.js standalone server)"
 

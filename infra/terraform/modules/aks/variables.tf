@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Cluster name (aks-bbm-<env>-eus2)."
+  description = "Cluster name (aks-bbm-<env>-<abbr>)."
   type        = string
 }
 
@@ -9,12 +9,12 @@ variable "dns_prefix" {
 }
 
 variable "resource_group_name" {
-  description = "Existing resource group for the cluster (rg-bbm-<env>-compute-eus2)."
+  description = "Existing resource group for the cluster (rg-bbm-<env>-compute-<abbr>)."
   type        = string
 }
 
 variable "node_resource_group_name" {
-  description = "Name of the AKS-managed node resource group (rg-bbm-<env>-aksnodes-eus2). AKS creates and deletes it."
+  description = "Name of the AKS-managed node resource group (rg-bbm-<env>-aksnodes-<abbr>). AKS creates and deletes it."
   type        = string
 }
 
@@ -24,12 +24,23 @@ variable "location" {
 }
 
 variable "kubernetes_version" {
-  description = "Kubernetes minor version (e.g. \"1.33\"). The patch auto-upgrade channel keeps the patch level current. List GA versions with `az aks get-versions -l eastus2 -o table`."
+  description = "Kubernetes minor version (e.g. \"1.33\"). The patch auto-upgrade channel keeps the patch level current. List GA versions with `az aks get-versions -l <location> -o table`."
   type        = string
 
   validation {
     condition     = can(regex("^1\\.[0-9]+$", var.kubernetes_version))
     error_message = "kubernetes_version must be a minor version like \"1.33\" (no patch), so the patch upgrade channel does not cause drift."
+  }
+}
+
+variable "sku_tier" {
+  description = "AKS control-plane tier: Free (no SLA) or Standard (uptime SLA; prod only, ADR 0002)."
+  type        = string
+  default     = "Free"
+
+  validation {
+    condition     = contains(["Free", "Standard"], var.sku_tier)
+    error_message = "sku_tier must be Free or Standard."
   }
 }
 
@@ -77,7 +88,7 @@ variable "dns_service_ip" {
 }
 
 variable "acr_id" {
-  description = "Container registry ID; the kubelet identity gets AcrPull on it."
+  description = "Container registry ID; the kubelet identity gets Container Registry Repository Reader on it."
   type        = string
 }
 
@@ -156,7 +167,7 @@ variable "tags" {
 }
 
 variable "rbac_propagation_wait" {
-  description = "How long to wait after the Managed Identity Operator / AcrPull grants before creating the cluster (RBAC propagation)."
+  description = "How long to wait after the Managed Identity Operator / registry pull grants before creating the cluster (RBAC propagation)."
   type        = string
   default     = "90s"
 }

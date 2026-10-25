@@ -1,19 +1,22 @@
 name: Infra janitor
 
 # ---------------------------------------------------------------------
-# Sweeps leftovers of ephemeral ACA environments with
-# infra/terraform/scripts/janitor.sh: expired (expires_on tag) container
-# apps/environments in rg-bbm-{test,preview}-eus2 and stale test/ state
-# blobs. Weekly it also purges old pr-*/sha-* images from bbm/* in ACR.
+# Deletes expired ephemeral namespaces (run-<id>-<attempt>, pr-<n>;
+# annotation bbm.io/expires-on) on the test AKS cluster with
+# infra/terraform/scripts/janitor.sh, which skips cleanly while the cluster
+# is paused or down. Weekly it also purges old pr-*/sha-* images from
+# bbm/* and old PR-preview images from bbm-preview/* in ACR.
 #
 #   every 6h          sweep, --apply
 #   Sun 03:30 UTC     sweep + ACR purge, --apply
 #   manual dispatch   dry run unless `apply`; purge only with `acr_purge`
 #
-# Identities: the sweep runs in GitHub Environment `test`
-# (gh-bbm-ephemeral). The ACR purge needs control-plane rights on the
-# registry (acr run, delete locks), so it runs as its own job in
-# `infra-global` (gh-bbm-global, Contributor on the shared RG). That
+# Identities: the sweep runs in GitHub Environment `test` (main only,
+# gh-bbm-ephemeral). The ACR purge needs registry-wide rights (acr run,
+# delete locks, deletes in both bbm/* and bbm-preview/*), so it runs as its
+# own job in `infra-global` (gh-bbm-global: Contributor on the shared RG
+# plus Container Registry Repository Contributor + Catalog Lister, because
+# the registry is in ABAC repository-permissions mode). That
 # environment has a required reviewer: the weekly purge WAITS FOR
 # APPROVAL (and times out unapproved after 30 days, which is harmless:
 # next week's run tries again). The sweep never waits: it has its own
@@ -39,7 +42,7 @@ on:
         type: boolean
         default: false
       acr_purge:
-        description: Also purge old pr-*/sha-* images from ACR.
+        description: Also purge old pr-*/sha-* images (bbm/*, bbm-preview/*) from ACR.
         type: boolean
         default: false
 
@@ -50,6 +53,12 @@ on:
 permissions:
   contents: read
 
+# Region of the resource names (janitor.sh, deployed-tag reads); set by the
+# bootstrap gh_setup_commands. The gate skips every job while they are unset.
+env:
+  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
+  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+
 jobs:
   # ---------------------------------------------------------------------
   # Skip everything until the bootstrap repo vars exist, and resolve the
@@ -57,7 +66,9 @@ jobs:
   # ---------------------------------------------------------------------
   gate:
     name: Gate
-    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    if: >-
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     outputs:
       apply: ${{ steps.mode.outputs.apply }}
@@ -123,7 +134,7 @@ jobs:
           set -euo pipefail
           tags=()
           for env in staging prod; do
-            rg="rg-bbm-${env}-data-eus2"
+            rg="rg-bbm-${env}-data-${BBM_REGION_ABBR}"
             if [[ "$(az group exists --name "$rg" --only-show-errors)" != "true" ]]; then
               echo "$rg: not found"
               continue
@@ -143,10 +154,10 @@ jobs:
           echo "tags=${tags[*]}" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------
-  # Resource + state sweep as the ephemeral identity (environment `test`).
+  # Namespace sweep as the ephemeral identity (environment `test`).
   # ---------------------------------------------------------------------
   sweep:
-    name: Sweep ephemeral envs
+    name: Sweep ephemeral namespaces
     needs: gate
     runs-on: ubuntu-latest
     environment: test
@@ -158,11 +169,15 @@ jobs:
       contents: read
       id-token: write
     env:
-      TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
       APPLY: ${{ needs.gate.outputs.apply }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.1.4
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -259,10 +274,16 @@ jobs:
             echo "dry run: protected tags are not locked, so the --dry-run report may list them; a real run keeps them"
           fi
 
-          purge_cmd="acr purge --filter 'bbm/.*:pr-.*' --filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged"
+          # bbm-preview/* holds only PR previews (pr-<n>-sha-<7>[-mocked]);
+          # bbm/*:pr-* are leftovers from before previews had their own
+          # repositories. Deployed tags are only ever in bbm/* (locked above).
+          purge_cmd="acr purge --filter 'bbm/.*:pr-.*' --filter 'bbm/.*:sha-.*' --filter 'bbm-preview/.*:pr-.*' --ago 30d --keep 10 --untagged"
           [[ "$APPLY" == "true" ]] || purge_cmd+=" --dry-run"
           echo "acr run on $ACR_NAME: $purge_cmd"
-          az acr run --registry "$ACR_NAME" --cmd "$purge_cmd" /dev/null --only-show-errors
+          # ABAC-mode registry: a quick run has no registry data access of its
+          # own; [caller] runs it with this job's identity (gh-bbm-global).
+          az acr run --registry "$ACR_NAME" --source-acr-auth-id "[caller]" \
+            --cmd "$purge_cmd" /dev/null --only-show-errors
 
       - name: Summary
         if: always()

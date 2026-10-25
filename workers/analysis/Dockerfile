@@ -38,7 +38,7 @@ FROM python:3.12-slim-bookworm AS runtime
 
 LABEL org.opencontainers.image.title="bbm-analysis" \
       org.opencontainers.image.description="Slither static analysis + advisory LLM explanations worker" \
-      org.opencontainers.image.source="https://github.com/LoistCloist/bug-bounty-marketplace" \
+      org.opencontainers.image.source="https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace" \
       org.opencontainers.image.version="0.1.0"
 
 ENV PATH="/app/.venv/bin:$PATH" \

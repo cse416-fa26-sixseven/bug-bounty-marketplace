@@ -1,4 +1,4 @@
-# AKS cluster for one persistent env (staging/prod). Disposable: everything
+# AKS cluster for one env (test/staging/prod). Disposable: everything
 # durable (VNet, PIP, PG, KV, storage, UAMIs) lives in the data stack, so this
 # can be destroyed and re-applied ("down"/"up") without data loss.
 
@@ -7,7 +7,7 @@ locals {
   ci_streams = ["Microsoft-ContainerInsights-Group-Default"]
 }
 
-# Kubelet (node) identity, created here rather than by AKS so AcrPull exists
+# Kubelet (node) identity, created here rather than by AKS so its registry pull grant exists
 # before the first node pulls an image. It lives in the compute RG and goes
 # away with the cluster on `down`.
 resource "azurerm_user_assigned_identity" "kubelet" {
@@ -27,11 +27,14 @@ resource "azurerm_role_assignment" "cluster_kubelet_operator" {
   skip_service_principal_aad_check = true
 }
 
-# Env CI identities may assign only AcrPull in the shared RG (bootstrap ABAC
-# condition `shared_acr_pull_only`).
+# Env CI identities may assign only Container Registry Repository Reader in
+# the shared RG (bootstrap ABAC condition `shared_acr_reader_only`). The
+# registry is in ABAC repository-permissions mode, where AcrPull is not
+# honored. Registry-wide (no condition): the test cluster also pulls
+# bbm-preview/* and every cluster pulls mirror/*.
 resource "azurerm_role_assignment" "kubelet_acr_pull" {
   scope                            = var.acr_id
-  role_definition_name             = "AcrPull"
+  role_definition_name             = "Container Registry Repository Reader"
   principal_id                     = azurerm_user_assigned_identity.kubelet.principal_id
   principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
@@ -55,7 +58,7 @@ resource "azurerm_kubernetes_cluster" "this" {
   node_resource_group = var.node_resource_group_name
   dns_prefix          = var.dns_prefix
   kubernetes_version  = var.kubernetes_version
-  sku_tier            = "Free"
+  sku_tier            = var.sku_tier
   support_plan        = "KubernetesOfficial"
 
   # Patch channel moves only the patch level within var.kubernetes_version,
@@ -151,12 +154,10 @@ resource "azurerm_kubernetes_cluster" "this" {
     secret_rotation_interval = "2m"
   }
 
-  # App-routing (managed NGINX). The chart creates NginxIngressController `bbm`
-  # bound to the static PIP in the data RG; no default controller needed.
-  web_app_routing {
-    dns_zone_ids             = []
-    default_nginx_controller = "None"
-  }
+  # No web_app_routing block: ingress is the app routing Gateway API
+  # implementation (azapi_update_resource.app_routing_gateway_api below), not
+  # the add-on's managed NGINX, and DNS records are managed by Terraform, not
+  # by the add-on.
 
   workload_autoscaler_profile {
     keda_enabled = true
@@ -173,11 +174,66 @@ resource "azurerm_kubernetes_cluster" "this" {
   tags = var.tags
 
   lifecycle {
-    # The cluster autoscaler owns node_count.
-    ignore_changes = [default_node_pool[0].node_count]
+    # The cluster autoscaler owns node_count. web_app_routing: azurerm (API
+    # 2025-10-01) cannot express ingressProfile.gatewayAPI or
+    # webAppRouting.gatewayAPIImplementations, which azapi sets below; if the
+    # RP ever reports the shared ingressProfile.webAppRouting as a block,
+    # azurerm must not "fix" it by rewriting the whole ingressProfile.
+    ignore_changes = [default_node_pool[0].node_count, web_app_routing]
   }
 
   depends_on = [time_sleep.rbac_propagation]
+}
+
+# Ingress (ADR 0002 section 3): the Managed Gateway API CRDs (standard
+# channel, bundle pinned to the Kubernetes minor) plus the application
+# routing add-on's Gateway API implementation, a sidecar-less istiod in
+# aks-istio-system that reconciles Gateways of GatewayClass approuting-istio.
+# azurerm (4.x and 5.x) has no argument for either, so this is the azapi
+# update Microsoft documents for Terraform
+# (https://learn.microsoft.com/azure/aks/app-routing-gateway-api, Terraform
+# tab): equivalent to `az aks update --enable-gateway-api
+# --enable-app-routing-istio`. It GETs the cluster, merges this body and PUTs
+# it back; the Gateway itself (static PIP, TLS) is in deploy/helm/bbm-platform.
+resource "azapi_update_resource" "app_routing_gateway_api" {
+  type        = "Microsoft.ContainerService/managedClusters@2026-03-01"
+  resource_id = azurerm_kubernetes_cluster.this.id
+
+  body = {
+    properties = {
+      ingressProfile = {
+        gatewayAPI = {
+          installation = "Standard"
+        }
+        webAppRouting = {
+          gatewayAPIImplementations = {
+            appRoutingIstio = {
+              mode = "Enabled"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  response_export_values = ["properties.ingressProfile"]
+
+  # API version: managedClusters@2026-03-01 is in azapi 2.13.0's embedded
+  # schema (checked in the provider binary; it also carries the
+  # ingressProfile.gatewayAPI / gatewayAPIImplementations properties), so
+  # schema validation stays on.
+  lifecycle {
+    # azurerm PUTs the whole managedCluster with its own (older) API version,
+    # which does not know these fields, so any in-place update of the cluster
+    # (version upgrade, tags, autoscaler profile, ...) may drop them. A
+    # reference to the whole resource re-runs this PATCH after every azurerm
+    # update or replacement of the cluster (a replacement also covers the new
+    # OIDC issuer URL, the trigger this used before).
+    # TODO(confirm on a real plan): a cluster update should show this
+    # resource as "must be replaced" in the same plan, and the Gateway API
+    # settings should survive it (`az aks show --query ingressProfile`).
+    replace_triggered_by = [azurerm_kubernetes_cluster.this]
+  }
 }
 
 resource "azurerm_kubernetes_cluster_node_pool" "apps" {

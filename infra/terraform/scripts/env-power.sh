@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# On-demand power control for the AKS environments (staging, prod).
+# On-demand power control for the AKS environments (test, staging, prod).
 #
 #   scripts/env-power.sh <env> <action> [--include-db true|false]
 #
-#   env      staging | prod
+#   env      test | staging | prod   (test has no Postgres server: every Postgres
+#                                     step is a no-op there)
 #   action   status      AKS power/provisioning state, node pools, Postgres state,
-#                        data RG tags, ingress FQDN and GET /health
+#                        data RG tags, ingress host and GET /health
 #            pause       az aks stop (+ Postgres stop with --include-db true), tag paused
-#            resume      Postgres start, az aks start, tag running
+#            resume      Postgres start, az aks start, tag running (idempotent: waits
+#                        for a start already in flight, so concurrent callers are safe)
 #            mark-down   tag power-state=down   (after terraform destroy of compute)
 #            mark-up     tag power-state=running (after terraform apply of compute)
 #            db-stop     stop Postgres only (used by `down`)
@@ -24,12 +26,13 @@
 # Long-running operations use --no-wait and poll `az ... list`, so the role
 # needs no operation-status permissions.
 #
-# Live state is stored as tags on rg-bbm-<env>-data-eus2:
+# Live state is stored as tags on rg-bbm-<env>-data-<region abbr>:
 #   power-state=running|paused|down, auto-pause=true|false, db-paused=true|false,
 #   <state>-at=<UTC timestamp>, bbm-last-deployed-tag=<image tag> (written by deploy.yml)
 #
 # Environment (optional):
-#   BBM_REGION_ABBR (eus2)  BBM_LOCATION (eastus2)
+#   BBM_REGION_ABBR, BBM_LOCATION  region abbreviation and name (default: location_abbr /
+#                                  location in envs/global/bootstrap.tfvars)
 #   ENV_POWER_TIMEOUT (seconds per wait, 1800)  ENV_POWER_POLL (seconds, 20)
 #   GITHUB_STEP_SUMMARY / GITHUB_OUTPUT: when set (GitHub Actions), a markdown
 #   summary and key=value outputs are appended.
@@ -69,7 +72,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$env" in staging | prod) ;; *) die "env must be staging or prod (got '$env')" ;; esac
+case "$env" in test | staging | prod) ;; *) die "env must be test, staging or prod (got '$env')" ;; esac
 case "$include_db" in true | false) ;; *) die "--include-db must be true or false (got '$include_db')" ;; esac
 case "$action" in
   status | pause | resume | mark-down | mark-up | db-stop | db-start | auto-pause | repause-db) ;;
@@ -78,8 +81,17 @@ esac
 
 command -v az >/dev/null 2>&1 || die "az CLI not found on PATH"
 
-abbr=${BBM_REGION_ABBR:-eus2}
-location=${BBM_LOCATION:-eastus2}
+# Region: BBM_LOCATION / BBM_REGION_ABBR (CI: repo vars AZURE_LOCATION /
+# AZURE_LOCATION_ABBR), else location / location_abbr in
+# envs/global/bootstrap.tfvars, the single source of truth infra/up.sh writes.
+boot_tfvars="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/envs/global/bootstrap.tfvars"
+boot_var() { # boot_var <key> → string value from bootstrap.tfvars (empty if absent)
+  [[ -f "$boot_tfvars" ]] || return 0
+  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$boot_tfvars" | head -n1
+}
+abbr=${BBM_REGION_ABBR:-$(boot_var location_abbr)}
+location=${BBM_LOCATION:-$(boot_var location)}
+[[ -n "$abbr" && -n "$location" ]] || die "region unknown: set BBM_LOCATION and BBM_REGION_ABBR (or location/location_abbr in $boot_tfvars)"
 timeout=${ENV_POWER_TIMEOUT:-1800}
 poll=${ENV_POWER_POLL:-20}
 
@@ -88,6 +100,9 @@ compute_rg="rg-bbm-$env-compute-$abbr"
 cluster="aks-bbm-$env-$abbr"
 pg="psql-bbm-$env-$abbr"
 pip="pip-bbm-$env-ingress"
+# The test env runs in-cluster Postgres per ephemeral namespace (ADR 0002).
+has_pg=true
+[[ "$env" == test ]] && has_pg=false
 
 started_at=$(date +%s)
 
@@ -123,6 +138,7 @@ aks_pools() {
 
 # Ready | Stopped | Starting | Stopping | Updating | ..., or empty when missing.
 pg_state() {
+  $has_pg || return 0
   az postgres flexible-server list -g "$data_rg" --query "[?name=='$pg'] | [0].state" -o tsv
 }
 
@@ -137,19 +153,36 @@ set_tags() {
   log "tagged $data_rg: $*"
 }
 
+# App host: the env's public DNS zone <env>.<zone> (ADR 0002), else the static
+# IP's cloudapp FQDN. BBM Power Operator may be unable to read either; fall back
+# to the fixed DNS label.
 ingress_fqdn() {
   local fqdn
-  # BBM Power Operator cannot read public IPs; fall back to the fixed DNS label.
-  fqdn=$(az network public-ip show -g "$data_rg" -n "$pip" --query dnsSettings.fqdn -o tsv 2>/dev/null || true)
+  fqdn=$(az network dns zone list -g "$data_rg" --query "[?starts_with(name, '$env.')] | [0].name" -o tsv 2>/dev/null || true)
+  [[ -n "$fqdn" ]] ||
+    fqdn=$(az network public-ip show -g "$data_rg" -n "$pip" --query dnsSettings.fqdn -o tsv 2>/dev/null || true)
   echo "${fqdn:-bbm-$env.$location.cloudapp.azure.com}"
 }
 
+# "https://<host>" or "http://<host>" (whichever answers /health), else "unreachable".
+# The test env serves no app at its apex (only ephemeral namespaces): "n/a".
 health() {
-  if command -v curl >/dev/null 2>&1 && curl -fsS -m 5 -o /dev/null "http://$1/health" 2>/dev/null; then
-    echo "ok"
-  else
-    echo "unreachable"
+  local scheme
+  if [[ "$env" == test ]]; then
+    echo "n/a"
+    return 0
   fi
+  command -v curl >/dev/null 2>&1 || {
+    echo "unreachable"
+    return 0
+  }
+  for scheme in https http; do
+    if curl -fsS -m 5 -o /dev/null "$scheme://$1/health" 2>/dev/null; then
+      echo "$scheme://$1"
+      return 0
+    fi
+  done
+  echo "unreachable"
 }
 
 # Prints the current state to stdout (and the step summary) under heading $1.
@@ -165,6 +198,7 @@ snapshot() {
     pools="-"
   fi
   pgs=$(pg_state)
+  $has_pg || pgs="None (in-cluster per namespace)"
   ps=$(tag power-state)
   ap=$(tag auto-pause)
   lt=$(tag bbm-last-deployed-tag)
@@ -177,7 +211,7 @@ snapshot() {
   node pools         ${pools:-none}
   Postgres $pg       ${pgs:-NotFound}
   tags               power-state=${ps:-unset} auto-pause=${ap:-unset} bbm-last-deployed-tag=${lt:-unset}
-  ingress            http://$fqdn  /health=$h
+  ingress            $fqdn  /health=$h
 EOF
   summary "#### $env: $heading" "" \
     "| | |" "|---|---|" \
@@ -187,14 +221,15 @@ EOF
     "| power-state tag | ${ps:-unset} |" \
     "| auto-pause tag | ${ap:-unset} |" \
     "| last deployed tag | ${lt:-unset} |" \
-    "| ingress | http://$fqdn (\`/health\`: $h) |" ""
+    "| ingress | $fqdn (\`/health\`: $h) |" ""
   output aks_power "$power"
   output aks_provisioning "$prov"
-  output pg_state "${pgs:-NotFound}"
+  output pg_state "$($has_pg && echo "${pgs:-NotFound}" || echo None)"
   output power_state "${ps:-}"
   output auto_pause "${ap:-}"
   output last_deployed_tag "${lt:-}"
   output fqdn "$fqdn"
+  output url "https://$fqdn"
   output health "$h"
 }
 
@@ -220,6 +255,10 @@ wait_for() {
 
 db_stop() {
   local s
+  if ! $has_pg; then
+    log "$env has no Postgres server; nothing to stop"
+    return 0
+  fi
   s=$(pg_state)
   case "$s" in
     "") log "Postgres $pg not found; nothing to stop" ;;
@@ -242,6 +281,10 @@ db_stop() {
 
 db_start() {
   local s
+  if ! $has_pg; then
+    log "$env has no Postgres server; nothing to start"
+    return 0
+  fi
   s=$(pg_state)
   case "$s" in
     "") die "Postgres $pg not found in $data_rg (data stack not applied?)" ;;
@@ -297,7 +340,9 @@ do_pause() {
     wait_for "AKS power/provisioning" aks_state "Stopped Succeeded"
   fi
   [[ "$include_db" == true ]] && db_stop
-  set_tags power-state=paused "paused-at=$(now)" "db-paused=$include_db"
+  local dbp=$include_db
+  $has_pg || dbp=false
+  set_tags power-state=paused "paused-at=$(now)" "db-paused=$dbp"
 }
 
 do_resume() {
@@ -310,14 +355,28 @@ do_resume() {
   fi
   db_start
   read -r power prov <<<"$aks"
-  if [[ "$power" == "Running" ]]; then
-    log "cluster already Running"
-    [[ "$prov" == "Succeeded" ]] || wait_for "AKS power/provisioning" aks_state "Running Succeeded"
+  if [[ "$prov" == "Stopping" ]]; then
+    # A stop in flight (e.g. the nightly auto-pause) can still report power
+    # Running; waiting for "Running Succeeded" would time out. Let the stop
+    # finish, then start.
+    log "a stop is in progress ($power/$prov): waiting for it to finish before starting"
+    wait_for "AKS power/provisioning" aks_state "Stopped Succeeded"
+    power=Stopped prov=Succeeded
+  fi
+  if [[ "$power" == "Running" || "$prov" == "Starting" ]]; then
+    # Running, or a start already in flight (another caller): just wait.
+    log "cluster is $power/$prov"
+    [[ "$power $prov" == "Running Succeeded" ]] || wait_for "AKS power/provisioning" aks_state "Running Succeeded"
   else
     # A stop still in flight must settle before start is accepted.
     [[ "$prov" == "Succeeded" ]] || wait_for "AKS power/provisioning" aks_state "Stopped Succeeded"
     log "starting $cluster"
-    az aks start -g "$compute_rg" -n "$cluster" --no-wait -o none
+    if ! az aks start -g "$compute_rg" -n "$cluster" --no-wait -o none; then
+      # Lost a race with a concurrent start: fine if one is now in flight.
+      aks=$(aks_state)
+      [[ "$aks" == "Running "* || "$aks" == *" Starting" ]] || die "az aks start failed (cluster is '${aks:-not found}')"
+      log "a concurrent start is in flight ($aks)"
+    fi
     wait_for "AKS power/provisioning" aks_state "Running Succeeded"
   fi
   set_tags power-state=running "resumed-at=$(now)"
@@ -342,6 +401,10 @@ do_auto_pause() {
 
 do_repause_db() {
   local ps dbp s
+  if ! $has_pg; then
+    log "$env has no Postgres server; nothing to do"
+    return 0
+  fi
   ps=$(tag power-state)
   dbp=$(tag db-paused)
   s=$(pg_state)

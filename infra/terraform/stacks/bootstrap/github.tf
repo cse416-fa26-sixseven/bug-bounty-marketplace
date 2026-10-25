@@ -4,9 +4,13 @@
 
 locals {
   # GitHub Environment => OIDC identity, reviewer requirement, main-only.
+  # `test` (CI runs, janitor sweep) pushes the sha-* images staging/prod
+  # deploy, so it is main-only; `preview` runs for every same-repo PR branch
+  # with its own identity that can only push bbm-preview/*.
   github_environments = {
-    "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = false }
-    "preview"           = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = false }
+    "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = true }
+    "preview"           = { identity = "gh-bbm-preview", reviewers = false, main_only = false }
+    "test-infra"        = { identity = "gh-bbm-test", reviewers = false, main_only = true }
     "infra-global"      = { identity = "gh-bbm-global", reviewers = true, main_only = true }
     "contracts-sepolia" = { identity = "gh-bbm-global", reviewers = true, main_only = false }
     "staging"           = { identity = "gh-bbm-staging", reviewers = false, main_only = true }
@@ -21,6 +25,10 @@ locals {
     TFSTATE_RG            = azurerm_resource_group.tfstate.name
     TFSTATE_ACCOUNT       = azurerm_storage_account.tfstate.name
     ACR_NAME              = module.naming.global.acr
+    # Region of every resource name the workflows build (RGs, clusters);
+    # their gate jobs skip while these are unset (ADR 0002).
+    AZURE_LOCATION      = var.location
+    AZURE_LOCATION_ABBR = module.naming.location_abbr
   }
 
   reviewer_list = [for id in var.github_reviewer_ids : { type = "User", id = id }]

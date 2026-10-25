@@ -15,35 +15,31 @@ mock_provider "azurerm" {
 
   mock_resource "azurerm_container_registry" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ContainerRegistry/registries/acrbbma1b2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-ncus/providers/Microsoft.ContainerRegistry/registries/acrbbma1b2"
     }
   }
 
   mock_resource "azurerm_log_analytics_workspace" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-shared-eus2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-ncus/providers/Microsoft.OperationalInsights/workspaces/log-bbm-shared-ncus"
     }
   }
 
   mock_resource "azurerm_key_vault" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-shared-a1b2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-shared-a1b2"
     }
   }
 
-  mock_resource "azurerm_user_assigned_identity" {
-    defaults = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-bbm-aca-pull"
-      principal_id = "88888888-8888-8888-8888-888888888888"
-    }
-  }
 }
 
 variables {
   subscription_id                = "00000000-0000-0000-0000-000000000000"
   suffix                         = "a1b2"
+  dns_zone_name                  = "bbm.example.com"
   alert_emails                   = ["admin@example.com"]
   ephemeral_ci_principal_id      = "77777777-7777-7777-7777-777777777777"
+  preview_ci_principal_id        = "88888888-8888-8888-8888-888888888888"
   secret_officer_sp_object_ids   = ["99999999-9999-9999-9999-999999999999"]
   secret_officer_user_object_ids = ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
   acr_push_principal_ids         = ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
@@ -63,8 +59,8 @@ run "plan_names" {
   }
 
   assert {
-    condition     = length(module.rg_budget) == 4
-    error_message = "expected 4 RG budgets (staging/prod x data/compute)"
+    condition     = length(module.rg_budget) == 6 && contains(keys(module.rg_budget), "test-data") && contains(keys(module.rg_budget), "test-compute")
+    error_message = "expected 6 RG budgets (test/staging/prod x data/compute)"
   }
 
   assert {
@@ -82,8 +78,16 @@ run "plan_names" {
   }
 
   assert {
-    condition     = alltrue([for ra in azurerm_role_assignment.acr_push : ra.principal_type == "ServicePrincipal"]) && length(azurerm_role_assignment.acr_push) == 1
-    error_message = "AcrPush grants must be typed ServicePrincipal (ABAC on gh-bbm-global)"
+    condition = (
+      alltrue([for ra in azurerm_role_assignment.acr_push : ra.principal_type == "ServicePrincipal" && ra.role_definition_name == "Container Registry Repository Writer"]) &&
+      length(azurerm_role_assignment.acr_push) == 1
+    )
+    error_message = "build identity grants must be Repository Writer typed ServicePrincipal (ABAC on gh-bbm-global)"
+  }
+
+  assert {
+    condition     = module.acr.role_assignment_mode == "AbacRepositoryPermissions" && module.acr.sku == "Basic"
+    error_message = "the registry must be Basic in ABAC repository-permissions mode"
   }
 }
 
@@ -91,12 +95,50 @@ run "apply_with_mocks" {
   command = apply
 
   assert {
-    condition     = length(azurerm_role_assignment.ephemeral_ci) == 3
-    error_message = "expected AcrPush, MI Operator and LAW grants for the ephemeral identity"
+    condition = (
+      length(azurerm_role_assignment.ephemeral_ci_acr_writer) == 1 &&
+      azurerm_role_assignment.ephemeral_ci_acr_writer[0].role_definition_name == "Container Registry Repository Writer" &&
+      azurerm_role_assignment.ephemeral_ci_acr_writer[0].condition == null
+    )
+    error_message = "the (main-only) ephemeral identity needs registry-wide Repository Writer"
   }
 
   assert {
-    condition     = output.aca_pull_identity_id != "" && output.suffix == "a1b2"
+    condition = (
+      length(azurerm_role_assignment.preview_ci_acr_writer) == 1 &&
+      azurerm_role_assignment.preview_ci_acr_writer[0].principal_id == "88888888-8888-8888-8888-888888888888" &&
+      azurerm_role_assignment.preview_ci_acr_writer[0].role_definition_name == "Container Registry Repository Writer" &&
+      azurerm_role_assignment.preview_ci_acr_writer[0].condition_version == "2.0"
+    )
+    error_message = "the preview identity needs a conditioned Repository Writer"
+  }
+
+  # Writes only under bbm-preview/; reads under bbm-preview/ or mirror/; bbm/ never.
+  assert {
+    condition = (
+      strcontains(local.preview_acr_condition, "ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/write'}") &&
+      strcontains(local.preview_acr_condition, "ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/metadata/write'}") &&
+      strcontains(local.preview_acr_condition, "ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/read'}") &&
+      strcontains(local.preview_acr_condition, "@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase 'bbm-preview/'))") &&
+      strcontains(local.preview_acr_condition, "StringStartsWithIgnoreCase 'mirror/'") &&
+      !strcontains(local.preview_acr_condition, "'bbm/'") &&
+      length(regexall("StringStartsWithIgnoreCase 'mirror/'", local.preview_acr_condition)) == 1
+    )
+    error_message = "preview ACR condition must limit writes to bbm-preview/ and reads to bbm-preview/ + mirror/"
+  }
+
+  assert {
+    condition     = output.suffix == "a1b2" && output.dns_zone_name == "bbm.example.com" && output.acr_id != ""
     error_message = "outputs missing"
   }
+}
+
+run "rejects_empty_dns_zone" {
+  command = plan
+
+  variables {
+    dns_zone_name = ""
+  }
+
+  expect_failures = [var.dns_zone_name]
 }

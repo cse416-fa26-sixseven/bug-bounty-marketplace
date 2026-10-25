@@ -3,19 +3,16 @@
 #
 #   scripts/tf.sh <stack> <env> <command> [extra terraform args]
 #
-#   stack    bootstrap | global | data | compute | aca-ephemeral
-#   env      global (bootstrap, global) | staging, prod (data, compute) | test, preview (aca-ephemeral)
+#   stack    bootstrap | global | data | compute
+#   env      global (bootstrap, global) | test, staging, prod (data, compute)
 #   command  init | plan | apply | destroy | output | validate | import | console | <any terraform subcommand>
 #
 # Files used (relative to infra/terraform):
 #   stacks/<stack>/                                  working dir (terraform -chdir)
-#   envs/<env>/<stack>.tfvars  (aca-ephemeral: envs/<env>/aca.tfvars)
+#   envs/<env>/<stack>.tfvars
 #   envs/<env>/backend-<stack>.hcl, else envs/<env>/backend.hcl
 #
 # State key: <stack>.tfstate for env=global, <env>/<stack>.tfstate otherwise.
-# aca-ephemeral REQUIRES $TF_STATE_KEY matching <env>/run-<run_id>-<attempt>.tfstate
-# or <env>/pr-<n>.tfstate (validate excepted: it never touches the backend);
-# it is ignored for every other stack so a stray export cannot cross-wire state.
 # $TFSTATE_RG / $TFSTATE_ACCOUNT override the backend file's resource group /
 # storage account, and are exported as TF_VAR_tfstate_resource_group /
 # TF_VAR_tfstate_account (unless already set) for terraform_remote_state.
@@ -50,9 +47,8 @@ tf_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 case "$stack" in
   bootstrap | global) allowed_envs="global" ;;
-  data | compute) allowed_envs="staging prod" ;;
-  aca-ephemeral) allowed_envs="test preview" ;;
-  *) die "unknown stack '$stack' (bootstrap|global|data|compute|aca-ephemeral)" ;;
+  data | compute) allowed_envs="test staging prod" ;;
+  *) die "unknown stack '$stack' (bootstrap|global|data|compute)" ;;
 esac
 [[ " $allowed_envs " == *" $env "* ]] || die "stack '$stack' does not support env '$env' (allowed: $allowed_envs)"
 
@@ -61,11 +57,7 @@ env_dir="$tf_root/envs/$env"
 [[ -d "$stack_dir" ]] || die "missing stack directory $stack_dir"
 [[ -d "$env_dir" ]] || die "missing env directory $env_dir"
 
-if [[ "$stack" == "aca-ephemeral" ]]; then
-  var_file="$env_dir/aca.tfvars"
-else
-  var_file="$env_dir/$stack.tfvars"
-fi
+var_file="$env_dir/$stack.tfvars"
 
 if [[ -f "$env_dir/backend-$stack.hcl" ]]; then
   backend_file="$env_dir/backend-$stack.hcl"
@@ -73,16 +65,7 @@ else
   backend_file="$env_dir/backend.hcl"
 fi
 
-if [[ "$stack" == "aca-ephemeral" && "$cmd" == "validate" ]]; then
-  state_key="" # validate runs init -backend=false: no state key needed
-elif [[ "$stack" == "aca-ephemeral" ]]; then
-  [[ -n "${TF_STATE_KEY:-}" ]] ||
-    die "aca-ephemeral needs TF_STATE_KEY (e.g. test/run-<run_id>-<attempt>.tfstate or preview/pr-<n>.tfstate)"
-  key_re="^${env}/(run-[0-9]+-[0-9]+|pr-[0-9]+)\.tfstate$"
-  [[ "$TF_STATE_KEY" =~ $key_re ]] ||
-    die "TF_STATE_KEY '$TF_STATE_KEY' must match $env/run-<run_id>-<attempt>.tfstate or $env/pr-<n>.tfstate"
-  state_key=$TF_STATE_KEY
-elif [[ "$env" == "global" ]]; then
+if [[ "$env" == "global" ]]; then
   state_key="$stack.tfstate"
 else
   state_key="$env/$stack.tfstate"

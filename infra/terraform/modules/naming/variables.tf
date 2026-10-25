@@ -10,26 +10,46 @@ variable "project" {
 }
 
 variable "env" {
-  description = "Environment the names/tags are for: global, test, preview, staging or prod."
+  description = "Environment the names/tags are for: global, test, staging or prod."
   type        = string
   default     = "global"
 
   validation {
-    condition     = contains(["global", "test", "preview", "staging", "prod"], var.env)
-    error_message = "env must be one of global, test, preview, staging, prod."
+    condition     = contains(["global", "test", "staging", "prod"], var.env)
+    error_message = "env must be one of global, test, staging, prod."
   }
 }
 
 variable "location" {
-  description = "Azure region (full name), e.g. eastus2."
+  description = "Azure region (full name), e.g. northcentralus."
   type        = string
-  default     = "eastus2"
+  default     = "northcentralus"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]+$", var.location))
+    error_message = "location must be an Azure region name like northcentralus (lowercase, no spaces)."
+  }
 }
 
 variable "location_abbr" {
-  description = "Short region code used in names, e.g. eus2."
+  description = "Short region code used in names, e.g. ncus. Null derives it from the built-in map in main.tf (local.location_abbrs); required for regions not in that map, and must match the map for regions in it."
   type        = string
-  default     = "eus2"
+  default     = null
+
+  validation {
+    condition     = var.location_abbr == null || can(regex("^[a-z][a-z0-9]{1,5}$", var.location_abbr))
+    error_message = "location_abbr must be 2-6 lowercase alphanumeric characters starting with a letter."
+  }
+
+  validation {
+    condition     = var.location_abbr != null || contains(keys(local.location_abbrs), var.location)
+    error_message = "location has no built-in abbreviation (modules/naming local.location_abbrs): set location_abbr explicitly, or add the region to the map."
+  }
+
+  validation {
+    condition     = var.location_abbr == null || lookup(local.location_abbrs, var.location, var.location_abbr) == var.location_abbr
+    error_message = "location_abbr does not match the built-in abbreviation for location (modules/naming local.location_abbrs); a mismatch would name resources after another region."
+  }
 }
 
 variable "suffix" {
@@ -43,24 +63,18 @@ variable "suffix" {
 }
 
 variable "layer" {
-  description = "Layer tag for the `tags` output: global, data, compute or ephemeral."
+  description = "Layer tag for the `tags` output: global, data or compute."
   type        = string
   default     = "global"
 
   validation {
-    condition     = contains(["global", "data", "compute", "ephemeral"], var.layer)
-    error_message = "layer must be one of global, data, compute, ephemeral."
+    condition     = contains(["global", "data", "compute"], var.layer)
+    error_message = "layer must be one of global, data, compute."
   }
 }
 
-variable "ephemeral_env_name" {
-  description = "ACA ephemeral environment name (run-<id>-<attempt> or pr-<n>); only used for the aca_environment output."
-  type        = string
-  default     = null
-}
-
-variable "expires_on" {
-  description = "RFC3339 expiry timestamp; when set, tags gain ephemeral=true and expires_on."
+variable "dns_zone_name" {
+  description = "Parent DNS zone (e.g. bug-bounty.example.com) for the `dns` output. Null leaves the DNS names empty."
   type        = string
   default     = null
 }
@@ -68,7 +82,7 @@ variable "expires_on" {
 variable "repo" {
   description = "GitHub repository (owner/name) recorded in the repo tag."
   type        = string
-  default     = "LoistCloist/bug-bounty-marketplace"
+  default     = "cse416-fa26-sixseven/bug-bounty-marketplace"
 }
 
 variable "extra_tags" {

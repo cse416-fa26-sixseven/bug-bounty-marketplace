@@ -2,22 +2,43 @@
 # from the inputs, so every stack agrees on names without remote lookups.
 
 locals {
+  # Region → abbreviation used in names. The single place that maps regions to
+  # codes: stacks pass location_abbr = null (or the matching value) and get it
+  # from here. Add a region here (or set location_abbr) before moving to it.
+  # Azure for Students only allows francecentral, belgiumcentral, denmarkeast,
+  # northcentralus and canadacentral (subscription policy, ADR 0002).
+  location_abbrs = {
+    northcentralus = "ncus"
+    canadacentral  = "cac"
+    francecentral  = "frc"
+    belgiumcentral = "bec"
+    denmarkeast    = "dke"
+    eastus         = "eus"
+    eastus2        = "eus2"
+    centralus      = "cus"
+    southcentralus = "scus"
+    westus2        = "wus2"
+    westus3        = "wus3"
+    westeurope     = "weu"
+    northeurope    = "neu"
+  }
+
   p   = var.project
-  loc = var.location_abbr
+  loc = var.location_abbr != null ? var.location_abbr : lookup(local.location_abbrs, var.location, "")
   sfx = var.suffix
 
   # Short env codes for names with tight length limits (Key Vault, storage).
   env_short_map = {
     global  = "glb"
     test    = "tst"
-    preview = "prv"
     staging = "stg"
     prod    = "prd"
   }
   env_short = local.env_short_map[var.env]
 
-  # VNet address spaces per persistent env (see infra spec).
+  # VNet address spaces per AKS env (ADR 0001 / 0002).
   vnet_cidrs = {
+    test    = "10.10.0.0/16"
     staging = "10.20.0.0/16"
     prod    = "10.30.0.0/16"
   }
@@ -30,39 +51,54 @@ locals {
     shared_resource_group   = "rg-${local.p}-shared-${local.loc}"
     acr                     = "acr${local.p}${local.sfx}"
     shared_log_analytics    = "log-${local.p}-shared-${local.loc}"
-    aca_pull_identity       = "id-${local.p}-aca-pull"
     shared_key_vault        = "kv-${local.p}-shared-${local.sfx}"
-    test_resource_group     = "rg-${local.p}-test-${local.loc}"
-    preview_resource_group  = "rg-${local.p}-preview-${local.loc}"
   }
 
-  # ---- per-env names (meaningful for staging/prod) --------------------------
+  # ---- per-env names (meaningful for test/staging/prod) ---------------------
   e = var.env
   env = {
-    data_resource_group      = "rg-${local.p}-${local.e}-data-${local.loc}"
-    compute_resource_group   = "rg-${local.p}-${local.e}-compute-${local.loc}"
-    aks_node_resource_group  = "rg-${local.p}-${local.e}-aksnodes-${local.loc}"
-    vnet                     = "vnet-${local.p}-${local.e}-${local.loc}"
-    vnet_cidr                = lookup(local.vnet_cidrs, local.e, null)
-    subnet_aks               = "snet-aks"
-    subnet_psql              = "snet-psql"
-    subnet_pe                = "snet-pe"
-    postgres_server          = "psql-${local.p}-${local.e}-${local.loc}"
-    postgres_database        = local.p
-    key_vault                = "kv-${local.p}-${local.env_short}-${local.sfx}"
-    storage_account          = "st${local.p}${local.env_short}${local.sfx}"
-    storage_container        = "sources"
-    storage_queue            = "analysis-jobs"
-    log_analytics            = "log-${local.p}-${local.e}-${local.loc}"
-    ingress_public_ip        = "pip-${local.p}-${local.e}-ingress"
-    ingress_dns_label        = "${local.p}-${local.e}"
-    ingress_fqdn             = "${local.p}-${local.e}.${var.location}.cloudapp.azure.com"
-    aks_cluster              = "aks-${local.p}-${local.e}-${local.loc}"
-    ephemeral_resource_group = "rg-${local.p}-${local.e}-${local.loc}"
+    data_resource_group     = "rg-${local.p}-${local.e}-data-${local.loc}"
+    compute_resource_group  = "rg-${local.p}-${local.e}-compute-${local.loc}"
+    aks_node_resource_group = "rg-${local.p}-${local.e}-aksnodes-${local.loc}"
+    vnet                    = "vnet-${local.p}-${local.e}-${local.loc}"
+    vnet_cidr               = lookup(local.vnet_cidrs, local.e, null)
+    subnet_aks              = "snet-aks"
+    subnet_psql             = "snet-psql"
+    subnet_pe               = "snet-pe"
+    postgres_server         = "psql-${local.p}-${local.e}-${local.loc}"
+    postgres_database       = local.p
+    key_vault               = "kv-${local.p}-${local.env_short}-${local.sfx}"
+    storage_account         = "st${local.p}${local.env_short}${local.sfx}"
+    storage_container       = "sources"
+    storage_queue           = "analysis-jobs"
+    log_analytics           = "log-${local.p}-${local.e}-${local.loc}"
+    ingress_public_ip       = "pip-${local.p}-${local.e}-ingress"
+    ingress_dns_label       = "${local.p}-${local.e}"
+    ingress_fqdn            = "${local.p}-${local.e}.${var.location}.cloudapp.azure.com"
+    aks_cluster             = "aks-${local.p}-${local.e}-${local.loc}"
   }
 
   uamis = {
-    for role in ["aks", "api", "worker", "sandbox"] : role => "id-${local.p}-${local.e}-${role}"
+    for role in ["aks", "api", "worker", "sandbox", "certmgr"] : role => "id-${local.p}-${local.e}-${role}"
+  }
+
+  # ---- DNS (ADR 0002) ---------------------------------------------------------
+  # Child zones per env under the parent zone; the test cluster also serves
+  # PR previews. Bootstrap creates the zones, data writes their records.
+  dns_env_labels = {
+    test    = ["test", "preview"]
+    staging = ["staging"]
+    prod    = ["prod"]
+  }
+  dns_env_zones = var.dns_zone_name == null ? [] : [
+    for l in lookup(local.dns_env_labels, local.e, []) : "${l}.${var.dns_zone_name}"
+  ]
+  dns = {
+    zone          = var.dns_zone_name
+    env_labels    = tolist(lookup(local.dns_env_labels, local.e, []))
+    env_zones     = local.dns_env_zones
+    host          = length(local.dns_env_zones) > 0 ? local.dns_env_zones[0] : null
+    internal_zone = var.dns_zone_name == null || !contains(keys(local.dns_env_labels), local.e) ? null : "${local.e}.internal.${var.dns_zone_name}"
   }
 
   # ---- tags -----------------------------------------------------------------
@@ -74,13 +110,8 @@ locals {
     cost_center = "cse416"
   }
 
-  ephemeral_tags = var.expires_on == null ? {} : {
-    ephemeral  = "true"
-    expires_on = var.expires_on
-  }
-
   tags_by_layer = {
-    for l in ["global", "data", "compute", "ephemeral"] :
-    l => merge(local.base_tags, { layer = l }, local.ephemeral_tags, var.extra_tags)
+    for l in ["global", "data", "compute"] :
+    l => merge(local.base_tags, { layer = l }, var.extra_tags)
   }
 }

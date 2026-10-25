@@ -1,0 +1,53 @@
+# Values for the jetstack cert-manager chart, installed by
+# deploy/platform/install.sh as release `cert-manager` in namespace
+# `cert-manager`. The chart version is pinned there (CERT_MANAGER_VERSION,
+# currently v1.21.3); bump both together.
+#
+# Workload identity (https://cert-manager.io/docs/configuration/acme/dns01/azuredns/):
+# the controller pod carries azure.workload.identity/use=true, so the AKS
+# workload identity webhook projects a federated token into it. The
+# controller ServiceAccount cert-manager/cert-manager is federated with
+# id-bbm-<env>-certmgr (stacks/compute). install.sh adds the SA annotation
+# azure.workload.identity/client-id=<platform.certManagerClientId> from
+# values-infra.yaml; the ClusterIssuers also set managedIdentity.clientID.
+
+crds:
+  # Install and upgrade the CRDs with the release.
+  enabled: true
+  # Keep them (and so every Certificate/Issuer) on `helm uninstall`.
+  keep: true
+
+global:
+  leaderElection:
+    # Keep the lease in cert-manager's own namespace instead of kube-system.
+    namespace: cert-manager
+
+podLabels:
+  azure.workload.identity/use: "true"
+
+serviceAccount:
+  labels:
+    azure.workload.identity/use: "true"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+webhook:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+cainjector:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

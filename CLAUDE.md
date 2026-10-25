@@ -54,7 +54,12 @@ forge snapshot                 # rewrite .gas-snapshot after gas changes; CI run
 infra/terraform/scripts/ci-static.sh   # fmt, validate, terraform test, tflint, shellcheck
 helm lint --strict deploy/helm/bbm -f deploy/helm/bbm/values-staging.yaml --set global.image.tag=test
 helm template bbm deploy/helm/bbm -n bbm -f deploy/helm/bbm/values-prod.yaml --set global.image.tag=test
+helm lint --strict deploy/helm/bbm-platform -f deploy/helm/bbm-platform/values-prod.yaml -f deploy/helm/bbm-platform/ci/prod-values.yaml
 docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3   # lint workflows
+
+# Azure bring-up / teardown (needs `az login --use-device-code`; see docs/devops/azure-bootstrap.md):
+infra/up.sh --subscription <guid> [--zone <zone>] [--location <region>] [--envs test,staging] [--prod] [--dry-run]
+infra/down.sh --subscription <guid> (--envs <list> | --all) [--dry-run]
 ```
 
 `@bbm/system-tests` (`tests/`) has **no `test` script on purpose**, so
@@ -104,11 +109,16 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3   # lint workflo
 ## Infra conventions
 
 - **Terraform layout** (`infra/terraform/`): reusable `modules/`, one
-  `stacks/<stack>` per layer (`bootstrap`, `global`, `data`, `compute`,
-  `aca-ephemeral`), per-env inputs in `envs/<env>/`. Names and tags come from
-  `modules/naming`; bootstrap owns every resource group. Interfaces between
-  stacks, Helm and workflows are pinned in
-  `docs/adr/0001-azure-environment-topology.md` — change them there first.
+  `stacks/<stack>` per layer (`bootstrap`, `global`, `data`, `compute`),
+  per-env inputs in `envs/<env>/` (`test`, `staging`, `prod`, all on AKS).
+  Names and tags come from `modules/naming`; bootstrap owns every resource
+  group and every public DNS zone (the parent zone and the per-env child
+  zones). Interfaces between stacks, Helm and workflows are pinned in
+  `docs/adr/0001-azure-environment-topology.md` and
+  `docs/adr/0002-aks-everywhere-and-azure-dns.md` — change them there first.
+- **`dns_zone_name` (`envs/global/bootstrap.tfvars`) is the only domain
+  input.** Never hardcode a domain or subscription; `infra/up.sh` writes
+  them into the tfvars.
 - **Run stacks through `scripts/tf.sh <stack> <env> <cmd>`**, which picks
   the var-file, backend config and state key (`TFSTATE_RG` /
   `TFSTATE_ACCOUNT` override the committed backend files).
@@ -118,12 +128,19 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3   # lint workflo
 - **OIDC only.** Workflows authenticate to Azure with GitHub federated
   credentials per GitHub Environment; never add cloud secrets to GitHub.
 - **Azure workflows are gated on repo vars** (`vars.AZURE_SUBSCRIPTION_ID`,
-  `vars.ACR_NAME`, ...) and skip green until bootstrap has set them.
+  `vars.ACR_NAME`, `vars.AZURE_LOCATION`, `vars.AZURE_LOCATION_ABBR`, ...) and skip green until
+  bootstrap has set them.
+- **Region is one setting** (ADR 0002 §7): `location` / `location_abbr` in
+  `envs/global/bootstrap.tfvars` (default `northcentralus` / `ncus`; Azure for Students allows only
+  five regions). `infra/up.sh --location <region>` rewrites every tfvars and backend `.hcl`; the
+  region → code map lives in `modules/naming`. Workflows and scripts build names such as
+  `rg-bbm-<env>-data-ncus` / `aks-bbm-<env>-ncus` from `vars.AZURE_LOCATION_ABBR` (or
+  `BBM_REGION_ABBR`), never from literals.
 - **`ci.yml` stays Azure-free**, so `CI OK` never depends on cloud
   credentials, quota or uptime. Anything that needs Azure goes in its own
   workflow.
 - **Helm values layering:** `values.yaml` (safe, kind-friendly defaults) →
-  `values-<env>.yaml` (staging/prod switches and sizes) → generated
+  `values-<env>.yaml` (test/staging/prod switches and sizes) → generated
   `values-infra.yaml` (`tf.sh compute <env> output -raw helm_values`, never
   committed) → `--set global.image.tag=sha-<7>`. Env files never hardcode
   infra values.

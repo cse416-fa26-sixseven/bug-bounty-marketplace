@@ -1,17 +1,25 @@
 # bbm Helm chart
 
 `deploy/helm/bbm` deploys the marketplace to the staging and prod AKS clusters
-(release `bbm`, namespace `bbm`). It contains:
+(release `bbm`, namespace `bbm`) and to ephemeral namespaces on the test
+cluster (`values-test.yaml`). It contains:
 
 - `web` (Next.js, port 3000, `/healthz`) and `api` (Fastify, port 3001,
   `/health`): Deployments, Services, optional HPA and PDB.
 - Migrations as a Helm hook Job (`node dist/migrate-cli.js`).
 - ServiceAccounts with workload identity, plus Key Vault secrets through the
   Secrets Store CSI driver.
-- An Ingress with an AKS app-routing `NginxIngressController` bound to the
-  static public IP, and NetworkPolicies.
-- Off by default: the `analysis` worker (with KEDA) and the `sandbox`
-  namespace stub.
+- An `HTTPRoute` on the platform Gateway `bbm-platform/bbm` and
+  NetworkPolicies.
+- Off by default: the `analysis` worker (with KEDA), the `sandbox`
+  namespace stub and a throwaway in-cluster Postgres (`postgres.inCluster`,
+  test namespaces only).
+
+The cluster-wide pieces (cert-manager, the Let's Encrypt ClusterIssuers, the
+env wildcard certificate and the Gateway API `Gateway` `bbm` that binds the
+static IP and terminates TLS) live in the separate
+[`bbm-platform`](bbm-platform/README.md) chart, installed once per cluster by
+`deploy/platform/install.sh` (ADR 0002 section 3).
 
 The default `values.yaml` is safe for any cluster, including kind. The
 Azure-specific behaviour is switched on by the env files.
@@ -20,7 +28,7 @@ Azure-specific behaviour is switched on by the env files.
 
 ```
 values.yaml                       # safe defaults (kind-friendly, Azure features off)
-  -> values-<env>.yaml            # staging | prod: feature switches, sizes, replicas
+  -> values-<env>.yaml            # test | staging | prod: feature switches, sizes, replicas
   -> values-infra.yaml            # generated, never committed (terraform compute output)
   -> --set global.image.tag=sha-xxxxxxx
 ```
@@ -46,17 +54,24 @@ azure:    { tenantId, keyVaultName, apiClientId, workerClientId, migrationsClien
             sandboxClientId, storageAccountName, storageBlobEndpoint, queueName }
 ingress:  { host, publicIpName, publicIpResourceGroup }
 networkPolicy: { postgresCidr }
+dns:      { zone, envZones, internalZone }                          # ADR 0002, bbm-platform only
+platform: { subscriptionId, dnsResourceGroup, certManagerClientId } # ADR 0002, bbm-platform only
 ```
+
+The app chart accepts but ignores `ingress.publicIpName`,
+`ingress.publicIpResourceGroup`, `dns.*` and `platform.*`; they are read by
+`bbm-platform`, which gets the same file.
 
 The env files never hardcode these. Set `global.requireInfraValues=true` in
 deploys, so a missing key fails rendering instead of producing a broken
-SecretProviderClass or Ingress.
+SecretProviderClass or HTTPRoute.
 
 | file | used by | highlights |
 |---|---|---|
 | `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot |
-| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, ingress + app routing, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1 |
+| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1 |
 | `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1 |
+| `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown |
 | `values-ci.yaml` | `ct install`, kind smoke tests | plain Secret with dummy `DATABASE_URL`, everything optional off |
 
 > **API replicas.** Uploaded sources are stored on a per-pod `emptyDir`
@@ -136,19 +151,69 @@ A failed migration fails the `helm upgrade`. With `--atomic`, the release is
 then rolled back. The failed Job is kept for `kubectl logs` until the next
 deploy recreates it.
 
-## Ingress and app routing
+## Routing and TLS (Gateway API)
 
-- The Ingress (`ingressClassName: bbm-nginx`) routes:
-  - `/api` (Prefix) and `/health` (Exact) to `bbm-api:3001`
+- With `ingress.enabled`, the chart renders `HTTPRoute` `bbm` with
+  `parentRefs` → Gateway `ingress.gateway.namespace`/`ingress.gateway.name`
+  (default `bbm-platform/bbm`, from the `bbm-platform` chart, GatewayClass
+  `approuting-istio` of the AKS app routing add-on) and
+  `hostnames: [ingress.host]`. Rules:
+  - `/api` (PathPrefix) and `/health` (Exact) to `bbm-api:3001`
   - `/` to `bbm-web:3000`
-- `ingress.tls.mode: certManager` adds the `cert-manager.io/cluster-issuer`
-  annotation and a TLS block. cert-manager itself is not installed by this
-  chart.
-- `ingress.appRouting.enabled` renders the **cluster-scoped**
-  `NginxIngressController` named `bbm`
-  (`approuting.kubernetes.azure.com/v1alpha1`). Its LoadBalancer Service binds
-  `pip-bbm-<env>-ingress` in `rg-bbm-<env>-data-eus2` through the
-  `azure-pip-name` and `azure-load-balancer-resource-group` annotations.
+- TLS terminates at the Gateway's HTTPS listeners with the `bbm-platform`
+  wildcard `bbm-platform/bbm-wildcard-tls` (`<z>` and `*.<z>` per env zone),
+  and its HTTP listener redirects to HTTPS. The chart has no TLS settings and
+  issues no per-namespace certificates.
+- **Namespace label:** the HTTPS listeners admit routes only from namespaces
+  labelled `bbm.io/gateway-access=true`. `deploy.yml` labels `bbm`,
+  `_ephemeral-env.yml` labels `run-*` / `pr-*`; for a manual install run
+  `kubectl label namespace <ns> --overwrite bbm.io/gateway-access=true`.
+  Without it the route reports `Accepted=False` (`NotAllowedByListeners`):
+  `kubectl -n <ns> describe httproute bbm`.
+- `ingress.host` must sit under one of the env zones (the listener
+  hostnames), or the route is not accepted.
+- NetworkPolicies admit web/api traffic from the Gateway's Envoy pods:
+  namespace `ingress.gateway.namespace`, label
+  `gateway.networking.k8s.io/gateway-name=<ingress.gateway.name>`.
+- Install the platform before the first app release.
+
+## In-cluster Postgres (`postgres.inCluster`)
+
+For ephemeral test/preview namespaces only (staging and prod use PG Flexible
+Server). `postgres.inCluster.enabled=true` renders Secret, Service and
+single-replica Deployment `bbm-postgres` (port 5432, `emptyDir` data, uid 70,
+`pg_isready` probes), image `<registry>/mirror/postgres:16-alpine`
+(`postgres.inCluster.image`). The database and user are `bbm`.
+
+- `postgres.inCluster.password` is required and limited to
+  `[A-Za-z0-9._~-]` (it is embedded in `DATABASE_URL` unescaped).
+- With `secrets.provider=plain` and an empty `secrets.plain.databaseUrl`
+  (the default now), `database-url` becomes
+  `postgres://bbm:<password>@bbm-postgres:5432/bbm`. A non-empty
+  `secrets.plain.databaseUrl` always wins.
+- It cannot be combined with `migrations.enabled` (the pre-install hook would
+  run before Postgres exists), so the api migrates on boot.
+- NetworkPolicies allow api and migrations pods to reach it on 5432, and
+  `networkPolicy.postgresCidr` is not required when it is enabled.
+- Mirror the image into ACR once:
+  `az acr import --name <acr> --source docker.io/library/postgres:16-alpine --image mirror/postgres:16-alpine`.
+
+Ephemeral namespace install (as the test/preview workflows run it):
+
+```sh
+pw=$(kubectl -n "$NS" get secret bbm-postgres -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+[ -n "$pw" ] || pw=$(openssl rand -hex 24)   # keep the password across upgrades
+helm upgrade --install bbm deploy/helm/bbm --namespace "$NS" --create-namespace \
+  -f deploy/helm/bbm/values-test.yaml -f values-infra.yaml \
+  --set global.image.tag="sha-${GITHUB_SHA::7}" \
+  --set ingress.host="$NS.test.<zone>" \
+  --set-string postgres.inCluster.password="$pw" \
+  --set global.requireInfraValues=true \
+  --atomic --wait --timeout 10m
+```
+
+(`pr-<n>.preview.<zone>` for previews; add `--set web.image.tag=<tag>` for
+the mocked web image.)
 
 ## Local validation
 
@@ -159,16 +224,31 @@ cd deploy/helm
 for f in "" values-staging.yaml values-prod.yaml values-ci.yaml; do
   helm lint --strict bbm ${f:+-f bbm/$f} --set global.image.tag=test
 done
+helm lint --strict bbm -f bbm/values-test.yaml --set global.image.tag=test \
+  --set postgres.inCluster.password=test
+
+# with the fake terraform output, required infra keys must resolve
+for e in staging prod; do
+  helm template bbm bbm -n bbm -f bbm/values-$e.yaml -f bbm/ci/fake-values-infra.yaml \
+    --set global.image.tag=test --set global.requireInfraValues=true >/dev/null
+done
+
+# platform chart (fixtures in bbm-platform/ci/)
+for e in test staging prod; do for fx in test prod; do
+  helm lint --strict bbm-platform -f bbm-platform/values-$e.yaml -f bbm-platform/ci/$fx-values.yaml
+done; done
 
 # render + schema-validate (CRDs from the datreeio catalog)
 for f in values-staging.yaml values-prod.yaml values-ci.yaml; do
   helm template bbm bbm -n bbm -f bbm/$f --set global.image.tag=test \
     --set analysis.enabled=true --set sandbox.enabled=true --set migrations.enabled=true |
-  kubeconform -strict -summary -kubernetes-version 1.31.0 \
+  kubeconform -strict -summary -kubernetes-version 1.34.0 \
     -schema-location default \
-    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-    -schema-location 'kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 done
+
+# (same kubeconform flags for values-test.yaml and for
+#  `helm template bbm-platform bbm-platform -n bbm-platform -f bbm-platform/values-<env>.yaml -f bbm-platform/ci/<fx>-values.yaml`)
 
 # rendering without a tag must fail
 helm template bbm bbm -n bbm   # Error: ... global.image.tag is required
@@ -177,15 +257,16 @@ helm template bbm bbm -n bbm   # Error: ... global.image.tag is required
 ct lint --config deploy/helm/ct.yaml --charts deploy/helm/bbm
 ```
 
-`NginxIngressController` is not in the datreeio CRD catalog, so its schema is
-vendored in `kubeconform-schemas/nginxingresscontroller_v1alpha1.json`: the
-`openAPIV3Schema` of
-[the operator's CRD](https://github.com/Azure/aks-app-routing-operator/blob/main/config/crd/bases/approuting.kubernetes.azure.com_nginxingresscontrollers.yaml)
-converted to JSON. Regenerate it the same way if the operator's API changes.
-The CI `helm` job runs the same checks.
+Every CRD the charts render (cert-manager, KEDA, Secrets Store CSI, Gateway
+API `Gateway` / `HTTPRoute`) is in the datreeio CRD catalog, so nothing is
+vendored and kubeconform skips nothing. The CI `helm` job runs the same
+checks against a pinned catalog commit (`main` above is fine locally).
 
-`ct` reads `bbm/ci/ci-values.yaml`, which is a symlink to `values-ci.yaml`.
-`.helmignore` excludes it from the packaged chart. `ct install` needs the
+`ct` reads `bbm/ci/ci-values.yaml`, which is a symlink to `values-ci.yaml`,
+and `bbm-platform/ci/{prod,test}-values.yaml` (fake `values-infra.yaml`
+files). `bbm/ci/fake-values-infra.yaml` is deliberately not a
+`*-values.yaml` file, so ct skips it. `.helmignore` excludes `ci/` from the
+packaged charts. `ct install` needs the
 image tag that was loaded into kind:
 
 ```sh
@@ -197,7 +278,10 @@ ct install --config deploy/helm/ct.yaml --charts deploy/helm/bbm \
 
 ```sh
 infra/terraform/scripts/tf.sh compute "$ENV" output -raw helm_values > values-infra.yaml
-az aks get-credentials -g "rg-bbm-$ENV-compute-eus2" -n "aks-bbm-$ENV-eus2"   # then kubelogin convert-kubeconfig -l azurecli
+az aks get-credentials -g "rg-bbm-$ENV-compute-ncus" -n "aks-bbm-$ENV-ncus"   # then kubelogin convert-kubeconfig -l azurecli
+deploy/platform/install.sh "$ENV" --values values-infra.yaml --wait   # idempotent; cert-manager + bbm-platform
+kubectl create namespace bbm --dry-run=client -o yaml | kubectl apply -f -
+kubectl label namespace bbm --overwrite bbm.io/gateway-access=true    # HTTPRoute admission
 helm upgrade --install bbm deploy/helm/bbm \
   --namespace bbm --create-namespace \
   -f "deploy/helm/bbm/values-$ENV.yaml" \
@@ -224,7 +308,9 @@ az acr import --name <acr> \
 - **AKS add-ons:**
   - OIDC issuer and workload identity
   - `azure-keyvault-secrets-provider` (with `secretObjects` sync)
-  - app routing (`web_app_routing`)
+  - Managed Gateway API CRDs and the app routing Gateway API
+    implementation (GatewayClass `approuting-istio`; `modules/aks`, via
+    azapi); the `Gateway` itself comes from `bbm-platform`. No managed NGINX.
   - KEDA, only when `analysis.keda.enabled`
 - **Network policy:** Cilium enforces NetworkPolicies (CNI Overlay + Cilium).
 - **Federated credentials:**
@@ -232,6 +318,8 @@ az acr import --name <acr> \
   - `system:serviceaccount:bbm:bbm-migrations` on the api identity (same as `migrationsClientId`)
   - `system:serviceaccount:bbm:bbm-analysis` on the worker identity
   - `system:serviceaccount:bbm-sandbox:bbm-sandbox-runner` on the sandbox identity
+  - `system:serviceaccount:cert-manager:cert-manager` on `id-bbm-<env>-certmgr`
+    (bbm-platform; DNS Zone Contributor on the env zones)
 - **KEDA:** the `azure-workload` TriggerAuthentication makes the **KEDA
   operator** request a token as the worker identity. That identity therefore
   also needs a federated credential for
@@ -241,7 +329,7 @@ az acr import --name <acr> \
   - `Key Vault Secrets User` on the env Key Vault for the api identity.
   - The same role for the worker identity when analysis is enabled.
   - `Network Contributor` on the data RG for the AKS cluster identity, so the
-    app-routing LoadBalancer can use the static PIP.
+    Gateway's LoadBalancer Service can bind the static PIP.
 - **Node pools:**
   - Node label `bbm.io/pool=apps` on the apps pool (prod `nodeSelector`).
   - `bbm.io/pool=sandbox` plus taint `bbm.io/sandbox=true:NoSchedule` and

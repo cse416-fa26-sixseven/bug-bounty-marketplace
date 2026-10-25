@@ -1,0 +1,49 @@
+{{- /*
+HTTPRoute on the bbm-platform Gateway (ADR 0002 section 3). TLS terminates
+at the Gateway (env wildcard certificate), and HTTP is redirected to HTTPS
+there, so this route only carries the path rules. The Gateway's HTTPS
+listeners admit routes from namespaces labelled bbm.io/gateway-access=true;
+its HTTP listener admits only its own redirect route, so this route attaches
+to the HTTPS listeners alone.
+*/ -}}
+{{- if .Values.ingress.enabled }}
+{{- $i := .Values.ingress -}}
+{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "ingress.host" "value" $i.host) }}
+{{- $api := include "bbm.componentName" (dict "root" $ "component" "api") -}}
+{{- $web := include "bbm.componentName" (dict "root" $ "component" "web") -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "bbm.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $) | nindent 4 }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $i.gateway.name }}
+      namespace: {{ $i.gateway.namespace }}
+  {{- with $i.host }}
+  hostnames:
+    - {{ . | quote }}
+  {{- end }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: {{ $api }}
+          port: {{ .Values.api.port }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $web }}
+          port: {{ .Values.web.port }}
+{{- end }}

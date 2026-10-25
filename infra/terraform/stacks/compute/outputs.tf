@@ -18,6 +18,11 @@ output "node_resource_group" {
   value       = module.aks.node_resource_group
 }
 
+output "sku_tier" {
+  description = "AKS control-plane tier (Free or Standard)."
+  value       = module.aks.sku_tier
+}
+
 output "oidc_issuer_url" {
   description = "Cluster OIDC issuer URL."
   value       = module.aks.oidc_issuer_url

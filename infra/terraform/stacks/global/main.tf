@@ -1,5 +1,5 @@
 # Shared, long-lived resources used by every environment: container registry,
-# shared Log Analytics, ACA image-pull identity and the shared Key Vault.
+# shared Log Analytics and the shared Key Vault.
 # The resource groups themselves are owned by stacks/bootstrap.
 
 data "azurerm_client_config" "current" {}
@@ -16,7 +16,7 @@ module "naming" {
 
 module "naming_env" {
   source   = "../../modules/naming"
-  for_each = toset(["staging", "prod"])
+  for_each = toset(["test", "staging", "prod"])
 
   env           = each.key
   location      = var.location

@@ -23,16 +23,6 @@ output "law_workspace_id" {
   value       = module.law.workspace_id
 }
 
-output "aca_pull_identity_id" {
-  description = "Resource ID of id-bbm-aca-pull."
-  value       = azurerm_user_assigned_identity.aca_pull.id
-}
-
-output "aca_pull_identity_client_id" {
-  description = "Client ID of id-bbm-aca-pull."
-  value       = azurerm_user_assigned_identity.aca_pull.client_id
-}
-
 output "shared_key_vault_name" {
   description = "Shared Key Vault name."
   value       = azurerm_key_vault.shared.name
@@ -51,6 +41,11 @@ output "shared_resource_group_name" {
 output "location" {
   description = "Azure region."
   value       = var.location
+}
+
+output "dns_zone_name" {
+  description = "Parent DNS zone (bootstrap output dns_zone_name). Read by the data and compute stacks."
+  value       = var.dns_zone_name
 }
 
 output "suffix" {

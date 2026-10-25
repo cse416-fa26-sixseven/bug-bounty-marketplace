@@ -36,7 +36,9 @@ concurrency:
 jobs:
   deploy:
     name: deploy (${{ inputs.network }}, ${{ inputs.broadcast && 'broadcast' || 'dry run' }})
-    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    if: >-
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     environment: contracts-${{ inputs.network }}
     timeout-minutes: 30
@@ -81,10 +83,11 @@ jobs:
         working-directory: contracts
         env:
           KV_NAME: ${{ vars.SHARED_KEY_VAULT_NAME }}
+          SHARED_RG: rg-bbm-shared-${{ vars.AZURE_LOCATION_ABBR }}
         run: |
           set -euo pipefail
-          kv="${KV_NAME:-$(az keyvault list -g rg-bbm-shared-eus2 --query '[0].name' -o tsv)}"
-          [[ -n "$kv" ]] || { echo "::error::No Key Vault found in rg-bbm-shared-eus2 (apply the global stack)."; exit 1; }
+          kv="${KV_NAME:-$(az keyvault list -g "$SHARED_RG" --query '[0].name' -o tsv)}"
+          [[ -n "$kv" ]] || { echo "::error::No Key Vault found in $SHARED_RG (apply the global stack)."; exit 1; }
           echo "Key Vault: $kv"
 
           read_secret() {

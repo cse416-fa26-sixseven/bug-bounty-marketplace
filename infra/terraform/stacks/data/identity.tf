@@ -11,6 +11,18 @@
 # nodes into snet-aks it also needs subnet join rights; Network Contributor at
 # RG scope already covers the VNet in this RG.
 
+# certmgr (cert-manager DNS-01 solver): DNS Zone Contributor on each public
+# env zone only, never on the RG.
+locals {
+  certmgr_dns_grants = {
+    for z in local.dns.env_zones : "certmgr-dns-${split(".", z)[0]}" => {
+      identity = "certmgr"
+      scope    = data.azurerm_dns_zone.env[z].id
+      role     = "DNS Zone Contributor"
+    }
+  }
+}
+
 module "identity" {
   source = "../../modules/identity"
 
@@ -19,7 +31,7 @@ module "identity" {
   location            = var.location
   tags                = local.tags
 
-  role_assignments = {
+  role_assignments = merge({
     # api (also used by the migrations job): KV secrets, read/write sources,
     # enqueue analysis jobs.
     api-kv-secrets-user = {
@@ -70,5 +82,5 @@ module "identity" {
     }
 
     # sandbox: runs untrusted PoC code, so it deliberately gets no grants.
-  }
+  }, local.certmgr_dns_grants)
 }

@@ -1,40 +1,58 @@
-# id-bbm-aca-pull: attached to every ephemeral Container App to pull images.
-resource "azurerm_user_assigned_identity" "aca_pull" {
-  name                = module.naming.global.aca_pull_identity
-  resource_group_name = data.azurerm_resource_group.shared.name
-  location            = var.location
-  tags                = local.tags
-}
+# Registry data-plane grants for the CI push identities, on resources that
+# only exist after this stack runs. The registry is in ABAC repository
+# permissions mode (modules/acr), so these use the Container Registry
+# Repository roles (AcrPull/AcrPush are not honored there). gh-bbm-global may
+# only assign roles in global_delegable_roles, to service principals (ABAC
+# condition in stacks/bootstrap/identities.tf).
 
-resource "azurerm_role_assignment" "aca_pull_acr" {
-  scope                            = module.acr.id
-  role_definition_name             = "AcrPull"
-  principal_id                     = azurerm_user_assigned_identity.aca_pull.principal_id
-  principal_type                   = "ServicePrincipal"
-  skip_service_principal_aad_check = true
-}
-
-# Grants for the ephemeral CI identity on resources that only exist after this
-# stack runs (bootstrap gives it Contributor on the test/preview RGs).
-# gh-bbm-global may only assign these roles: see the ABAC condition in
-# stacks/bootstrap/identities.tf.
 locals {
-  ephemeral_grants = var.ephemeral_ci_principal_id == null ? {} : {
-    acr_push = { scope = module.acr.id, role = "AcrPush" }
-    # Assign id-bbm-aca-pull to Container Apps.
-    aca_pull_operator = { scope = azurerm_user_assigned_identity.aca_pull.id, role = "Managed Identity Operator" }
-    # ACA environments read the workspace shared key to ship logs.
-    law_contributor = { scope = module.law.id, role = "Log Analytics Contributor" }
-  }
+  acr_data_action = "Microsoft.ContainerRegistry/registries/repositories"
+  acr_repo_name   = "@Request[Microsoft.ContainerRegistry/registries/repositories:name]"
+
+  # Repository prefixes (trailing slash required: 'bbm-preview' alone would
+  # also match 'bbm-previewx/...').
+  preview_repo_prefix = "bbm-preview/"
+  mirror_repo_prefix  = "mirror/"
+
+  # gh-bbm-preview: push/pull only under bbm-preview/, plus read mirror/ (the
+  # preview workflow checks that mirror/postgres exists). Every other
+  # repository, bbm/* included, is denied. Same shape as Microsoft's
+  # repository-prefix examples
+  # (learn.microsoft.com/azure/container-registry/container-registry-rbac-abac-repository-permissions).
+  preview_acr_condition = join(" ", [
+    "((!(ActionMatches{'${local.acr_data_action}/content/read'})",
+    "AND !(ActionMatches{'${local.acr_data_action}/metadata/read'}))",
+    "OR (${local.acr_repo_name} StringStartsWithIgnoreCase '${local.preview_repo_prefix}'",
+    "OR ${local.acr_repo_name} StringStartsWithIgnoreCase '${local.mirror_repo_prefix}'))",
+    "AND",
+    "((!(ActionMatches{'${local.acr_data_action}/content/write'})",
+    "AND !(ActionMatches{'${local.acr_data_action}/metadata/write'}))",
+    "OR (${local.acr_repo_name} StringStartsWithIgnoreCase '${local.preview_repo_prefix}'))",
+  ])
 }
 
-resource "azurerm_role_assignment" "ephemeral_ci" {
-  for_each = local.ephemeral_grants
+# gh-bbm-ephemeral (environment `test`, main only): pushes the sha-* images
+# staging/prod deploy and reads mirror/*. Registry-wide (no condition).
+resource "azurerm_role_assignment" "ephemeral_ci_acr_writer" {
+  count = var.ephemeral_ci_principal_id == null ? 0 : 1
 
-  scope                = each.value.scope
-  role_definition_name = each.value.role
+  scope                = module.acr.id
+  role_definition_name = "Container Registry Repository Writer"
   principal_id         = var.ephemeral_ci_principal_id
   principal_type       = "ServicePrincipal"
+}
+
+# gh-bbm-preview (environment `preview`, any PR branch): repository-scoped,
+# so a PR that edits a workflow still cannot overwrite bbm/*:sha-* tags.
+resource "azurerm_role_assignment" "preview_ci_acr_writer" {
+  count = var.preview_ci_principal_id == null ? 0 : 1
+
+  scope                = module.acr.id
+  role_definition_name = "Container Registry Repository Writer"
+  principal_id         = var.preview_ci_principal_id
+  principal_type       = "ServicePrincipal"
+  condition            = local.preview_acr_condition
+  condition_version    = "2.0"
 }
 
 # Build identities only (service principals / managed identities), so the
@@ -43,7 +61,7 @@ resource "azurerm_role_assignment" "acr_push" {
   for_each = toset(var.acr_push_principal_ids)
 
   scope                = module.acr.id
-  role_definition_name = "AcrPush"
+  role_definition_name = "Container Registry Repository Writer"
   principal_id         = each.key
   principal_type       = "ServicePrincipal"
 }

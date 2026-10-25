@@ -13,6 +13,11 @@ output "oidc_issuer_url" {
   value       = azurerm_kubernetes_cluster.this.oidc_issuer_url
 }
 
+output "sku_tier" {
+  description = "AKS control-plane tier (Free or Standard)."
+  value       = azurerm_kubernetes_cluster.this.sku_tier
+}
+
 output "kubernetes_version" {
   description = "Kubernetes version currently running (including patch)."
   value       = azurerm_kubernetes_cluster.this.current_kubernetes_version
@@ -24,13 +29,17 @@ output "node_resource_group" {
 }
 
 output "kubelet_identity_principal_id" {
-  description = "Principal ID of the kubelet identity (has AcrPull on the ACR)."
+  description = "Principal ID of the kubelet identity (has Container Registry Repository Reader on the ACR)."
   value       = azurerm_user_assigned_identity.kubelet.principal_id
 }
 
-output "web_app_routing_identity_object_id" {
-  description = "Object ID of the app-routing add-on identity."
-  value       = try(azurerm_kubernetes_cluster.this.web_app_routing[0].web_app_routing_identity[0].object_id, null)
+output "ingress_profile" {
+  description = "Requested ingress settings (azapi): Managed Gateway API installation and the app routing Gateway API implementation (GatewayClass approuting-istio)."
+  value = {
+    gateway_api_installation = azapi_update_resource.app_routing_gateway_api.body.properties.ingressProfile.gatewayAPI.installation
+    app_routing_istio_mode   = azapi_update_resource.app_routing_gateway_api.body.properties.ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode
+    web_app_routing_nginx    = length(azurerm_kubernetes_cluster.this.web_app_routing) > 0
+  }
 }
 
 output "node_pools" {

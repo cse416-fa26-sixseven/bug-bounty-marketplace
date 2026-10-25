@@ -1,11 +1,16 @@
 {{- /*
 NetworkPolicies for the release namespace (enforced by Cilium on AKS).
 
-Ingress: default-deny; allow app-routing controller -> web/api, web -> api,
-helm test pod -> web/api.
+Ingress: default-deny; allow the bbm-platform Gateway's Envoy pods
+(namespace ingress.gateway.namespace, label
+gateway.networking.k8s.io/gateway-name=<ingress.gateway.name>, provisioned
+by the app routing Gateway API control plane) -> web/api, web -> api, helm
+test pod -> web/api, api/migrations -> in-cluster postgres (when
+postgres.inCluster.enabled).
 Egress (only when networkPolicy.restrictEgress): default-deny; allow DNS
 for everything, plus per component:
-  api        -> Postgres (5432 to postgresCidr), HTTPS 443 anywhere (Entra, Storage)
+  api        -> Postgres (5432 to postgresCidr and/or the in-cluster postgres
+                pods), HTTPS 443 anywhere (Entra, Storage)
   web        -> api
   analysis   -> HTTPS 443 anywhere
   migrations -> Postgres
@@ -14,7 +19,8 @@ for everything, plus per component:
 {{- if .Values.networkPolicy.enabled }}
 {{- $np := .Values.networkPolicy -}}
 {{- $fn := include "bbm.fullname" . -}}
-{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "networkPolicy.postgresCidr" "value" (ternary $np.postgresCidr "n/a" $np.restrictEgress)) }}
+{{- $inClusterPg := .Values.postgres.inCluster.enabled -}}
+{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "networkPolicy.postgresCidr" "value" (ternary $np.postgresCidr "n/a" (and $np.restrictEgress (not $inClusterPg)))) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -45,9 +51,7 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+        - {{ include "bbm.gatewayPeer" $ | nindent 10 | trim }}
         - podSelector:
             matchLabels:
               {{- include "bbm.selectorLabels" (dict "root" $ "component" "test") | nindent 14 }}
@@ -70,9 +74,7 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+        - {{ include "bbm.gatewayPeer" $ | nindent 10 | trim }}
         - podSelector:
             matchLabels:
               {{- include "bbm.selectorLabels" (dict "root" $ "component" "web") | nindent 14 }}
@@ -82,6 +84,33 @@ spec:
       ports:
         - port: {{ .Values.api.port }}
           protocol: TCP
+{{- if $inClusterPg }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-postgres-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "bbm.selectorLabels" (dict "root" $ "component" "api") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "bbm.selectorLabels" (dict "root" $ "component" "migrations") | nindent 14 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}
 {{- if $np.restrictEgress }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -123,14 +152,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    {{- with $np.postgresCidr }}
-    - to:
-        - ipBlock:
-            cidr: {{ . }}
-      ports:
-        - port: 5432
-          protocol: TCP
-    {{- end }}
+    {{- include "bbm.postgresEgressRules" $ | nindent 4 }}
     - ports:
         - port: 443
           protocol: TCP
@@ -156,7 +178,7 @@ spec:
       ports:
         - port: {{ .Values.api.port }}
           protocol: TCP
-{{- if $np.postgresCidr }}
+{{- if or $np.postgresCidr $inClusterPg }}
 ---
 # Rendered whenever egress is restricted, independent of
 # migrations.enabled: hooks run before the release manifest is applied, so
@@ -178,12 +200,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    - to:
-        - ipBlock:
-            cidr: {{ $np.postgresCidr }}
-      ports:
-        - port: 5432
-          protocol: TCP
+    {{- include "bbm.postgresEgressRules" $ | nindent 4 }}
 {{- end }}
 {{- if .Values.analysis.enabled }}
 ---

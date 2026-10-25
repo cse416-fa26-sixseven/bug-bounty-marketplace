@@ -1,10 +1,24 @@
-# Persistent per-env data layer for staging/prod: VNet, PostgreSQL, Key Vault,
-# storage, managed identities, ingress public IP and env Log Analytics.
+# Persistent per-env data layer for test/staging/prod: VNet, PostgreSQL (not in
+# test), Key Vault, storage, managed identities, ingress public IP, env Log
+# Analytics and the env's DNS records (dns.tf).
 # Everything here survives `compute` destroy/apply (down/up). The resource
 # group itself is owned by stacks/bootstrap (which also ignores the
 # power-state / bbm-last-deployed-tag / auto-pause tags on it).
 
 data "azurerm_client_config" "current" {}
+
+# Global outputs (dns_zone_name) so the env tfvars stay minimal.
+data "terraform_remote_state" "global" {
+  backend = "azurerm"
+  config = {
+    resource_group_name  = var.tfstate_resource_group
+    storage_account_name = var.tfstate_account
+    container_name       = var.tfstate_container
+    key                  = "global.tfstate"
+    use_azuread_auth     = true
+    use_oidc             = true
+  }
+}
 
 module "naming" {
   source = "../../modules/naming"
@@ -14,6 +28,7 @@ module "naming" {
   location      = var.location
   location_abbr = var.location_abbr
   suffix        = var.suffix
+  dns_zone_name = data.terraform_remote_state.global.outputs.dns_zone_name
 }
 
 data "azurerm_resource_group" "data" {
@@ -22,6 +37,7 @@ data "azurerm_resource_group" "data" {
 
 locals {
   n    = module.naming.env
+  dns  = module.naming.dns
   tags = module.naming.tags
   rg   = data.azurerm_resource_group.data.name
 }
@@ -38,6 +54,7 @@ module "network" {
     psql = { name = local.n.subnet_psql, cidr = var.subnet_cidrs.psql }
     pe   = { name = local.n.subnet_pe, cidr = var.subnet_cidrs.pe }
   }
+  postgres_enabled = var.postgres_enabled
   # VNet-integrated flexible servers need a zone ending in
   # .postgres.database.azure.com (privatelink.* is for private endpoints).
   postgres_private_dns_zone_name = "${var.env}.private.postgres.database.azure.com"
@@ -46,8 +63,10 @@ module "network" {
   tags              = local.tags
 }
 
+# Not in test: CI-run / PR-preview namespaces run in-cluster Postgres.
 module "postgres" {
   source = "../../modules/postgres-flexible"
+  count  = var.postgres_enabled ? 1 : 0
 
   name                  = local.n.postgres_server
   resource_group_name   = local.rg
@@ -78,10 +97,10 @@ module "keyvault" {
   # locally by an Owner, since CI may only grant roles to service principals).
   # Both values are generated here and therefore live in <env>/data.tfstate.
   # llm-api-key is set out of band (az keyvault secret set), never by Terraform.
-  secrets = {
-    "database-url"      = module.postgres.database_url
-    "pg-admin-password" = module.postgres.administrator_password
-  }
+  secrets = var.postgres_enabled ? {
+    "database-url"      = module.postgres[0].database_url
+    "pg-admin-password" = module.postgres[0].administrator_password
+  } : {}
   tags = local.tags
 }
 
@@ -108,9 +127,11 @@ module "law" {
 }
 
 # Static ingress IP. Lives here (not in compute) so the IP and DNS name survive
-# compute down/up. The app-routing NGINX LoadBalancer service binds it by name
-# (azure-pip-name + azure-load-balancer-resource-group annotations), which is
-# why the AKS cluster identity gets Network Contributor on this RG.
+# compute down/up. The LoadBalancer Service of the bbm-platform Gateway (AKS
+# app routing Gateway API) binds it by name (azure-pip-name +
+# azure-load-balancer-resource-group in the Gateway's
+# spec.infrastructure.annotations), which is why the AKS cluster identity gets
+# Network Contributor on this RG.
 resource "azurerm_public_ip" "ingress" {
   name                = local.n.ingress_public_ip
   resource_group_name = local.rg

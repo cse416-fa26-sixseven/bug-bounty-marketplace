@@ -63,7 +63,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 
-LABEL org.opencontainers.image.source="https://github.com/LoistCloist/bug-bounty-marketplace" \
+LABEL org.opencontainers.image.source="https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace" \
       org.opencontainers.image.title="bbm-api" \
       org.opencontainers.image.description="Bug Bounty Marketplace API (Fastify): contract uploads, bounties and findings"
 

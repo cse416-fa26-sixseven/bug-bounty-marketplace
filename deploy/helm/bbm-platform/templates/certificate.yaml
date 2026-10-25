@@ -1,0 +1,30 @@
+{{- /*
+Wildcard certificate for the env: <z> and *.<z> for every env zone. Its
+Secret is the certificateRef of every HTTPS listener of the Gateway
+(gateway.yaml), so app HTTPRoutes (CI runs, PR previews, staging, prod)
+never need certificates of their own.
+*/ -}}
+{{- $zones := include "bbm-platform.envZones" . | fromJsonArray -}}
+{{- $c := .Values.certificate -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm-platform.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $c.secretName }}
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: {{ $c.issuer }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  dnsNames:
+    {{- range $zone := $zones }}
+    - {{ $zone | quote }}
+    - {{ printf "*.%s" $zone | quote }}
+    {{- end }}
