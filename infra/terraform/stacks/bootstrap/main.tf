@@ -49,7 +49,9 @@ locals {
     "Microsoft.Network",
     "Microsoft.ManagedIdentity",
     "Microsoft.Compute",
-    "Microsoft.Insights",
+    # Azure lists this namespace in lowercase, and the azurerm provider check
+    # is case-sensitive ("Microsoft.Insights" fails the plan).
+    "microsoft.insights",
     "Microsoft.OperationsManagement",
     "Microsoft.AlertsManagement",
     "Microsoft.Consumption",
