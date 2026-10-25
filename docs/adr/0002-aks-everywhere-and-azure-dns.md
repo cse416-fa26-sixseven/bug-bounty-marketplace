@@ -6,19 +6,23 @@
   API implementation (section 3), because Azure support for managed NGINX ends in November 2026.
 - **Amended:** 2026-10-25, PR previews get their own identity `gh-bbm-preview` that can push only
   `bbm-preview/*` (ACR ABAC repository permissions), and `test` becomes main-only (section 4).
+- **Amended:** 2026-10-25, the region becomes one setting and moves to `northcentralus` (`ncus`)
+  (section 7), because the Azure for Students subscription's allowed-regions policy blocks
+  `eastus2` and `centralus`.
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
-  interfaces. Everything else in 0001 still holds.
+  interfaces, and its region (`eastus2` / `eus2`, fallback `centralus`). Everything else in 0001
+  still holds.
 
 ## Context
 
 - The infra will move to another Azure account (and possibly another domain) later, so bring-up and
-  teardown must be scripted end to end, and nothing may hardcode a domain or subscription.
+  teardown must be scripted end to end, and nothing may hardcode a domain, subscription or region.
 - We want every environment on the same platform (AKS), so the deploy path tested in CI is the one
   prod runs. ACA-based test and preview envs are dropped.
 - Prod needs the AKS uptime SLA; test and staging don't.
 - We want real hostnames with HTTPS, including per-PR previews, instead of
-  `bbm-<env>.eastus2.cloudapp.azure.com`.
+  `bbm-<env>.<region>.cloudapp.azure.com`.
 - Upstream ingress-nginx was retired (maintenance ended in March 2026), and Azure supports the
   app-routing add-on's managed NGINX (`NginxIngressController`) only with critical security patches
   through **November 2026**. Microsoft's documented successor on AKS is the app routing add-on's
@@ -31,9 +35,9 @@
 
 | Env       | Cluster                  | AKS tier     | Hosts                                       | Database                    |
 | --------- | ------------------------ | ------------ | ------------------------------------------- | --------------------------- |
-| `test`    | `aks-bbm-test-eus2`      | Free         | CI runs and PR previews, a namespace each   | in-cluster Postgres per ns  |
-| `staging` | `aks-bbm-staging-eus2`   | Free         | one release in namespace `bbm`              | PG Flexible Server          |
-| `prod`    | `aks-bbm-prod-eus2`      | **Standard** | one release in namespace `bbm`              | PG Flexible Server          |
+| `test`    | `aks-bbm-test-ncus`      | Free         | CI runs and PR previews, a namespace each   | in-cluster Postgres per ns  |
+| `staging` | `aks-bbm-staging-ncus`   | Free         | one release in namespace `bbm`              | PG Flexible Server          |
+| `prod`    | `aks-bbm-prod-ncus`      | **Standard** | one release in namespace `bbm`              | PG Flexible Server          |
 
 - `test` is a normal `data` + `compute` env (short code `tst`, VNet `10.10.0.0/16`) with
   `postgres_enabled = false`. It can be paused like the others, and is part of the nightly auto-pause.
@@ -64,11 +68,11 @@ Owner, so no CI identity needs rights outside its own resource groups):
 
 | Zone                 | Resource group           | Purpose                                  |
 | -------------------- | ------------------------ | ---------------------------------------- |
-| `<zone>`             | `rg-bbm-shared-eus2`     | parent; delegated from the domain's DNS  |
-| `prod.<zone>`        | `rg-bbm-prod-data-eus2`  | prod hosts                               |
-| `staging.<zone>`     | `rg-bbm-staging-data-eus2` | staging hosts                          |
-| `test.<zone>`        | `rg-bbm-test-data-eus2`  | CI run hosts                             |
-| `preview.<zone>`     | `rg-bbm-test-data-eus2`  | PR preview hosts                         |
+| `<zone>`             | `rg-bbm-shared-ncus`     | parent; delegated from the domain's DNS  |
+| `prod.<zone>`        | `rg-bbm-prod-data-ncus`  | prod hosts                               |
+| `staging.<zone>`     | `rg-bbm-staging-data-ncus` | staging hosts                          |
+| `test.<zone>`        | `rg-bbm-test-data-ncus`  | CI run hosts                             |
+| `preview.<zone>`     | `rg-bbm-test-data-ncus`  | PR preview hosts                         |
 
 Bootstrap also writes the NS delegation records for the four child zones into the parent zone.
 
@@ -215,7 +219,7 @@ dns:
   internalZone: prod.internal.<zone>
 platform:
   subscriptionId: ...
-  dnsResourceGroup: rg-bbm-<env>-data-eus2
+  dnsResourceGroup: rg-bbm-<env>-data-ncus
   certManagerClientId: ... # id-bbm-<env>-certmgr client id
 ```
 
@@ -225,8 +229,8 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 
 ### 6. One-command bring-up and teardown
 
-- **`infra/up.sh --subscription <id> [--zone <zone>] [--envs test,staging] [--prod] [--skip-github]
-  [--yes] [--dry-run]`**, run locally after `az login --use-device-code`. `--envs` defaults to
+- **`infra/up.sh --subscription <id> [--zone <zone>] [--location <region>] [--location-abbr <code>]
+  [--envs test,staging] [--prod] [--skip-github] [--yes] [--dry-run]`**, run locally after `az login --use-device-code`. `--envs` defaults to
   `test,staging`; `--prod` adds prod; `--skip-github` leaves the GitHub setup script for later; `--yes`
   answers every confirmation (and keeps going when the delegation has not propagated yet, then
   installs the platform without `--wait` and prints how to check the certificate later);
@@ -252,7 +256,43 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   `--yes-really-destroy-prod`, and without a terminal it refuses. After a successful `--all` it resets the
   per-tenant tfvars fields (`subscription_id`, `suffix`, the admin / power-operator / Key Vault
   officer object id lists, the global hint block's principal ids, the backend `.hcl` state account)
-  to their placeholders, and keeps `dns_zone_name`, `alert_emails` and `github_reviewer_ids`.
+  to their placeholders, and keeps `dns_zone_name`, `alert_emails`, `github_reviewer_ids` and the
+  region (`location` / `location_abbr`: a user choice, not a per-tenant value; when the next
+  subscription needs another region, `up.sh --location <region>` rewrites it).
+
+### 7. Region
+
+- **One setting:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars`.
+  `infra/up.sh --location <region>` writes both into every tfvars (bootstrap, global, each env's
+  data and compute) and into the backend `.hcl` state resource group (`rg-bbm-tfstate-<abbr>`), and
+  sets each env's `ingress_pip_zones` to `["1", "2", "3"]` or `[]` depending on whether
+  `az account list-locations` reports availability zones for the region. Without `--location` it
+  uses the committed value. The committed `ingress_pip_zones` is `[]`, which works in every region.
+- **Abbreviation map:** `modules/naming/main.tf` `local.location_abbrs` (`northcentralus` → `ncus`,
+  `canadacentral` → `cac`, `francecentral` → `frc`, `belgiumcentral` → `bec`, `denmarkeast` →
+  `dke`, `eastus2` → `eus2`, `centralus` → `cus`, and a few more). Stacks default
+  `location_abbr = null` and derive it; an explicit value must match the map, and regions outside
+  it need `--location-abbr`. `up.sh` parses the same map, so the shell and Terraform agree. Key
+  Vault and storage names (24-char limits) carry no region code; the region-bearing names stay well
+  under their limits (asserted in the `modules/naming` tests).
+- **Preflight:** `up.sh` checks that the region exists for the subscription and is permitted by
+  every "allowed locations" policy assignment (parameter `listOfAllowedLocations`) on the
+  subscription or an inherited management group, and fails early with the allowed list. It refuses
+  to switch regions while `rg-bbm-tfstate-<old abbr>` still exists (names embed the region, so run
+  `down.sh --all` first). It registers `Microsoft.Compute` before the quota check (while it is
+  unregistered, `az vm list-usage` returns nothing); step 3 then lists it in
+  `preregistered_resource_providers`, so bootstrap imports the registration instead of failing on it.
+- **Workflows and scripts:** bootstrap's `gh_setup_commands` sets the repo variables
+  **`AZURE_LOCATION`** and **`AZURE_LOCATION_ABBR`**. `deploy.yml`, `_ephemeral-env.yml` (through
+  `integration-azure.yml` / `preview.yml`), `env-power.yml`, `infra-janitor.yml` and
+  `contracts-deploy.yml` build every resource group and cluster name from them, and their gate jobs
+  skip while either is unset, like the other repo variables. `env-power.sh` and `janitor.sh` read
+  `BBM_LOCATION` / `BBM_REGION_ABBR` (set from those variables in CI) and otherwise fall back to
+  `bootstrap.tfvars`.
+- **Why `northcentralus`:** the target subscription is Azure for Students, whose policy "Allowed
+  resource deployment regions" permits only `francecentral`, `belgiumcentral`, `denmarkeast`,
+  `northcentralus` and `canadacentral`. ADR 0001's `eastus2` and its `centralus` fallback are both
+  blocked; the team chose `northcentralus`, the only allowed US region.
 
 ## Alternatives considered
 
@@ -305,11 +345,9 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 - **Account or domain switch:** `down.sh --all` on the old subscription, `up.sh` on the new one,
   then update the four NS records (automatic with a Cloudflare token). Commit the tfvars `up.sh`
   rewrote.
-- **Region is hardcoded in workflows (known limitation):** `deploy.yml`, `_ephemeral-env.yml`,
-  `env-power.yml`, `infra-janitor.yml` and `contracts-deploy.yml` spell resource group and cluster
-  names with the `eus2` suffix (e.g. `rg-bbm-test-data-eus2`, `aks-bbm-test-eus2`). Moving to
-  another region means changing `location` / `location_abbr` in the tfvars and those names in the
-  workflows (or exporting them as repo variables first). Not refactored now.
+- **Region switch:** `down.sh --all` in the old region, then `up.sh --location <region>` (it also
+  runs the regenerated `gh_setup_commands`, so `AZURE_LOCATION` / `AZURE_LOCATION_ABBR` follow).
+  Nothing else names the region. Azure for Students allows only five regions (section 7).
 - New delegable roles (DNS Zone Contributor, Container Registry Repository Reader/Writer), the
   test-cluster roles for `gh-bbm-ephemeral` / `gh-bbm-preview` and the admins' registry roles are
   applied by bootstrap, locally, by an Owner. The registry is created in ABAC mode from the start

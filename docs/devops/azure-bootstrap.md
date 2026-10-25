@@ -82,7 +82,7 @@ requests can take time.
 ### vCPU quota
 
 ```sh
-az vm list-usage -l eastus2 -o table
+az vm list-usage -l northcentralus -o table
 ```
 
 | Row                         | Needed for                              | Rough need                                                             |
@@ -92,33 +92,49 @@ az vm list-usage -l eastus2 -o table
 | Standard DSv5 Family vCPUs  | Kata sandbox pool (disabled by default) | 0 until the sandbox is enabled                                         |
 
 New subscriptions often show a low regional limit (sometimes 4–10) and 0 for some families. To ask
-for more: **Portal → Quotas → Compute**, filter by region `East US 2`, pick the family, **New quota
+for more: **Portal → Quotas → Compute**, filter by your region (`North Central US` by default), pick the family, **New quota
 request**. Small B-series increases are usually approved within minutes.
 
 ### PostgreSQL Flexible Server SKU
 
 ```sh
-az postgres flexible-server list-skus -l eastus2 -o json \
+az postgres flexible-server list-skus -l northcentralus -o json \
   | jq -r '.[].supportedServerEditions[] | select(.name=="Burstable") | .supportedServerSkus[].name' \
   | grep -i b1ms
 ```
 
-If `Standard_B1ms` isn't listed, PG Flexible is restricted for this subscription in `eastus2`. Only
+If `Standard_B1ms` isn't listed, PG Flexible is restricted for this subscription in the region. Only
 staging and prod use it (test runs Postgres in each namespace).
 
 ### AKS versions
 
 `up.sh` lists the GA AKS minors and rewrites `kubernetes_version` in `envs/<env>/compute.tfvars` to
 the region default when the committed one isn't offered. To check by hand:
-`az aks get-versions -l eastus2 -o table`.
+`az aks get-versions -l northcentralus -o table`.
 
-### Fallback region
+### Region
 
-If AKS, PG Flexible or the B-series families are restricted in `eastus2` and a quota request doesn't
-fix it, use `centralus`: set `location = "centralus"` and `location_abbr = "cus"` in
-`bootstrap.tfvars`, `global.tfvars` and every `envs/<env>/data.tfvars`. Do this **before** the first
-run; moving regions later means recreating everything. The workflows and scripts default to
-`eus2` names, so a region change also needs those updated.
+The region is one setting: `location` / `location_abbr` in `envs/global/bootstrap.tfvars`
+(default `northcentralus` / `ncus`, ADR 0002 §7). To use another one, pass it to `up.sh`:
+
+```sh
+infra/up.sh --subscription <id> --location canadacentral   # writes every tfvars + backend .hcl
+```
+
+`up.sh` takes the abbreviation from the map in `modules/naming/main.tf` (`northcentralus` → `ncus`,
+`canadacentral` → `cac`, `francecentral` → `frc`, `belgiumcentral` → `bec`, `denmarkeast` → `dke`,
+...); for a region outside it pass `--location-abbr <code>` too. It fails early when the region is
+not allowed by the subscription's "allowed locations" policy and lists the allowed ones.
+**Azure for Students** only allows `francecentral`, `belgiumcentral`, `denmarkeast`,
+`northcentralus` and `canadacentral`, which is why the default is no longer `eastus2`.
+
+Pick the region **before** the first run: names embed it, so moving later means `down.sh --all`
+and a fresh `up.sh --location <region>` (`up.sh` refuses while the old state RG exists). The
+workflows read the region from the repo variables `AZURE_LOCATION` / `AZURE_LOCATION_ABBR`, which
+the bootstrap `gh_setup_commands` set, so nothing else needs editing.
+
+If quota looks empty right after `az login` on a new subscription, `Microsoft.Compute` is not
+registered yet; `up.sh` registers it during preflight.
 
 ## 5. Optional: Cloudflare token for the NS records
 
@@ -270,8 +286,9 @@ the new version within its 2-minute rotation interval. A 403 means your user isn
 | `prod-power`        | `gh-bbm-prod-power` | none (scheduled auto-pause must run unattended) | `main`                      |
 
 It also sets the repo variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLAN_CLIENT_ID`,
-`TFSTATE_RG`, `TFSTATE_ACCOUNT` and `ACR_NAME`, and `AZURE_CLIENT_ID` per Environment. These are
-IDs, not secrets.
+`TFSTATE_RG`, `TFSTATE_ACCOUNT`, `ACR_NAME`, `AZURE_LOCATION` and `AZURE_LOCATION_ABBR` (the region
+every workflow builds resource group and cluster names from), and `AZURE_CLIENT_ID` per
+Environment. These are IDs, not secrets.
 
 If `github_reviewer_ids` was empty, the reviewer-gated Environments are created without reviewers.
 Add one in **Settings → Environments → `<env>`** (tick **Required reviewers**), or with the CLI:
@@ -322,10 +339,10 @@ also covers them.
 - [ ] `up.sh` ended with `done` and no warnings you haven't dealt with.
 - [ ] `dig +short NS <zone> @1.1.1.1` prints the four Azure name servers.
 - [ ] `az group list --query "[?tags.project=='bbm'].name" -o tsv` lists the tfstate and shared
-      RGs and `rg-bbm-<env>-data-eus2` / `rg-bbm-<env>-compute-eus2` for test, staging and prod.
+      RGs and `rg-bbm-<env>-data-ncus` / `rg-bbm-<env>-compute-ncus` for test, staging and prod.
 - [ ] `az network dns zone list --query "[].name" -o tsv` lists `<zone>`, `test.<zone>`,
       `preview.<zone>`, `staging.<zone>` and `prod.<zone>`.
-- [ ] `az lock list -g rg-bbm-tfstate-eus2 -o table` shows `lock-bbm-tfstate`.
+- [ ] `az lock list -g rg-bbm-tfstate-ncus -o table` shows `lock-bbm-tfstate`.
 - [ ] `infra/terraform/scripts/tf.sh bootstrap global plan` reports **No changes**.
 - [ ] `az ad app list --display-name gh-bbm- --query "[].displayName" -o tsv` lists `gh-bbm-plan`,
       `gh-bbm-ephemeral`, `gh-bbm-preview`, `gh-bbm-global`, `gh-bbm-test`, `gh-bbm-staging`,
@@ -398,7 +415,7 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
 4. **State coordinates for later runs:**
 
    ```sh
-   export TFSTATE_RG=rg-bbm-tfstate-eus2
+   export TFSTATE_RG=rg-bbm-tfstate-ncus
    export TFSTATE_ACCOUNT=$(./scripts/tf.sh bootstrap global output -raw tfstate_storage_account)
    ```
 
@@ -432,7 +449,7 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
    az keyvault secret set --vault-name "$(./scripts/tf.sh data <env> output -raw key_vault_name)" \
      -n llm-api-key --value placeholder-set-me
    ./scripts/tf.sh compute <env> init && ./scripts/tf.sh compute <env> apply
-   az aks get-credentials -g rg-bbm-<env>-compute-eus2 -n aks-bbm-<env>-eus2 --overwrite-existing
+   az aks get-credentials -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus --overwrite-existing
    kubelogin convert-kubeconfig -l azurecli
    ./scripts/tf.sh compute <env> output -raw helm_values > /tmp/values-infra.yaml
    ../../deploy/platform/install.sh <env> --values /tmp/values-infra.yaml --wait
@@ -451,7 +468,7 @@ Use **Portal → Storage account → Containers → tfstate → `<key>` → Vers
 | Bootstrap apply: provider "already registered"                    | Add it to `preregistered_resource_providers` (`up.sh` does this for providers registered before the run) and re-run.                                                                                                                                                                                                              |
 | `LocationIsOfferRestricted` (often PG Flexible or AKS)            | The subscription is blocked for that SKU in the region. Open a support request (**Help + support → Service and subscription limits**) or use the fallback region (section 4) before the first run.                                                                                                                                |
 | `QuotaExceeded` when creating node pools                          | Not enough family or regional vCPUs. Request more (section 4). Bring up fewer envs meanwhile (`--envs test`).                                                                                                                                                                                                                     |
-| `VaultAlreadyExists` / vault in deleted state                     | A soft-deleted vault holds the name. A re-apply normally recovers it (`recover_soft_deleted_key_vaults = true`). Otherwise `az keyvault list-deleted -o table`, then `az keyvault recover -n <name>` or `az keyvault purge -n <name> -l eastus2`.                                                                                 |
+| `VaultAlreadyExists` / vault in deleted state                     | A soft-deleted vault holds the name. A re-apply normally recovers it (`recover_soft_deleted_key_vaults = true`). Otherwise `az keyvault list-deleted -o table`, then `az keyvault recover -n <name>` or `az keyvault purge -n <name> -l northcentralus`.                                                                                 |
 | `up.sh` waits for the delegation and times out                    | The NS records for `<zone>` are missing or wrong at the parent domain's DNS host, or still propagating. Compare `dig +short NS <zone> @1.1.1.1` with the `dns_name_servers` output. With Cloudflare, check the token scope (section 5). Re-run `up.sh` once they match.                                                           |
 | Cloudflare: "no Cloudflare zone found for any parent of `<zone>`" | The token can't see the parent domain, or the domain isn't on Cloudflare. Fix the token's zone resources, or unset `CLOUDFLARE_API_TOKEN` and add the records by hand.                                                                                                                                                            |
 | Certificate not Ready (`install.sh --wait` times out)             | `kubectl describe certificate -n bbm-platform bbm-wildcard`, then `kubectl get orders,challenges -A` and `kubectl -n cert-manager logs deploy/cert-manager`. Most often the delegation hasn't resolved yet; cert-manager retries on its own.                                                                                      |
@@ -463,6 +480,6 @@ Use **Portal → Storage account → Containers → tfstate → `<key>` → Vers
 | `AADSTS700212` (audience)                                         | The `azure/login` audience must be `api://AzureADTokenExchange` (the default).                                                                                                                                                                                                                                                    |
 | 403 `AuthorizationPermissionMismatch` on state blobs              | The identity lacks its tfstate role, the key is outside its allowed prefixes (e.g. `gh-bbm-plan` reading `prod/`), or the assignment hasn't propagated (allow about 10 minutes).                                                                                                                                                  |
 | Plan job can't take the state lock (403 on the lease)             | `gh-bbm-plan` is read-only on state by design. Plan with `-lock=false`.                                                                                                                                                                                                                                                           |
-| `ScopeLocked` when deleting the state account or its RG           | The `lock-bbm-tfstate` lock works as intended. Use `down.sh --all`, which destroys the lock through Terraform. To remove it by hand: `az lock delete -n lock-bbm-tfstate -g rg-bbm-tfstate-eus2 --resource-type Microsoft.Storage/storageAccounts --resource <account>`.                                                          |
+| `ScopeLocked` when deleting the state account or its RG           | The `lock-bbm-tfstate` lock works as intended. Use `down.sh --all`, which destroys the lock through Terraform. To remove it by hand: `az lock delete -n lock-bbm-tfstate -g rg-bbm-tfstate-ncus --resource-type Microsoft.Storage/storageAccounts --resource <account>`.                                                          |
 | CI run fails: `mirror/postgres:16-alpine is missing`              | The image mirror wasn't imported. Run the `az acr import` commands in the appendix (step 8), or re-run `up.sh`.                                                                                                                                                                                                                   |
 | `az acr import` fails with an authentication error                | Your user needs Contributor or `AcrImport` on the registry. Owner on the subscription is enough.                                                                                                                                                                                                                                  |

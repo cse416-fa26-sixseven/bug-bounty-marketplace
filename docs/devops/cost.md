@@ -14,6 +14,13 @@
 > - **Prod off unless demoing.** Prod running all month is ~$200; keep it `down` (or at least
 >   `paused`) outside demos.
 
+> **Azure for Students: ~$100 of credit in total, not per month.** At ~$60–70/month the credit
+> lasts about 6–8 weeks; with prod running all month it is gone in under 3 weeks. When the credit
+> runs out, Azure disables the subscription's resources until it is upgraded to pay-as-you-go.
+> Check the remaining credit at https://www.microsoftazuresponsorships.com/balance. The levers
+> above matter more here than the $50 alert: keep prod `down` outside demos and pause test when
+> CI is idle.
+
 > **Rough estimates only.** Figures are approximate `eastus2` pay-as-you-go list prices in USD
 > (730 hours per month), rounded, before taxes, credits or free grants unless stated. Check them
 > against the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the

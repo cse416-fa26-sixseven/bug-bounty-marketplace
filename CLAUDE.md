@@ -58,7 +58,7 @@ helm lint --strict deploy/helm/bbm-platform -f deploy/helm/bbm-platform/values-p
 docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3   # lint workflows
 
 # Azure bring-up / teardown (needs `az login --use-device-code`; see docs/devops/azure-bootstrap.md):
-infra/up.sh --subscription <guid> [--zone <zone>] [--envs test,staging] [--prod] [--dry-run]
+infra/up.sh --subscription <guid> [--zone <zone>] [--location <region>] [--envs test,staging] [--prod] [--dry-run]
 infra/down.sh --subscription <guid> (--envs <list> | --all) [--dry-run]
 ```
 
@@ -128,7 +128,14 @@ infra/down.sh --subscription <guid> (--envs <list> | --all) [--dry-run]
 - **OIDC only.** Workflows authenticate to Azure with GitHub federated
   credentials per GitHub Environment; never add cloud secrets to GitHub.
 - **Azure workflows are gated on repo vars** (`vars.AZURE_SUBSCRIPTION_ID`,
-  `vars.ACR_NAME`, ...) and skip green until bootstrap has set them.
+  `vars.ACR_NAME`, `vars.AZURE_LOCATION`, `vars.AZURE_LOCATION_ABBR`, ...) and skip green until
+  bootstrap has set them.
+- **Region is one setting** (ADR 0002 §7): `location` / `location_abbr` in
+  `envs/global/bootstrap.tfvars` (default `northcentralus` / `ncus`; Azure for Students allows only
+  five regions). `infra/up.sh --location <region>` rewrites every tfvars and backend `.hcl`; the
+  region → code map lives in `modules/naming`. Workflows and scripts build names such as
+  `rg-bbm-<env>-data-ncus` / `aks-bbm-<env>-ncus` from `vars.AZURE_LOCATION_ABBR` (or
+  `BBM_REGION_ABBR`), never from literals.
 - **`ci.yml` stays Azure-free**, so `CI OK` never depends on cloud
   credentials, quota or uptime. Anything that needs Azure goes in its own
   workflow.

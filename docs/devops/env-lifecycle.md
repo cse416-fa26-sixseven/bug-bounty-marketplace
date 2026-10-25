@@ -4,9 +4,9 @@ There are three AKS environments, each on its own cluster:
 
 | Env       | Cluster                | Runs                                                                 |
 | --------- | ---------------------- | -------------------------------------------------------------------- |
-| `test`    | `aks-bbm-test-eus2`    | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
-| `staging` | `aks-bbm-staging-eus2` | one release in namespace `bbm`                                       |
-| `prod`    | `aks-bbm-prod-eus2`    | one release in namespace `bbm`                                       |
+| `test`    | `aks-bbm-test-ncus`    | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
+| `staging` | `aks-bbm-staging-ncus` | one release in namespace `bbm`                                       |
+| `prod`    | `aks-bbm-prod-ncus`    | one release in namespace `bbm`                                       |
 
 They only need to be up for testing, development and demos, so all three can be switched off on
 demand without losing data. The design is in [ADR 0001](../adr/0001-azure-environment-topology.md)
@@ -31,7 +31,7 @@ stateDiagram-v2
     paused --> paused: daily Postgres re-pause 06:30 UTC
 ```
 
-The current state is stored as tags on the data resource group `rg-bbm-<env>-data-eus2`.
+The current state is stored as tags on the data resource group `rg-bbm-<env>-data-ncus`.
 Terraform ignores these tags: the bootstrap stack's `lifecycle.ignore_changes` lists exactly
 `power-state`, `auto-pause`, `db-paused`, `bbm-last-deployed-tag`, `paused-at`, `resumed-at`,
 `down-at`, `up-at` and `deployed-at`.
@@ -104,7 +104,7 @@ overwrite the `bbm/*` images staging and prod deploy. Each namespace gets:
   namespace's HTTPRoute (set it by hand for a manual `helm install`).
 
 **Auto-resume.** Before deploying, `_ephemeral-env.yml` reads the `power-state` tag on
-`rg-bbm-test-data-eus2`:
+`rg-bbm-test-data-ncus`:
 
 | Tag / cluster state           | What the workflow does                                          |
 | ----------------------------- | --------------------------------------------------------------- |
@@ -143,7 +143,7 @@ paused or down, and catches up after the next resume. Weekly (Sunday 03:30 UTC) 
 To see what runs on the test cluster:
 
 ```sh
-az aks get-credentials -g rg-bbm-test-compute-eus2 -n aks-bbm-test-eus2 --overwrite-existing
+az aks get-credentials -g rg-bbm-test-compute-ncus -n aks-bbm-test-ncus --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl get ns -l bbm.io/ephemeral=true \
   -o custom-columns='NAME:.metadata.name,KIND:.metadata.labels.bbm\.io/kind,EXPIRES:.metadata.annotations.bbm\.io/expires-on'
@@ -214,9 +214,9 @@ All times are UTC and run from the default branch.
 For a multi-day demo or a long load test:
 
 ```sh
-az group update -n rg-bbm-<env>-data-eus2 --set tags.auto-pause=false
+az group update -n rg-bbm-<env>-data-ncus --set tags.auto-pause=false
 # and afterwards
-az group update -n rg-bbm-<env>-data-eus2 --set tags.auto-pause=true
+az group update -n rg-bbm-<env>-data-ncus --set tags.auto-pause=true
 ```
 
 Remember to turn it back on. An opted-out environment runs (and bills) until someone pauses it.
@@ -267,7 +267,7 @@ infra/terraform/scripts/env-power.sh staging resume
 | symptom                                                       | cause / fix                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Deploy run is green but says "skipped: env is paused/down"    | Expected. Run `resume` (or `up`), then deploy again. `up` redeploys automatically.                                                                                                                                                               |
-| `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-eus2 -n aks-bbm-<env>-eus2 --query provisioningState`.                                                                                                   |
+| `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus --query provisioningState`.                                                                                                   |
 | `cluster ... not found: <env> is down`                        | The compute stack was destroyed. Use `up`, not `resume`.                                                                                                                                                                                         |
 | Resume finished but `/health` never answers                   | Pods are still starting or crash-looping. `kubectl -n bbm get pods`, `kubectl -n bbm describe pod ...`. Check Postgres is `Ready`. A failing Key Vault CSI mount usually means a broken federated credential: run `up`, which reapplies compute. |
 | `Postgres ... is 'Updating'; cannot stop it now`              | Azure maintenance on the server. Retry later.                                                                                                                                                                                                    |

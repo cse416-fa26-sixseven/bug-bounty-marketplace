@@ -8,6 +8,13 @@
 > cluster (`test`), adds Azure DNS and TLS, and changes the ingress host, the AKS tier for prod and
 > some identities. The affected sections below are marked "Superseded by ADR 0002". They are kept
 > as the record of the original decision; everything not marked still holds.
+>
+> **Region (2026-10-25):** the `eastus2` / `eus2` region and the `centralus` fallback pinned here
+> are superseded by [ADR 0002 §7](0002-aks-everywhere-and-azure-dns.md#7-region): the Azure for
+> Students subscription allows only five regions, and neither `eastus2` nor `centralus` is one of
+> them, so the deployment runs in `northcentralus` (`ncus`), set once in
+> `envs/global/bootstrap.tfvars` (`infra/up.sh --location`). Names below that end in `-eus2` now
+> end in the region code, e.g. `rg-bbm-<env>-data-ncus`, `aks-bbm-<env>-ncus`.
 
 ## Context
 
@@ -30,7 +37,10 @@ Constraints:
   Foundry tests), so the platform needs a path to strong isolation.
 
 Region is `eastus2` (abbreviation `eus2`), with `centralus` as the fallback if a SKU is restricted
-for the new subscription. Project prefix is `bbm`.
+for the new subscription. Project prefix is `bbm`. _Superseded by ADR 0002 §7: the region is a
+single setting (`location` / `location_abbr` in `envs/global/bootstrap.tfvars`), currently
+`northcentralus` (`ncus`); both `eastus2` and `centralus` are blocked by the Azure for Students
+allowed-regions policy._
 
 ## Decision
 
@@ -489,6 +499,9 @@ and `infra/lib/` drive bring-up and teardown._
 ### Names
 
 `<sfx>` is a 4-character lowercase random string. `modules/naming` emits all of these.
+_Superseded in part by ADR 0002 §7: the `eus2` suffix below is the region code, now `ncus`
+(`modules/naming` maps the region to it); the length-limited Key Vault and storage names carry no
+region code, so they are unchanged._
 
 | Thing                       | Name                                                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |

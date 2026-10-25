@@ -58,7 +58,11 @@ that don't exist there.
 | `envs/**/backend*.hcl`         | `resource_group_name`, `storage_account_name` (`stbbmtfstate0000`)                                                                    |
 
 Kept, because they survive an account switch: `dns_zone_name`, `alert_emails`,
-`github_reviewer_ids` and `github_repo`.
+`github_reviewer_ids`, `github_repo` and the region (`location` / `location_abbr`, a user choice
+rather than a per-tenant value). If the new subscription needs another region (for example its
+"allowed locations" policy excludes the current one), pass `--location <region>` to `up.sh` in
+step 3; it rewrites the region everywhere and fails early, listing the allowed regions, when the
+choice is not permitted.
 
 If you skipped step 1 (the old account is gone), `up.sh` notices: when `bootstrap.tfvars` holds a
 non-placeholder `subscription_id` that differs from `--subscription`, it warns and offers to do the
@@ -76,7 +80,7 @@ apply on the new subscription.
 ```sh
 az login --use-device-code                    # the new account (add --tenant <id> if needed)
 export CLOUDFLARE_API_TOKEN=...               # optional, token for the new parent domain
-infra/up.sh --subscription <new-guid> --zone <new-zone>      # add --prod for prod
+infra/up.sh --subscription <new-guid> --zone <new-zone>      # add --prod for prod, --location <region> to move
 ```
 
 To keep the same domain, pass the same `--zone`. The new parent zone gets new Azure name servers,
