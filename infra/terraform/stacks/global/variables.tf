@@ -4,7 +4,7 @@ variable "subscription_id" {
 }
 
 variable "location" {
-  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
+  description = "Home region (full name), e.g. northcentralus: the shared RG, ACR, shared Log Analytics and Key Vault. infra/up.sh --location writes it."
   type        = string
   default     = "northcentralus"
 }
@@ -13,6 +13,20 @@ variable "location_abbr" {
   description = "Short region code used in names (e.g. ncus). Null derives it from location (modules/naming local.location_abbrs)."
   type        = string
   default     = null
+}
+
+variable "env_locations" {
+  description = "Region of each env (same value as envs/global/bootstrap.tfvars; infra/up.sh writes both), used to find the env resource groups for their budgets. An env missing from the map uses the home region."
+  type = map(object({
+    location      = string
+    location_abbr = optional(string)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for e in keys(var.env_locations) : contains(["test", "staging", "prod"], e)])
+    error_message = "env_locations keys must be test, staging or prod."
+  }
 }
 
 variable "suffix" {

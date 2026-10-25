@@ -59,12 +59,61 @@ make_tree() {
     sed 's/"staging"/"test"/' "$dst/envs/staging/data.tfvars" >"$dst/envs/test/data.tfvars"
     sed 's/"staging"/"test"/' "$dst/envs/staging/compute.tfvars" >"$dst/envs/test/compute.tfvars"
   fi
+  untenant "$dst"
+  pin_fixture_regions "$dst"
+}
+
+# pin_fixture_regions <tree>: give the copy a fixed region layout (test ncus,
+# staging frc, prod cac, every env on Standard_B4as_v2), so the assertions
+# below don't depend on the regions the real subscription uses. The real
+# envs/** layout is checked for consistency separately ("repo:" checks).
+pin_fixture_regions() {
+  local dst=$1 e loc abbr f
+  for pair in test=northcentralus/ncus staging=francecentral/frc prod=canadacentral/cac; do
+    e=${pair%%=*} loc=${pair#*=}; abbr=${loc#*/}; loc=${loc%/*}
+    for f in "$dst/envs/$e/data.tfvars" "$dst/envs/$e/compute.tfvars"; do
+      sed -E -e "s/^(location[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$loc\"/" \
+        -e "s/^(location_abbr[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$abbr\"/" \
+        -e 's/^(system_vm_size[[:space:]]*=[[:space:]]*)"[^"]*"/\1"Standard_B4as_v2"/' "$f" >"$f.tmp"
+      cat "$f.tmp" >"$f"
+      rm -f "$f.tmp"
+    done
+    for f in "$dst/envs/global/bootstrap.tfvars" "$dst/envs/global/global.tfvars"; do
+      sed -E "s/^([[:space:]]+${e}[[:space:]]*=[[:space:]]*\{ location = )\"[^\"]*\", location_abbr = \"[^\"]*\"/\1\"$loc\", location_abbr = \"$abbr\"/" "$f" >"$f.tmp"
+      cat "$f.tmp" >"$f"
+      rm -f "$f.tmp"
+    done
+  done
+}
+
+# untenant <tree>: put the per-tenant values infra/up.sh writes (subscription,
+# suffix, object ids, emails, reviewers, providers, zone, state account) back
+# to the committed placeholders, so the suite does not depend on whether a
+# filled-in subscription has been committed. Regions are kept.
+untenant() {
+  local f
+  while IFS= read -r f; do
+    sed -E \
+      -e 's/^(subscription_id[[:space:]]*=[[:space:]]*)"[^"]*"/\1"00000000-0000-0000-0000-000000000000"/' \
+      -e 's/^(suffix[[:space:]]*=[[:space:]]*)"[^"]*"/\1"0000"/' \
+      -e 's/^(storage_account_name[[:space:]]*=[[:space:]]*)"[^"]*"/\1"stbbmtfstate0000"/' \
+      -e 's/^((admin|power_operator|secret_officer_user|secret_officer_sp)_object_ids[[:space:]]*=[[:space:]]*)\[[^]]*\]/\1[]/' \
+      -e 's/^((preregistered_resource_providers|github_reviewer_ids)[[:space:]]*=[[:space:]]*)\[[^]]*\]/\1[]/' \
+      -e 's/^(alert_emails[[:space:]]*=[[:space:]]*)\[[^]]*\]/\1["bbm-admins@example.com"]/' \
+      -e 's/^((ephemeral|preview)_ci_principal_id[[:space:]]*=[[:space:]]*)"[^"]*"/\1null/' \
+      -e 's/^(dns_zone_name[[:space:]]*=[[:space:]]*)"[^"]*"/\1""/' \
+      "$f" >"$f.tmp"
+    cat "$f.tmp" >"$f"
+    rm -f "$f.tmp"
+  done < <(find "$1/envs" -name '*.tfvars' -o -name 'backend*.hcl')
 }
 
 # ---------------------------------------------------------------------------
 echo "== common.sh helpers"
 TREE="$T/tree"
 make_tree "$TREE"
+BASE="$T/tree-base" # pristine copy to diff against
+make_tree "$BASE"
 export BBM_TF_ROOT="$TREE" BBM_REPO_ROOT="$repo" NO_COLOR=1
 # shellcheck source-path=SCRIPTDIR source=common.sh
 source "$here/common.sh"
@@ -83,7 +132,7 @@ tfvars_set "$B" subscription_id '"11111111-2222-3333-4444-555555555555"' 2>/dev/
 eq "set value" "$(tfvars_get_string "$B" subscription_id)" "11111111-2222-3333-4444-555555555555"
 tfvars_set "$D" suffix '"ab12"' 2>/dev/null
 eq "set keeps trailing comment" "$(grep '^suffix' "$D")" 'suffix          = "ab12" # bootstrap output: suffix (same as envs/global/global.tfvars)'
-eq "set leaves other lines alone" "$(diff "$repo/infra/terraform/envs/staging/data.tfvars" "$D" | grep -c '^[<>]')" "2"
+eq "set leaves other lines alone" "$(diff "$BASE/envs/staging/data.tfvars" "$D" | grep -c '^[<>]')" "2"
 check_fails "set missing key dies" tfvars_set "$B" no_such_key '"x"'
 check_fails "set multi-line value dies" tfvars_set "$D" subnet_cidrs '{}'
 printf 'dup = 1\ndup = 2\n' >"$T/dup.tfvars"
@@ -183,12 +232,15 @@ done
 eq "reset: no old object id left" "$(grep -rlF "$OLD" "$RT/envs" | wc -l | tr -d ' ')" "0"
 eq "reset: backends back to committed placeholders" \
   "$(cd "$RT/envs" && find . -name 'backend*.hcl' | sort | xargs cat | cksum)" \
-  "$(cd "$repo/infra/terraform/envs" && find . -name 'backend*.hcl' | sort | xargs cat | cksum)"
+  "$(cd "$BASE/envs" && find . -name 'backend*.hcl' | sort | xargs cat | cksum)"
 eq "reset: keeps dns_zone_name" "$(tfvars_get_string "$RB" dns_zone_name)" "bbm.example.com"
 eq "reset: keeps hint dns_zone_name" "$(tfvars_get_string "$RG_" dns_zone_name)" "bbm.example.com"
 eq "reset: keeps alert_emails" "$(tfvars_get "$RB" alert_emails)" '["me@uni.edu"]'
 eq "reset: keeps github_reviewer_ids" "$(tfvars_get "$RB" github_reviewer_ids)" "[12345]"
-eq "reset: keeps location" "$(tfvars_get_string "$RB" location)/$(tfvars_get_string "$RT/envs/prod/data.tfvars" location_abbr)" "northcentralus/ncus"
+eq "reset: keeps home and env regions" \
+  "$(tfvars_get_string "$RB" location)/$(tfvars_get_string "$RT/envs/staging/data.tfvars" location_abbr)/$(tfvars_get_string "$RT/envs/prod/compute.tfvars" location)" \
+  "northcentralus/frc/canadacentral"
+eq "reset: keeps env_locations" "$(grep -A4 '^env_locations' "$RB" | cksum)" "$(grep -A4 '^env_locations' "$BASE/envs/global/bootstrap.tfvars" | cksum)"
 if grep -qE '^bbm: set .*/envs/global/bootstrap.tfvars: admin_object_ids = \[\]$' <<<"$reset_out"; then
   ok_ "reset: prints what it reset"
 else
@@ -199,7 +251,7 @@ if [[ -n "$real_terraform" ]]; then
 fi
 BBM_TF_ROOT="$TREE"
 
-# region map (parsed from modules/naming/main.tf), validation and set_region
+# region map (parsed from modules/naming/main.tf), validation, home / env regions
 for pair in northcentralus=ncus canadacentral=cac francecentral=frc eastus2=eus2 centralus=cus; do
   eq "region_abbr ${pair%%=*}" "$(region_abbr "${pair%%=*}")" "${pair#*=}"
 done
@@ -212,26 +264,75 @@ check_fails "resolve: abbr not matching the map dies" resolve_location_abbr nort
 check_fails "resolve: bad abbr dies" resolve_location_abbr swedencentral Sweden-1
 check_fails "resolve: bad region name dies" resolve_location_abbr "North Central US"
 
+# fixture regions (pin_fixture_regions): one per env (ADR 0002 section 8)
+eq "fixture: home region" "$(tfvars_get_string "$B" location)/$(tfvars_get_string "$G" location_abbr)" "northcentralus/ncus"
+for pair in test=northcentralus/ncus staging=francecentral/frc prod=canadacentral/cac; do
+  e=${pair%%=*}
+  eq "fixture: $e region (data + compute)" \
+    "$(tfvars_get_string "$TREE/envs/$e/data.tfvars" location)/$(tfvars_get_string "$TREE/envs/$e/compute.tfvars" location_abbr)" "${pair#*=}"
+  eq "env_region $e" "$(env_region "$e" | tr ' ' /)" "${pair#*=}"
+done
+eq "fixture: env_locations matches the env tfvars (bootstrap)" \
+  "$(grep -A4 '^env_locations' "$B")" "$(env_locations_block)"
+eq "fixture: env_locations matches the env tfvars (global)" \
+  "$(grep -A4 '^env_locations' "$G")" "$(env_locations_block)"
+# repo: the real envs/** layout must agree with itself, whatever regions it uses
+for e in test staging prod; do
+  rd="$repo/infra/terraform/envs/$e/data.tfvars" rc="$repo/infra/terraform/envs/$e/compute.tfvars"
+  eq "repo: $e data and compute share a region" \
+    "$(tfvars_get_string "$rd" location)/$(tfvars_get_string "$rd" location_abbr)" \
+    "$(tfvars_get_string "$rc" location)/$(tfvars_get_string "$rc" location_abbr)"
+  for gf in bootstrap global; do
+    eq "repo: env_locations ($gf) lists $e in its region" \
+      "$(grep -E "^[[:space:]]+${e}[[:space:]]*=" "$repo/infra/terraform/envs/global/$gf.tfvars" | grep -oE 'location = "[^"]*"' | head -1)" \
+      "location = \"$(tfvars_get_string "$rd" location)\""
+  done
+done
+for e in test staging prod; do
+  eq "env-region.sh $e = env_region" "$("$TREE/scripts/env-region.sh" "$e" --get abbr)" "$(env_region "$e" | awk '{print $2}')"
+done
+eq "env-region.sh names" "$("$TREE/scripts/env-region.sh" prod | tr '\n' ' ')" \
+  "BBM_LOCATION=canadacentral BBM_REGION_ABBR=cac DATA_RG=rg-bbm-prod-data-cac COMPUTE_RG=rg-bbm-prod-compute-cac CLUSTER=aks-bbm-prod-cac "
+eq "env-region.sh global" "$("$TREE/scripts/env-region.sh" global | tr '\n' ' ')" \
+  "BBM_LOCATION=northcentralus BBM_REGION_ABBR=ncus SHARED_RG=rg-bbm-shared-ncus TFSTATE_RG=rg-bbm-tfstate-ncus "
+check "env-region.sh --check: matching Environment vars" env BBM_LOCATION=francecentral BBM_REGION_ABBR=frc "$TREE/scripts/env-region.sh" staging --check
+check_fails "env-region.sh --check: stale Environment vars" env BBM_REGION_ABBR=ncus "$TREE/scripts/env-region.sh" staging --check
+check_fails "env-region.sh: unknown env" "$TREE/scripts/env-region.sh" dev
+
 SR="$T/tree-region"
 make_tree "$SR"
 BBM_TF_ROOT="$SR"
-set_region canadacentral cac 2>/dev/null
-n_tfvars=0 n_ok=0
-while IFS= read -r f; do
-  n_tfvars=$((n_tfvars + 1))
-  [[ "$(tfvars_get_string "$f" location)/$(tfvars_get_string "$f" location_abbr)" == canadacentral/cac ]] && n_ok=$((n_ok + 1))
-done < <(find "$SR/envs" -name '*.tfvars' | sort)
-eq "set_region: location + abbr in every tfvars ($n_tfvars files)" "$n_ok" "$n_tfvars"
-eq "set_region: covers bootstrap, global, data and compute" "$n_tfvars" "8"
-eq "set_region: backend state RGs" \
+set_home_region canadacentral cac 2>/dev/null
+eq "set_home_region: bootstrap + global" \
+  "$(tfvars_get_string "$SR/envs/global/bootstrap.tfvars" location_abbr)/$(tfvars_get_string "$SR/envs/global/global.tfvars" location)" "cac/canadacentral"
+eq "set_home_region: backend state RGs" \
   "$(grep -h '^resource_group_name' "$SR"/envs/*/backend*.hcl | sort -u | tr -s ' ')" 'resource_group_name = "rg-bbm-tfstate-cac"'
-eq "set_region: no old region left" "$(grep -rhE '^[^#]*(northcentralus|"ncus"|tfstate-ncus)' "$SR/envs" | wc -l | tr -d ' ')" "0"
+eq "set_home_region: env regions untouched" "$(env_region staging)" "francecentral frc"
+set_env_region staging denmarkeast dke 2>/dev/null
+eq "set_env_region: data + compute" \
+  "$(tfvars_get_string "$SR/envs/staging/data.tfvars" location)/$(tfvars_get_string "$SR/envs/staging/compute.tfvars" location_abbr)" "denmarkeast/dke"
+eq "set_env_region: other envs untouched" "$(env_region prod)/$(env_region test)" "canadacentral cac/northcentralus ncus"
+sync_env_locations 2>/dev/null
+eq "sync_env_locations: bootstrap map follows the env tfvars" \
+  "$(grep -E '^  staging' "$SR/envs/global/bootstrap.tfvars" | tr -s ' ')" ' staging = { location = "denmarkeast", location_abbr = "dke" }'
+eq "sync_env_locations: global map follows the env tfvars" "$(grep -A4 '^env_locations' "$SR/envs/global/global.tfvars")" "$(env_locations_block)"
+sync_env_locations prod=belgiumcentral:bec 2>/dev/null
+eq "sync_env_locations: explicit value wins" "$(grep -cF 'prod    = { location = "belgiumcentral", location_abbr = "bec" }' "$SR/envs/global/global.tfvars")" "1"
+before=$(cat "$SR/envs/global/global.tfvars")
+sync_env_locations prod=belgiumcentral:bec 2>/dev/null
+eq "sync_env_locations: idempotent" "$(cat "$SR/envs/global/global.tfvars")" "$before"
+check "sync_env_locations: no duplicate keys" tfvars_check_dupes "$SR/envs/global/global.tfvars"
+eq "sync_env_locations: home location untouched" "$(tfvars_get_string "$SR/envs/global/global.tfvars" location)" "canadacentral"
 if [[ -n "$real_terraform" ]]; then
   tf_fmt -recursive "$SR/envs"
-  check "set_region tfvars pass terraform fmt -check" terraform fmt -check -recursive "$SR/envs"
+  check "region tfvars pass terraform fmt -check" terraform fmt -check -recursive "$SR/envs"
 fi
+printf 'env_locations = {\n  test = {}\n' >"$T/open.tfvars"
+check_fails "tfvars_replace_map: unclosed block dies" tfvars_replace_map "$T/open.tfvars" env_locations "$T/open.tfvars"
+printf 'x = 1\n' >"$T/nomap.tfvars"
+check_fails "tfvars_replace_map: missing block dies" tfvars_replace_map "$T/nomap.tfvars" env_locations "$T/open.tfvars"
 sed '/^location_abbr/d' "$SR/envs/test/compute.tfvars" >"$T/c.tmp" && cat "$T/c.tmp" >"$SR/envs/test/compute.tfvars"
-check_fails "set_region: compute.tfvars without location_abbr dies" set_region canadacentral cac
+check_fails "set_env_region: compute.tfvars without location_abbr dies" set_env_region test canadacentral cac
 BBM_TF_ROOT="$TREE"
 
 # allowed_locations_json with a stubbed az (the subscription's policy assignments)
@@ -310,8 +411,8 @@ case "$1 $2" in
   "account list-locations")
     loc=$(sed -nE "s/.*name=='([a-z0-9]+)'.*/\1/p" <<<"$q")
     case "$loc" in
-      canadacentral | eastus2) echo "{\"name\":\"$loc\",\"availabilityZoneMappings\":[{\"logicalZone\":\"1\"}]}" ;;
-      northcentralus | francecentral | swedencentral) echo "{\"name\":\"$loc\"}" ;;
+      canadacentral | francecentral | eastus2) echo "{\"name\":\"$loc\",\"availabilityZoneMappings\":[{\"logicalZone\":\"1\"}]}" ;;
+      northcentralus | swedencentral | denmarkeast) echo "{\"name\":\"$loc\"}" ;;
       *) ;;
     esac ;;
   "policy assignment")
@@ -328,6 +429,17 @@ case "$1 $2" in
     for a in "$@"; do [[ "$prev" == -n ]] && n=$a; prev=$a; done
     if [[ -n "$n" && "$n" == "${BBM_TEST_GROUP_EXISTS:-}" ]]; then echo true; else echo false; fi ;;
   "storage account") echo "stbbmtfstateab12" ;;
+  "group list")
+    [[ -z "${BBM_TEST_GROUP_LIST_FAIL:-}" ]] || exit 1
+    # only the groups whose name starts with the queried prefix
+    pfx=$(sed -nE "s/.*starts_with\(name, '([^']+)'\).*/\1/p" <<<"$q")
+    for g in ${BBM_TEST_GROUPS:-}; do [[ "$g" != "$pfx"* ]] || echo "$g"; done ;;
+  "resource list") echo "${BBM_TEST_RESOURCES:-0}" ;;
+  "vm list-skus")
+    size=""; prev=""
+    for a in "$@"; do [[ "$prev" == --size ]] && size=$a; prev=$a; done
+    def='[{"name":"'$size'","family":"standardBASv2Family","capabilities":[{"name":"vCPUs","value":"4"}],"restrictions":[{"type":"Zone","reasonCode":"NotAvailableForSubscription"}]}]'
+    echo "${BBM_TEST_SKUS:-$def}" ;;
   "vm list-usage")
     def='[{"name":{"value":"cores"},"currentValue":0,"limit":10},{"name":{"value":"standardBASv2Family"},"currentValue":0,"limit":2}]'
     echo "${BBM_TEST_USAGE:-$def}" ;;
@@ -412,12 +524,23 @@ else
 fi
 out=$(cat "$T/out")
 has() { if grep -qF -- "$2" <<<"$out"; then ok_ "$1"; else bad "$1 (missing: $2)"; fi; }
+hasnt_log() { if grep -qE -- "$2" "$LOG"; then bad "$1"; else ok_ "$1"; fi; }
+hasnt_out() { if grep -qF -- "$2" <<<"$out"; then bad "$1 (unexpected: $2)"; else ok_ "$1"; fi; }
 has "up: would write dns_zone_name" 'envs/global/bootstrap.tfvars: dns_zone_name = "bbm.example.com"'
 has "up: admin id added" 'admin_object_ids = ["aaaaaaaa-0000-0000-0000-000000000001"]'
 has "up: preregistered = registered ∩ bootstrap list" 'preregistered_resource_providers = ["Microsoft.Network", "Microsoft.Storage"]'
 has "up: alert email defaulted" 'alert_emails = ["me@uni.edu"]'
 has "up: reviewer from gh user" 'github_reviewer_ids = [12345]'
-has "up: BASv2 quota warning" 'standardBASv2Family has only 2 vCPUs free'
+has "up: BASv2 quota warning per region" 'standardBASv2Family has only 2 vCPUs free in northcentralus, 4 needed'
+has "up: each region's quota against its own needs" 'vCPU cores in francecentral: 0 used of 10 (staging add 4)'
+has "up: prod quota in its region" 'vCPU standardBASv2Family in canadacentral: 0 used of 2 (prod add 4)'
+has "up: node size checked per env region" 'env staging: Standard_B4as_v2 (4 vCPU, standardBASv2Family) is offered in francecentral'
+has "up: PG checked in the staging region" 'PostgreSQL Flexible Standard_B1ms is offered in francecentral'
+has "up: AKS versions per env region" 'AKS GA minors in canadacentral'
+has "up: env regions from the env tfvars" 'env prod: canadacentral (names use cac)'
+has "up: zones per env region" 'env staging: francecentral has availability zones: ingress_pip_zones = ["1", "2", "3"]'
+has "up: all env regions checked against the policy" 'region canadacentral is allowed by the subscription'
+has "up: env_locations synced" 'envs/global/bootstrap.tfvars: env_locations'
 has "up: kubernetes_version fixed" 'kubernetes_version = "1.33"'
 has "up: bootstrap plan" 'tf.sh bootstrap global plan -out=up.tfplan'
 has "up: migrate" 'init -migrate-state -force-copy'
@@ -432,15 +555,15 @@ has "up: llm-api-key placeholder" 'llm-api-key --value placeholder-set-me'
 has "up: platform install" 'install.sh test --values'
 has "up: github_repo follows gh repo view" 'github_repo = "neworg/bbm-renamed"'
 has "up: gh admin check uses the new repo" 'gh: admin on neworg/bbm-renamed'
-has "up: region from bootstrap.tfvars" 'region: northcentralus (names use ncus)'
+has "up: home region from bootstrap.tfvars" 'home region: northcentralus (tfstate and shared names use ncus)'
 has "up: allowed-locations policy checked" 'region northcentralus is allowed by the subscription'
-has "up: no zones in northcentralus → ingress_pip_zones = []" 'northcentralus has no availability zones: ingress_pip_zones = []'
+has "up: no zones in northcentralus → ingress_pip_zones = []" 'env test: northcentralus has no availability zones: ingress_pip_zones = []'
 if grep -qF 'filled in for subscription' <<<"$out"; then bad "up: no tenant warning on placeholder"; else ok_ "up: no tenant warning on placeholder"; fi
 eq "up: dry-run left the tree untouched" "$(snapshot)" "$snap0"
 mut=$(grep -E '^az .*(import|secret set|purge|create|delete( |$)| update| register)|^gh (variable|api -X)|^terraform .*(apply|destroy|init|plan)|^(kubectl|kubelogin|helm) ' "$LOG" || true)
 eq "up: no mutating CLI calls" "$mut" ""
 
-# --location: rewrites every tfvars and backend; checked against the policy
+# --location: the home region only (bootstrap, global, backends); env tfvars keep theirs
 : >"$LOG"
 TREE4="$T/tree4"
 make_tree "$TREE4"
@@ -451,19 +574,105 @@ else
   sed 's/^/      /' "$T/out"
 fi
 out=$(cat "$T/out")
-has "up --location: region resolved from the map" 'region: canadacentral (names use cac)'
-for f in global/bootstrap.tfvars global/global.tfvars test/data.tfvars staging/data.tfvars prod/data.tfvars \
-  test/compute.tfvars staging/compute.tfvars prod/compute.tfvars; do
+has "up --location: home region resolved from the map" 'home region: canadacentral (tfstate and shared names use cac)'
+for f in global/bootstrap.tfvars global/global.tfvars; do
   has "up --location: $f location" "envs/$f: location = \"canadacentral\" (was \"northcentralus\")"
   has "up --location: $f location_abbr" "envs/$f: location_abbr = \"cac\" (was \"ncus\")"
 done
 for f in global/backend.hcl test/backend-data.hcl staging/backend-compute.hcl prod/backend-data.hcl; do
   has "up --location: $f state RG" "envs/$f: resource_group_name = \"rg-bbm-tfstate-cac\""
 done
-has "up --location: zones in canadacentral" 'staging/data.tfvars: ingress_pip_zones = ["1", "2", "3"] (was [])'
-has "up --location: quota checked in the new region" 'Quota, SKUs and AKS versions in canadacentral'
+hasnt_out "up --location: env tfvars keep their regions" 'test/data.tfvars: location = "canadacentral"'
+has "up --location: test stays in northcentralus" 'env test: northcentralus (names use ncus)'
 check "up --location: state RG looked up in the new region" grep -qF 'az group exists -n rg-bbm-tfstate-cac' "$LOG"
-check "up --location: quota queried in canadacentral" grep -qF 'az vm list-usage -l canadacentral' "$LOG"
+
+# --env-location: one env's region, with its zones, quota and SKUs in that region
+: >"$LOG"
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --env-location staging=denmarkeast \
+  --env-location prod=francecentral --prod --yes --dry-run; then
+  ok_ "up --env-location --dry-run exits 0"
+else
+  bad "up --env-location --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+for f in staging/data.tfvars staging/compute.tfvars; do
+  has "up --env-location: $f location" "envs/$f: location = \"denmarkeast\" (was \"francecentral\")"
+  has "up --env-location: $f location_abbr" "envs/$f: location_abbr = \"dke\" (was \"frc\")"
+done
+has "up --env-location: prod moved too" 'envs/prod/data.tfvars: location_abbr = "frc" (was "cac")'
+has "up --env-location: env_locations shows the new regions" 'staging = { location = "denmarkeast", location_abbr = "dke" }'
+has "up --env-location: zones for the new region" 'staging/data.tfvars: ingress_pip_zones = [] (was ["1", "2", "3"])'
+has "up --env-location: prod alone in francecentral" 'vCPU cores in francecentral: 0 used of 10 (prod add 4)'
+has "up --env-location: home region untouched" "unchanged $TREE4/envs/global/bootstrap.tfvars: location = \"northcentralus\""
+check "up --env-location: quota queried in denmarkeast" grep -qF 'az vm list-usage -l denmarkeast' "$LOG"
+check "up --env-location: SKU queried in denmarkeast" grep -qF 'az vm list-skus -l denmarkeast --resource-type virtualMachines --size Standard_B4as_v2' "$LOG"
+check "up --env-location: AKS versions in denmarkeast" grep -qF 'az aks get-versions -l denmarkeast' "$LOG"
+check "up --env-location: policy checked for denmarkeast" grep -qF 'region denmarkeast is allowed' "$T/out"
+
+# all=: collapse every env into one region (a bigger subscription); one region's quota covers all three
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --env-location all=northcentralus --prod --yes --dry-run; then
+  ok_ "up --env-location all= --dry-run exits 0"
+else
+  bad "up --env-location all= --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up --env-location all=: summed need in one region" 'vCPU cores in northcentralus: 0 used of 10 (test,staging,prod add 12)'
+has "up --env-location all=: regional quota warning" 'cores has only 10 vCPUs free in northcentralus, 12 needed'
+check_fails "up --env-location: unknown env dies" run_script up.sh --subscription "$SUB" --env-location dev=francecentral --dry-run
+check_fails "up --env-location: missing region dies" run_script up.sh --subscription "$SUB" --env-location staging --dry-run
+
+# node size not offered / restricted in an env's region: fail before bootstrap
+export BBM_TEST_SKUS='[]'
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: node size not offered dies" 'env test: Standard_B4as_v2 is not offered in northcentralus'
+export BBM_TEST_SKUS='[{"name":"Standard_B4as_v2","family":"standardBASv2Family","capabilities":[{"name":"vCPUs","value":"4"}],"restrictions":[{"type":"Location","reasonCode":"NotAvailableForSubscription"}]}]'
+: >"$LOG"
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: restricted node size dies" 'is restricted for this subscription in northcentralus (NotAvailableForSubscription)'
+hasnt_log "up: SKU refusal stops before any terraform" '^terraform .*(init|plan|output)'
+unset BBM_TEST_SKUS
+
+# moving an env: only when its old-region RGs hold nothing but DNS zones
+export BBM_TEST_GROUPS="rg-bbm-staging-data-ncus rg-bbm-staging-compute-ncus rg-bbm-test-data-ncus"
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: empty old-region env RG is moved by bootstrap" 'env staging: rg-bbm-staging-data-ncus (old region) is empty but for DNS zones; bootstrap recreates it as rg-bbm-staging-data-frc'
+hasnt_out "up: env in its current region is not flagged" 'rg-bbm-test-data-ncus (old region)'
+export BBM_TEST_RESOURCES=3
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: env with resources in its old region dies" 'env staging moves to francecentral but rg-bbm-staging-data-ncus still holds 3 resource(s): run infra/down.sh --envs staging first'
+unset BBM_TEST_RESOURCES
+export BBM_TEST_GROUPS="rg-bbm-prod-aksnodes-ncus"
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run --prod || true
+out=$(cat "$T/out")
+has "up: env with a cluster in its old region dies" 'env prod still has a cluster in another region (rg-bbm-prod-aksnodes-ncus)'
+unset BBM_TEST_GROUPS
+# az group list failing must not read as "no old-region RGs" (fail closed)
+export BBM_TEST_GROUP_LIST_FAIL=1
+: >"$LOG"
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --dry-run; then
+  bad "up: unverifiable region-move check without --yes dies"
+else
+  ok_ "up: unverifiable region-move check without --yes dies"
+fi
+out=$(cat "$T/out")
+has "up: unverifiable move check warns" 'az group list failed: CANNOT VERIFY that env(s) test staging prod hold nothing in another region'
+has "up: unverifiable move check refusal explains" 'region-move check not done (az group list failed)'
+hasnt_log "up: unverifiable move check stops before any terraform" '^terraform .*(init|plan|output)'
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  ok_ "up: unverifiable region-move check with --yes continues"
+else
+  bad "up: unverifiable region-move check with --yes continues"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: --yes still warns about the skipped move check" '--yes: continuing WITHOUT the region-move check for test staging prod'
+unset BBM_TEST_GROUP_LIST_FAIL
 
 # --location outside the subscription's allowed-locations policy fails early
 : >"$LOG"
@@ -474,7 +683,6 @@ else
 fi
 out=$(cat "$T/out")
 has "up: policy refusal lists the allowed regions" 'region eastus2 is not allowed by this subscription'"'"'s allowed-locations policy. Allowed: belgiumcentral, canadacentral, denmarkeast, francecentral, northcentralus'
-hasnt_log() { if grep -qE -- "$2" "$LOG"; then bad "$1"; else ok_ "$1"; fi; }
 hasnt_log "up: policy refusal stops before any terraform" '^terraform .*(init|plan|output)'
 
 export BBM_TEST_POLICY='[]'
@@ -513,7 +721,7 @@ else
 fi
 out=$(cat "$T/out")
 has "up: registers Microsoft.Compute early" 'az provider register -n Microsoft.Compute --wait'
-has "up: quota unknown message" 'vCPU quota unknown until Microsoft.Compute is registered (bootstrap registers it); re-run up.sh after bootstrap to see it'
+has "up: quota unknown message" 'vCPU quota in northcentralus unknown until Microsoft.Compute is registered (bootstrap registers it); re-run up.sh after bootstrap to see it'
 hasnt_log "up: dry run does not register providers" '^az provider register'
 unset BBM_TEST_COMPUTE_STATE BBM_TEST_USAGE
 

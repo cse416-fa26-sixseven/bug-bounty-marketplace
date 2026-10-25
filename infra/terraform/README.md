@@ -1,6 +1,9 @@
 # infra/terraform
 
-Terraform for the BBM Azure deployment (region `northcentralus`, project code `bbm`).
+Terraform for the BBM Azure deployment (project code `bbm`). Home region
+`northcentralus` (tfstate, shared RG); each env has its own region (ADR 0002
+section 8): test `canadacentral` (arm64), staging `denmarkeast`, prod
+`northcentralus` (both x86).
 Three AKS environments (`test`, `staging`, `prod`) behind Azure DNS, per
 [ADR 0002](../../docs/adr/0002-aks-everywhere-and-azure-dns.md) (which
 supersedes the ACA parts of ADR 0001). `infra/up.sh` / `infra/down.sh` drive
@@ -34,6 +37,7 @@ infra/terraform/
     ci-static.sh         fmt + validate + test + tflint + shellcheck (what CI runs)
     env-power.sh         status / pause / resume / down / up per env
     janitor.sh           deletes expired ephemeral namespaces on the test cluster
+    env-region.sh        an env's region and RG / cluster names from envs/<env>/data.tfvars
 ```
 
 ## Running Terraform: `scripts/tf.sh`
@@ -170,14 +174,27 @@ instead of registering it. You can also import it by hand:
 
 ## Environments and DNS
 
-| env       | AKS tier | system pool         | PG server | public zones (in the env data RG) | VNet           |
-| --------- | -------- | ------------------- | --------- | --------------------------------- | -------------- |
-| `test`    | Free     | B2als_v2, 1–3 nodes | no        | `test.<zone>`, `preview.<zone>`   | `10.10.0.0/16` |
-| `staging` | Free     | B2als_v2, 1–2 nodes | yes       | `staging.<zone>`                  | `10.20.0.0/16` |
-| `prod`    | Standard | B2als_v2 + `apps`   | yes       | `prod.<zone>`                     | `10.30.0.0/16` |
+| env       | region (code)           | AKS tier | system pool                  | PG server | public zones (in the env data RG) | VNet           |
+| --------- | ----------------------- | -------- | ---------------------------- | --------- | --------------------------------- | -------------- |
+| `test`    | `canadacentral` (cac)   | Free     | 1 × B4ps_v2 (arm64), no KEDA | no        | `test.<zone>`, `preview.<zone>`   | `10.10.0.0/16` |
+| `staging` | `denmarkeast` (dke)     | Free     | 1 × B4as_v2, no KEDA         | yes       | `staging.<zone>`                  | `10.20.0.0/16` |
+| `prod`    | `northcentralus` (ncus) | Standard | 1 × B4as_v2, no KEDA         | yes       | `prod.<zone>`                     | `10.30.0.0/16` |
+
+- **Regions.** Each env's `location` / `location_abbr` lives in
+  `envs/<env>/{data,compute}.tfvars`; bootstrap and global get the same values
+  as `env_locations` (one line per env in `bootstrap.tfvars` /
+  `global.tfvars`, kept in sync by `infra/up.sh --env-location`). Every
+  env-scoped name embeds the env's code (`rg-bbm-staging-data-dke`,
+  `aks-bbm-prod-ncus`); shared names and `rg-bbm-tfstate-<abbr>` use the home
+  code. `scripts/env-region.sh <env>` prints an env's region and names for
+  scripts and workflows. One 4 vCPU node per region (B4ps_v2 arm64 in test:
+  canadacentral offers no x86 4 vCPU B-series size to this subscription;
+  B4as_v2 x86 in staging and prod) fits the Azure for Students quota of 6
+  vCPUs per region; `keda_enabled = false` saves ~0.4
+  CPU while analysis is off.
 
 - **Bootstrap** (`dns.tf`) creates the parent zone `dns_zone_name` in
-  `rg-bbm-shared-ncus`, the child zones above, and NS delegation records for
+  `rg-bbm-shared-ncus` (home region), the child zones above, and NS delegation records for
   them in the parent. Outputs: `dns_zone_name`, `dns_name_servers` (to set at
   the domain's DNS host), `dns_child_zones` (env => zones).
 - **Data** (`dns.tf`) reads `dns_zone_name` from global state, looks up its
@@ -203,7 +220,7 @@ instead of registering it. You can also import it by hand:
   also needs the `Azure/azapi` provider (same OIDC / CLI auth as azurerm). The
   Gateway itself (static PIP binding, TLS) is in `deploy/helm/bbm-platform`.
   Check after an apply:
-  `az aks show -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus --query ingressProfile`
+  `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr> --query ingressProfile`
   and `kubectl get gatewayclass approuting-istio`.
 
 `helm_values` (compute output, `values-infra.yaml`):
@@ -215,7 +232,7 @@ azure: {} # tenantId, keyVaultName, *ClientId, storage*, queueName (unchanged)
 ingress:
   host: <env>.<zone> # test: test.<zone>
   publicIpName: pip-bbm-<env>-ingress
-  publicIpResourceGroup: rg-bbm-<env>-data-ncus
+  publicIpResourceGroup: rg-bbm-<env>-data-<abbr> # the env's region code
 networkPolicy:
   postgresCidr: <snet-psql CIDR>
 dns:
@@ -224,7 +241,7 @@ dns:
   internalZone: <env>.internal.<zone>
 platform:
   subscriptionId: <subscription>
-  dnsResourceGroup: rg-bbm-<env>-data-ncus
+  dnsResourceGroup: rg-bbm-<env>-data-<abbr>
   certManagerClientId: <client id> # id-bbm-<env>-certmgr
 ```
 
@@ -250,6 +267,12 @@ and modules are picked up automatically). Run the same thing locally:
 ```sh
 infra/terraform/scripts/ci-static.sh     # needs terraform, tflint, shellcheck
 ```
+
+It initialises each dir with a throwaway `TF_DATA_DIR`, so it never reads or
+locks the real state even when a stack's `.terraform/` was initialised against
+the azurerm backend. The step-by-step commands below do not: in such a dir,
+`init -backend=false` reads the configured remote state; set `TF_DATA_DIR` to an
+empty dir first.
 
 Or step by step:
 

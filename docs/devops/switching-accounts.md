@@ -58,11 +58,13 @@ that don't exist there.
 | `envs/**/backend*.hcl`         | `resource_group_name`, `storage_account_name` (`stbbmtfstate0000`)                                                                    |
 
 Kept, because they survive an account switch: `dns_zone_name`, `alert_emails`,
-`github_reviewer_ids`, `github_repo` and the region (`location` / `location_abbr`, a user choice
-rather than a per-tenant value). If the new subscription needs another region (for example its
-"allowed locations" policy excludes the current one), pass `--location <region>` to `up.sh` in
-step 3; it rewrites the region everywhere and fails early, listing the allowed regions, when the
-choice is not permitted.
+`github_reviewer_ids`, `github_repo`, and the regions: the home region (`location` /
+`location_abbr` in `envs/global/*.tfvars`) and each env's region (`envs/<env>/*.tfvars`, mirrored
+in `env_locations`). Regions are a user choice, not a per-tenant value. To change them, pass
+`--location <region>` (home region: tfstate and the shared layer) and `--env-location
+<env>=<region>` (or `all=<region>`) to `up.sh` in step 4. It rewrites every tfvars and backend
+file and fails early, listing the allowed regions, when the subscription's policy forbids a
+choice.
 
 If you skipped step 1 (the old account is gone), `up.sh` notices: when `bootstrap.tfvars` holds a
 non-placeholder `subscription_id` that differs from `--subscription`, it warns and offers to do the
@@ -75,18 +77,62 @@ If you committed the uncommented `backend "azurerm" {}` block in
 `stacks/bootstrap/versions.tf`, leave it: `up.sh` writes a local-backend override for the first
 apply on the new subscription.
 
-## 3. Bring up the new subscription
+## 3. Undo the quota workarounds (account with more vCPUs)
+
+The current settings fit **Azure for Students** ([ADR 0002 §8](../adr/0002-aks-everywhere-and-azure-dns.md)):
+6 vCPUs per region and only five allowed regions. Of those regions, only northcentralus and
+denmarkeast offer an x86 4 vCPU B-series size, and canadacentral offers ARM only. So each env sits
+in its own region on one pinned node, with upgrades and KEDA off. These are config, not code. On a
+subscription with normal quota, check it first, then set the standard sizing:
+
+```sh
+az vm list-usage -l <region> -o table        # "Total Regional vCPUs" and "Standard BASv2 Family vCPUs"
+az vm list-skus -l <region> --size Standard_B4as_v2 -o table   # must be listed with no restrictions
+```
+
+Everything fits in one region once that region has about 16+ vCPUs: three clusters at 1 to 3
+nodes, prod's apps pool, and one surge node per upgrade.
+
+| Setting (file)                                                     | Student-quota value (now)                                  | Standard value                                    |
+| ------------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------- |
+| Env regions (`up.sh --env-location`)                               | test canadacentral, staging denmarkeast, prod northcentralus | one region for all: `--env-location all=<region>` |
+| `system_vm_size` (`envs/<env>/compute.tfvars`)                     | `Standard_B4as_v2`; test `Standard_B4ps_v2` (arm64)        | `Standard_B4as_v2` everywhere (x86)               |
+| `system_min_count` / `system_max_count`                            | `1` / `1`                                                  | `1` / `3`                                         |
+| prod `system_only_critical_addons`, `apps_pool_enabled`            | `false`, `false`                                           | `true`, `true` (apps `1`–`3` nodes)               |
+| prod `global.nodeSelector` (`deploy/helm/bbm/values-prod.yaml`)    | `{}`                                                       | `{ bbm.io/pool: apps }`                           |
+| `automatic_upgrade_channel` / `node_os_upgrade_channel`            | `"none"` / `"None"`                                        | `"patch"` / `"NodeImage"`                         |
+| `keda_enabled`                                                     | `false`                                                    | `true` once the analysis worker runs              |
+
+Notes:
+
+- The arm64 image builds in `.github/workflows/_build-push.yml` (api and web) can stay. They cost
+  some CI time and are harmless on x86 clusters. Remove `linux/arm64` there if no env runs on
+  arm64.
+- With upgrades back on, the next compute apply re-enables the weekly maintenance windows (Sunday
+  06:00–10:00 UTC).
+- `up.sh` checks every env's node size, quota and region policy before applying anything, so a
+  wrong value fails at its `[4] Node SKUs, vCPU quota` step, before any resource is created.
+
+> **Planned: sizing profiles.** To turn this table into one flag, `up.sh` could take
+> `--profile student` or `--profile standard` and write these values itself, so nobody edits
+> tfvars by hand when switching accounts. Not built yet; to be added after the current Azure for
+> Students bring-up is finished.
+
+## 4. Bring up the new subscription
 
 ```sh
 az login --use-device-code                    # the new account (add --tenant <id> if needed)
 export CLOUDFLARE_API_TOKEN=...               # optional, token for the new parent domain
-infra/up.sh --subscription <new-guid> --zone <new-zone>      # add --prod for prod, --location <region> to move
+infra/up.sh --subscription <new-guid> --zone <new-zone> --prod \
+  --location <region> --env-location all=<region>     # e.g. eastus2 for everything
 ```
 
 To keep the same domain, pass the same `--zone`. The new parent zone gets new Azure name servers,
-so the NS records must change either way.
+so the NS records must change either way. Expect about an hour. Most of it is Azure creating the
+AKS clusters and the two PostgreSQL servers. Every step is idempotent, so after a failure fix the
+cause and run the same command again.
 
-## 4. Re-point the NS records
+## 5. Re-point the NS records
 
 With `CLOUDFLARE_API_TOKEN` set, `up.sh` replaces the NS records itself. Otherwise update the four
 NS records for `<zone>` at the parent domain's DNS host to the values `up.sh` printed (see
@@ -96,7 +142,7 @@ Delete any NS records that still point at the old name servers.
 The old records may stay cached for up to their TTL. cert-manager retries until the new delegation
 resolves.
 
-## 5. Commit and finish
+## 6. Commit and finish
 
 1. Commit the tfvars and backend files `up.sh` rewrote ([azure-bootstrap.md section 9](azure-bootstrap.md#9-commit-what-upsh-rewrote)).
 2. Set the real secrets again: `llm-api-key` per env, the Sepolia secrets in the shared vault

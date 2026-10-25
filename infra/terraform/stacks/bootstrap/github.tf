@@ -7,15 +7,27 @@ locals {
   # `test` (CI runs, janitor sweep) pushes the sha-* images staging/prod
   # deploy, so it is main-only; `preview` runs for every same-repo PR branch
   # with its own identity that can only push bbm-preview/*.
+  # region_env: whose region the Environment-level AZURE_LOCATION /
+  # AZURE_LOCATION_ABBR variables carry (they override the repo-level
+  # home-region values in jobs bound to that Environment); null = none, the
+  # job sees the home region (shared resources only).
   github_environments = {
-    "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = true }
-    "preview"           = { identity = "gh-bbm-preview", reviewers = false, main_only = false }
-    "test-infra"        = { identity = "gh-bbm-test", reviewers = false, main_only = true }
-    "infra-global"      = { identity = "gh-bbm-global", reviewers = true, main_only = true }
-    "contracts-sepolia" = { identity = "gh-bbm-global", reviewers = true, main_only = false }
-    "staging"           = { identity = "gh-bbm-staging", reviewers = false, main_only = true }
-    "prod"              = { identity = "gh-bbm-prod", reviewers = true, main_only = true }
-    "prod-power"        = { identity = "gh-bbm-prod-power", reviewers = false, main_only = true }
+    "test"              = { identity = "gh-bbm-ephemeral", reviewers = false, main_only = true, region_env = "test" }
+    "preview"           = { identity = "gh-bbm-preview", reviewers = false, main_only = false, region_env = "test" }
+    "test-infra"        = { identity = "gh-bbm-test", reviewers = false, main_only = true, region_env = "test" }
+    "infra-global"      = { identity = "gh-bbm-global", reviewers = true, main_only = true, region_env = null }
+    "contracts-sepolia" = { identity = "gh-bbm-global", reviewers = true, main_only = false, region_env = null }
+    "staging"           = { identity = "gh-bbm-staging", reviewers = false, main_only = true, region_env = "staging" }
+    "prod"              = { identity = "gh-bbm-prod", reviewers = true, main_only = true, region_env = "prod" }
+    "prod-power"        = { identity = "gh-bbm-prod-power", reviewers = false, main_only = true, region_env = "prod" }
+  }
+
+  # Environment-level region variables, per GitHub Environment.
+  env_region_variables = {
+    for env, cfg in local.github_environments : env => cfg.region_env == null ? {} : {
+      AZURE_LOCATION      = module.naming_env[cfg.region_env].location
+      AZURE_LOCATION_ABBR = module.naming_env[cfg.region_env].location_abbr
+    }
   }
 
   repo_variables = {
@@ -25,8 +37,9 @@ locals {
     TFSTATE_RG            = azurerm_resource_group.tfstate.name
     TFSTATE_ACCOUNT       = azurerm_storage_account.tfstate.name
     ACR_NAME              = module.naming.global.acr
-    # Region of every resource name the workflows build (RGs, clusters);
-    # their gate jobs skip while these are unset (ADR 0002).
+    # Home region (shared RG, tfstate). Env-scoped names use the
+    # Environment-level overrides below (env_region_variables); gate jobs skip
+    # while these are unset (ADR 0002).
     AZURE_LOCATION      = var.location
     AZURE_LOCATION_ABBR = module.naming.location_abbr
   }
@@ -88,6 +101,10 @@ locals {
       ] : [],
       [
         "gh variable set AZURE_CLIENT_ID --repo ${var.github_repo} --env ${env} --body '${module.github_oidc.client_ids[local.github_environments[env].identity]}'",
+      ],
+      [
+        for k in sort(keys(local.env_region_variables[env])) :
+        "gh variable set ${k} --repo ${var.github_repo} --env ${env} --body '${local.env_region_variables[env][k]}'"
       ],
     )
   ])

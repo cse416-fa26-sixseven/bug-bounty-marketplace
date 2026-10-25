@@ -32,7 +32,7 @@
 #
 # Environment (optional):
 #   BBM_REGION_ABBR, BBM_LOCATION  region abbreviation and name (default: location_abbr /
-#                                  location in envs/global/bootstrap.tfvars)
+#                                  location in envs/<env>/data.tfvars)
 #   ENV_POWER_TIMEOUT (seconds per wait, 1800)  ENV_POWER_POLL (seconds, 20)
 #   GITHUB_STEP_SUMMARY / GITHUB_OUTPUT: when set (GitHub Actions), a markdown
 #   summary and key=value outputs are appended.
@@ -81,17 +81,14 @@ esac
 
 command -v az >/dev/null 2>&1 || die "az CLI not found on PATH"
 
-# Region: BBM_LOCATION / BBM_REGION_ABBR (CI: repo vars AZURE_LOCATION /
-# AZURE_LOCATION_ABBR), else location / location_abbr in
-# envs/global/bootstrap.tfvars, the single source of truth infra/up.sh writes.
-boot_tfvars="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/envs/global/bootstrap.tfvars"
-boot_var() { # boot_var <key> → string value from bootstrap.tfvars (empty if absent)
-  [[ -f "$boot_tfvars" ]] || return 0
-  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$boot_tfvars" | head -n1
-}
-abbr=${BBM_REGION_ABBR:-$(boot_var location_abbr)}
-location=${BBM_LOCATION:-$(boot_var location)}
-[[ -n "$abbr" && -n "$location" ]] || die "region unknown: set BBM_LOCATION and BBM_REGION_ABBR (or location/location_abbr in $boot_tfvars)"
+# Region: BBM_LOCATION / BBM_REGION_ABBR when set (CI jobs bound to the env's
+# GitHub Environment: its AZURE_LOCATION / AZURE_LOCATION_ABBR), else the env's
+# own tfvars (envs/<env>/data.tfvars via env-region.sh): each env has its own
+# region (ADR 0002 section 8).
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+abbr=${BBM_REGION_ABBR:-$("$here/env-region.sh" "$env" --get abbr)} || die "region of $env unknown"
+location=${BBM_LOCATION:-$("$here/env-region.sh" "$env" --get location)} || die "region of $env unknown"
+[[ -n "$abbr" && -n "$location" ]] || die "region unknown: set BBM_LOCATION and BBM_REGION_ABBR (or location/location_abbr in envs/$env/data.tfvars)"
 timeout=${ENV_POWER_TIMEOUT:-1800}
 poll=${ENV_POWER_POLL:-20}
 
@@ -127,13 +124,13 @@ output() {
 # `list` (not `show`) so "not found" is an empty result, never a parsed error.
 aks_state() {
   az aks list -g "$compute_rg" \
-    --query "[?name=='$cluster'] | [0].[powerState.code, provisioningState]" -o tsv | tr '\t' ' '
+    --query "[?name=='$cluster'] | [0].join(' ', [powerState.code, provisioningState])" -o tsv
 }
 
 aks_pools() {
   az aks list -g "$compute_rg" \
-    --query "[?name=='$cluster'] | [0].agentPoolProfiles[].[name, to_string(count), powerState.code]" \
-    -o tsv | awk -F'\t' '{ printf "%s%s=%s(%s)", (NR > 1 ? ", " : ""), $1, $2, $3 }'
+    --query "[?name=='$cluster'] | [0].agentPoolProfiles[].join(' ', [name, to_string(count), powerState.code])" \
+    -o tsv | awk '{ printf "%s%s=%s(%s)", (NR > 1 ? ", " : ""), $1, $2, $3 }'
 }
 
 # Ready | Stopped | Starting | Stopping | Updating | ..., or empty when missing.

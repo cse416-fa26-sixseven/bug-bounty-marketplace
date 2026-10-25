@@ -76,3 +76,18 @@ output "container_insights_enabled" {
   description = "Whether the Container Insights add-on and its data collection rule are configured."
   value       = length(azurerm_kubernetes_cluster.this.oms_agent) > 0 && length(azurerm_monitor_data_collection_rule_association.container_insights) > 0
 }
+
+output "keda_enabled" {
+  description = "Whether the KEDA add-on is enabled."
+  value       = try(azurerm_kubernetes_cluster.this.workload_autoscaler_profile[0].keda_enabled, false)
+}
+
+output "upgrades" {
+  description = "Upgrade posture: the planned upgrade channels (automatic_upgrade_channel is null when off) and how many maintenance-window blocks are configured."
+  value = {
+    automatic_upgrade_channel       = azurerm_kubernetes_cluster.this.automatic_upgrade_channel
+    node_os_upgrade_channel         = azurerm_kubernetes_cluster.this.node_os_upgrade_channel
+    maintenance_window_auto_upgrade = length(azurerm_kubernetes_cluster.this.maintenance_window_auto_upgrade)
+    maintenance_window_node_os      = length(azurerm_kubernetes_cluster.this.maintenance_window_node_os)
+  }
+}

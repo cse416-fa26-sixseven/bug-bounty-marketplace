@@ -1,28 +1,31 @@
 # Cost estimates
 
-> **A typical month is ~$60–70, over the $50 subscription budget alert.** With staging and prod
-> down and the test env running on working days for CI, the estimate below is about $60–70, so
-> expect the 100% alert most months. The budgets stay as they are (they only notify). To get under
-> $50:
+> **A typical month is ~$85–95, well over the $50 subscription budget alert.** Each cluster now
+> runs one 4 vCPU / 16 GiB node (ADR 0002 §8: `Standard_B4ps_v2` arm64 in test, `Standard_B4as_v2`
+> in staging and prod), about 4× the old B2als_v2 per hour. With staging and prod down and the test env running ~10 hours on working days for CI, the
+> estimate below is about $85–95, so expect the 100% alert every month. The budgets stay as they
+> are (they only notify). The levers that matter:
 >
 > - **Shorter auto-pause window for test.** The nightly 06:00 UTC auto-pause leaves the test
->   cluster running from the first CI run of the day until the next morning. Pausing test a few
->   hours after the last run (an extra `env-power.yml` schedule for test only) cuts most of its
->   ~$35–40 running share.
+>   cluster running from the first CI run of the day until the next morning, ~$0.16 per hour.
+>   Pausing test a few hours after the last run (an extra `env-power.yml` schedule for test only)
+>   cuts most of its running share.
 > - **`env-power test down` when idle.** With no open PRs for a while, `down` (~$4/month) instead of
->   `paused` (~$25–28/month). CI fails until `env-power test up`.
-> - **Prod off unless demoing.** Prod running all month is ~$200; keep it `down` (or at least
+>   `paused` (~$26/month). CI fails until `env-power test up`.
+> - **Prod off unless demoing.** Prod running all month is ~$250–280; keep it `down` (or at least
 >   `paused`) outside demos.
 
-> **Azure for Students: ~$100 of credit in total, not per month.** At ~$60–70/month the credit
-> lasts about 6–8 weeks; with prod running all month it is gone in under 3 weeks. When the credit
-> runs out, Azure disables the subscription's resources until it is upgraded to pay-as-you-go.
-> Check the remaining credit at https://www.microsoftazuresponsorships.com/balance. The levers
-> above matter more here than the $50 alert: keep prod `down` outside demos and pause test when
-> CI is idle.
+> **Azure for Students: ~$100 of credit in total, not per month.** See
+> [What the $100 credit buys](#what-the-100-credit-buys): with the nightly pause and prod down it
+> lasts about **4–5 weeks**; with staging also running on weekday afternoons about 3 weeks; with
+> prod running all month about 10 days. When the credit runs out, Azure disables the
+> subscription's resources until it is upgraded to pay-as-you-go. Check the remaining credit at
+> https://www.microsoftazuresponsorships.com/balance.
 
-> **Rough estimates only.** Figures are approximate `eastus2` pay-as-you-go list prices in USD
-> (730 hours per month), rounded, before taxes, credits or free grants unless stated. Check them
+> **Rough estimates only.** Figures are approximate pay-as-you-go list prices in USD (730 hours per
+> month), rounded, before taxes, credits or free grants unless stated. Node prices are per region
+> (each env has its own, ADR 0002 §8); the other items differ little between `canadacentral`,
+> `denmarkeast` and `northcentralus` and use one approximate figure. Check them
 > against the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the
 > subscription's Cost Management view before relying on them. Prices change.
 
@@ -32,9 +35,22 @@ prod) can be paused or torn down without losing data. See [architecture.md](arch
 
 ## Unit prices used
 
+<!-- B4as_v2 prices: Azure Retail Prices API (prices.azure.com, armSkuName Standard_B4as_v2,
+     "Virtual Machines Basv2 Series", Consumption), October 2026. -->
+
+> **Node figures predate the final region layout; verify current pricing.** They were taken for
+> B4as_v2 in test `northcentralus`, staging `francecentral` and prod `canadacentral`. The deployed
+> layout is test `canadacentral` on `Standard_B4ps_v2` (arm64, Bpsv2), staging `denmarkeast` and
+> prod `northcentralus` on `Standard_B4as_v2`. Prod's node is now the northcentralus price below
+> ($0.150/h); the test (B4ps_v2 in canadacentral) and staging (B4as_v2 in denmarkeast) prices were
+> not re-measured, so the per-env figures in this file keep the old numbers. Check them with the
+> [Azure Retail Prices API](https://prices.azure.com/api/retail/prices) or the pricing calculator.
+
 | Item                                    | Approx. price                                                                         | Where it's used                                             |
 | --------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| VM `Standard_B2als_v2` (2 vCPU, 4 GiB)  | ~$0.038/h, ~$27/month                                                                 | every AKS node                                              |
+| VM `Standard_B4as_v2` (4 vCPU, 16 GiB), Linux | `northcentralus` $0.150/h (~$110/month, prod); measured before the move: `francecentral` $0.170/h (~$124/month), `canadacentral` $0.167/h (~$122/month); `denmarkeast` (staging): verify | the node of staging and prod |
+| VM `Standard_B4ps_v2` (4 vCPU, 16 GiB, arm64), Linux | `canadacentral` (test): verify current pricing; the test figures below use the old B4as_v2 ~$0.150/h | the node of the test cluster |
+| VM `Standard_B2als_v2` (2 vCPU, 4 GiB)  | ~$0.038/h, ~$27/month                                                                 | optional `apps` pool (off)                                  |
 | Managed OS disk, 64 GB Premium SSD (P6) | ~$10/month per node                                                                   | AKS node OS disks (exist only while nodes exist)            |
 | Standard Load Balancer                  | ~$0.025/h for the first 5 rules, ~$18/month                                           | AKS: Gateway `bbm` (rules for 80, 443 and 15021) + outbound |
 | Standard static public IP               | ~$0.005/h, ~$3.65/month each                                                          | `pip-bbm-<env>-ingress` (data RG), AKS outbound IP          |
@@ -71,27 +87,33 @@ state and is included in the next table.
 
 ## Environments by power state
 
-Per environment, per month if left in that state the whole month. Test runs everything on one
-system pool (1–3 nodes, no Postgres server: each namespace runs its own Postgres pod). Staging runs
-everything on one system node (no `apps` pool, Container Insights off). Prod runs at least one
-system node and one `apps` node, with Container Insights on, on the AKS Standard tier.
+Per environment, per month if left in that state the whole month. Every cluster runs everything on
+one 4 vCPU system node in its own region (min = max = 1: test `canadacentral` on
+`Standard_B4ps_v2` (arm64), staging `denmarkeast` and prod `northcentralus` on `Standard_B4as_v2`).
+The figures keep the pre-move node prices (see the note above); verify current pricing. Test has no Postgres server (each namespace runs its own
+Postgres pod). Staging and prod have Postgres B1ms; prod adds Container Insights and the AKS
+Standard tier. No `apps` pool anywhere.
 
-| State       | What is billed                                                                                                      | Test                             | Staging              | Prod                                                             |
-| ----------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------------------- | ---------------------------------------------------------------- |
-| **running** | nodes + OS disks, LB, 2 public IPs, PG compute + storage (not test), Log Analytics, KV, storage, prod control plane | ~$60–70 (~$2.10/day) with 1 node | ~$75–85 (~$2.60/day) | ~$195–225 (~$6.50–7.50/day), more when the autoscaler adds nodes |
-| **paused**  | LB, 2 public IPs, PG storage, KV, storage, idle Log Analytics. Nodes and PG compute stop                            | ~$25–28 (~$0.85/day)             | ~$25–30 (~$0.90/day) | ~$25–30 (~$0.90/day), see the Standard-tier note                 |
-| **down**    | ingress public IP, PG storage, KV, storage. Compute stack (cluster, nodes, LB, outbound IP) destroyed               | ~$4 (~$0.13/day)                 | ~$7–9 (~$0.25/day)   | ~$7–9 (~$0.25/day)                                               |
+| State       | What is billed                                                                                                      | Test (cac)                        | Staging (dke)          | Prod (ncus)                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ---------------------- | ---------------------------------- |
+| **running** | node + OS disk, LB, 2 public IPs, PG compute + storage (not test), Log Analytics, KV, storage, prod control plane | ~$145–150 (~$4.90/day, ~$0.20/h) | ~$175–185 (~$6/day)   | ~$250–280 (~$8.50–9/day)           |
+| **paused**  | LB, 2 public IPs, PG storage, KV, storage, idle Log Analytics. Node and PG compute stop                              | ~$25–28 (~$0.85/day)             | ~$28–32 (~$1/day)     | ~$28–32 (~$1/day), see the Standard-tier note |
+| **down**    | ingress public IP, PG storage, KV, storage. Compute stack (cluster, node, LB, outbound IP) destroyed                | ~$4 (~$0.13/day)                 | ~$7–9 (~$0.25/day)    | ~$7–9 (~$0.25/day)                 |
+
+Going from paused to running adds, per running hour: test ~$0.16 (node $0.150 + OS disk), staging
+~$0.20 (node $0.170 + disk + PG compute $0.017), prod ~$0.30 (node $0.167 + disk + PG + Standard
+tier $0.10, plus Container Insights ingestion).
 
 Every cluster also runs at least 2 Envoy replicas for Gateway `bbm` (the app routing add-on's
 floor; HPA up to 3 on test/staging, 5 on prod). They are small pods on the existing nodes, so they
-add no node cost unless the autoscaler needs another node.
+add no node cost: the node pool is pinned to one node (no autoscaling while the student quota is
+6 vCPUs per region).
 
-How the running figures break down (staging): node ~$27, OS disk ~$10, LB ~$18, two public IPs
+How the running figures break down (staging): node ~$124, OS disk ~$10, LB ~$18, two public IPs
 ~$7, PG B1ms ~$12.50, PG storage ~$3.70, logs and the rest ~$0–5. Test is the same without
-Postgres; each extra node while several CI runs or previews are open adds ~$37/month pro rata.
-Prod adds a second node and disk (~$37), Container Insights and the Standard-tier control plane
-(~$73 if it runs all month). Its workspace is capped at 0.5 GB/day, so ingestion is at most
-~15 GB/month (~$35) and usually far less.
+Postgres and with a node estimated at ~$110 (B4ps_v2 in canadacentral: verify). Prod adds
+Container Insights and the Standard-tier control plane (~$73 if it runs all month). Its workspace is capped at 0.5 GB/day, so
+ingestion is at most ~15 GB/month (~$35) and usually far less.
 
 Notes:
 
@@ -119,8 +141,8 @@ is the test cluster's running time (above), plus extra nodes when the autoscaler
 
 | Case                                    | Approx. cost                                                                              |
 | --------------------------------------- | ----------------------------------------------------------------------------------------- |
-| One CI run or preview on a running node | nothing extra while it fits on the existing node(s)                                       |
-| Several open previews at once           | the system pool scales up to 3 nodes: each extra node ~$0.05/h (~$1.20/day) with its disk |
+| One CI run or preview on a running node | nothing extra while it fits on the node                                                   |
+| Several open previews at once           | nothing extra: the pool is pinned to one node, so too many at once stay Pending           |
 | First run after the nightly pause       | resumes the test cluster, which then bills as `running` until the next pause              |
 | Image builds pushed to ACR              | storage within the 10 GB included; the weekly janitor purges old `pr-*` / `sha-*` tags (incl. `bbm-preview/*`) |
 | TLS                                     | one wildcard certificate per env zone, so previews never request their own                |
@@ -134,13 +156,13 @@ preview only holds pod resources on the test cluster.
 | Budget                             | Amount         | Scope                                                              | Notifications                        |
 | ---------------------------------- | -------------- | ------------------------------------------------------------------ | ------------------------------------ |
 | `budget-bbm-subscription`          | $50/month      | the whole subscription (`stacks/bootstrap`)                        | 50%, 80%, 100% actual; 100% forecast |
-| `budget-rg-bbm-<env>-<layer>-eus2` | $20/month each | `rg-bbm-{test,staging,prod}-{data,compute}-eus2` (`stacks/global`) | same thresholds                      |
+| `budget-rg-bbm-<env>-<layer>-<abbr>` | $20/month each | `rg-bbm-test-{data,compute}-cac`, `rg-bbm-staging-{data,compute}-dke`, `rg-bbm-prod-{data,compute}-ncus` (`stacks/global`) | same thresholds |
 
 Alerts go to `alert_emails` in `envs/global/*.tfvars`. Budgets only notify; they never stop
 anything.
 
 **Gap:** AKS bills nodes, OS disks, the load balancer and the outbound IP in the **node** resource
-group `rg-bbm-<env>-aksnodes-eus2`, which has no per-RG budget. The `compute` RG holds only the
+group `rg-bbm-<env>-aksnodes-<abbr>`, which has no per-RG budget. The `compute` RG holds only the
 cluster object, so its $20 budget sees little (prod's Standard-tier fee is billed on the cluster,
 so the prod compute budget does see that). Running cost is caught mainly by the subscription
 budget today. A filtered subscription budget (by `env` tag or by node RG) would close this.
@@ -154,8 +176,9 @@ budget today. A filtered subscription budget (by `env` tag or by node RG) would 
 | **Daily PG re-pause** (06:30 UTC)      | undoes Azure's 7-day auto-start of a stopped server                                                     | `env-power.yml` schedule                                      |
 | **Log Analytics daily caps**           | worst-case ingestion bounded: shared 0.25 GB/day, each env 0.5 GB/day                                   | `law_daily_quota_gb` in tfvars                                |
 | **Container Insights off in staging**  | avoids most per-node log ingestion                                                                      | `container_insights = false` in `envs/staging/compute.tfvars` |
-| **No `apps` pool in staging**          | one node instead of two                                                                                 | `apps_pool_enabled = false`                                   |
-| **Sandbox pool off**                   | no Dsv5 node (a D2s_v5 is roughly 2.5× a B2als_v2 per hour) until PoC execution is needed               | `sandbox_pool_enabled = false`                                |
+| **One node per cluster, no `apps` pool** | one 4 vCPU node per env (B4ps_v2 in test, B4as_v2 elsewhere; 4 of the 6 vCPUs of its region)        | `system_min_count = system_max_count = 1`, `apps_pool_enabled = false` |
+| **KEDA add-on off**                    | ~0.4 CPU of requests freed on the one node while analysis is disabled                                   | `keda_enabled = false` in `envs/<env>/compute.tfvars`         |
+| **Sandbox pool off**                   | no Dsv5 node until PoC execution is needed (DSv5 quota is 0 on Azure for Students)                      | `sandbox_pool_enabled = false`                                |
 | **Burstable SKUs**                     | B-series nodes and PG B1ms are the cheapest that run the stack                                          | `*_vm_size`, `postgres_sku_name`                              |
 | **Namespaces always deleted**          | `integration-azure.yml` deletes its namespace with `always()`, `preview.yml` on PR close                | workflows                                                     |
 | **Janitor** (every 6 h, weekly purge)  | deletes expired ephemeral namespaces; purges old ACR tags (keeps the 10 newest, protects deployed tags) | `infra-janitor.yml`                                           |
@@ -164,11 +187,28 @@ budget today. A filtered subscription budget (by `env` tag or by node RG) would 
 
 ## Typical month
 
-Staging and prod down, a handful of PRs and the nightly test runs: about **$60–70** (global layer
-~$9–14, staging and prod data layers ~$15, the test env running ~10 hours on working days and
-paused otherwise ~$35–40). That is already over the $50 subscription alert.
+Staging and prod down, a handful of PRs and the nightly test runs: about **$85–95** (global layer
+~$9–14, staging and prod data layers ~$15, the test env paused ~$26 plus ~220 running hours at
+~$0.16 ≈ $36). That is already well over the $50 subscription alert.
 
-Add staging running 8 hours a day on weekdays, paused the rest of the time: about **$90–105**. Prod running around the clock alone (~$200) is four times the budget,
-so keep prod paused or down except for demos. To cut the test env's share, run `env-power test
-pause` after a CI-heavy day, or `down` it when no PRs are open for a while (CI then fails until
-`env-power test up`).
+Add staging running 8 hours a day on weekdays, paused the rest of the time: about **$125–135**
+(~176 running hours at ~$0.20 ≈ $35, and paused instead of down ≈ +$22). Prod running around the
+clock alone (~$250–280) is five times the budget, so keep prod paused or down except for demos. To
+cut the test env's share, run `env-power test pause` after a CI-heavy day, or `down` it when no PRs
+are open for a while (CI then fails until `env-power test up`).
+
+## What the $100 credit buys
+
+Azure for Students grants ~$100 once. With the nightly auto-pause on and prod `down`:
+
+| Scenario (per month)                                                                  | Approx. cost | $100 lasts    |
+| ------------------------------------------------------------------------------------- | ------------ | ------------- |
+| test only, running ~10 h on working days (paused otherwise); staging and prod `down`  | ~$85–95      | ~4.5–5 weeks  |
+| same, but test runs until the 06:00 UTC pause (~18 h on working days, ~400 h)         | ~$115–120    | ~3.5–4 weeks  |
+| test as in row 1 + staging running 8 h on weekdays (paused otherwise)                 | ~$125–135    | ~3–3.5 weeks  |
+| everything `down` (no CI), global + data layers only                                  | ~$27–36      | ~3 months     |
+| prod running all month (plus the row 1 baseline)                                      | ~$335–370    | ~8–9 days     |
+
+Each running cluster-hour costs ~$0.16 (test), ~$0.20 (staging) or ~$0.30 (prod) on top of its
+paused cost, so the credit is about 500–600 test cluster-hours if nothing else ran. Plan demos
+around `env-power <env> up` / `down` and keep test `down` during breaks.

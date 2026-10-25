@@ -53,11 +53,11 @@ on:
 permissions:
   contents: read
 
-# Region of the resource names (janitor.sh, deployed-tag reads); set by the
-# bootstrap gh_setup_commands. The gate skips every job while they are unset.
-env:
-  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
-  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+# Regions: each env has its own (ADR 0002 section 8) and the repo variables
+# AZURE_LOCATION / AZURE_LOCATION_ABBR hold the home region, so env-scoped
+# names come from the checkout (envs/<env>/data.tfvars via env-region.sh;
+# janitor.sh does the same for test). The gate skips every job while the repo
+# variables are unset.
 
 jobs:
   # ---------------------------------------------------------------------
@@ -121,6 +121,10 @@ jobs:
     outputs:
       tags: ${{ steps.read.outputs.tags }}
     steps:
+      # Not bound to an Environment: the staging/prod regions come from their tfvars.
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Azure login (OIDC, plan identity)
         uses: azure/login@v2
         with:
@@ -134,7 +138,7 @@ jobs:
           set -euo pipefail
           tags=()
           for env in staging prod; do
-            rg="rg-bbm-${env}-data-${BBM_REGION_ABBR}"
+            rg="rg-bbm-${env}-data-$(infra/terraform/scripts/env-region.sh "$env" --get abbr)"
             if [[ "$(az group exists --name "$rg" --only-show-errors)" != "true" ]]; then
               echo "$rg: not found"
               continue

@@ -18,6 +18,8 @@ one-command bring-up), which supersedes parts of 0001.
 - [Environment lifecycle](env-lifecycle.md): the power state machine for test, staging and prod
   (`pause`, `resume`, `down`, `up`), the test cluster's CI and preview namespaces, the janitor,
   approvals, schedules and a demo-day checklist.
+- [Continuous deployment](cd.md): green `main` builds deploy to staging automatically, then to prod
+  after a reviewer approves; paused/down envs, concurrency, rollback and pausing CD.
 - [Cost](cost.md): estimated monthly cost per environment and power state.
 
 ## Related
@@ -32,4 +34,4 @@ one-command bring-up), which supersedes parts of 0001.
 - [tests/README.md](../../tests/README.md): which test tiers run in which workflow and environment.
 - Workflows in [`.github/workflows/`](../../.github/workflows/): `ci.yml` (Azure-free, `CI OK`
   gate), `_build-push.yml`, `_ephemeral-env.yml`, `integration-azure.yml`, `preview.yml`,
-  `terraform.yml`, `deploy.yml`, `env-power.yml`, `contracts-deploy.yml`, `infra-janitor.yml`.
+  `terraform.yml`, `deploy.yml`, `cd.yml`, `env-power.yml`, `contracts-deploy.yml`, `infra-janitor.yml`.

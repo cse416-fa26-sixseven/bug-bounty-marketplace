@@ -4,10 +4,20 @@ name: Deploy (AKS)
 # after making sure the cluster platform (cert-manager + bbm-platform, via the
 # idempotent deploy/platform/install.sh) is installed.
 #
-#   - Called by other workflows (workflow_call), e.g. env-power.yml `up`, or
-#     dispatched by hand.
-#   - Skips cleanly (green, with a step summary) when the env is paused or down:
-#     run env-power.yml `resume` / `up` first.
+#   - Called by other workflows (workflow_call): env-power.yml `up` (redeploy)
+#     and cd.yml (continuous deployment, docs/devops/cd.md). Dispatched by hand
+#     for manual deploys and rollbacks (image_tag = an older sha-<7>).
+#   - Paused or down env: by default the deploy skips cleanly (green, with a
+#     step summary): run env-power.yml `resume` / `up` first. With
+#     resume_if_paused (cd.yml) a paused env is resumed first (env-power.sh
+#     resume, after any `prod` approval since it runs in this job) and left
+#     running for the nightly auto-pause; a down env fails the run instead.
+#   - `helm upgrade --atomic`: a release whose pods do not become ready is
+#     rolled back by Helm. A later failure (helm test, /health, smoke) leaves
+#     the new release in place and fails the run; roll back by deploying the
+#     previous tag (the summary of the previous run, or `helm history`).
+#   - Environment-level vars (AZURE_CLIENT_ID, AZURE_LOCATION[_ABBR]) resolve
+#     because the job declares `environment:`, also under workflow_call.
 #   - image_tag empty = redeploy the tag recorded on the data RG
 #     (bbm-last-deployed-tag), which is what env-power `up` relies on.
 #   - Concurrency group env-<env> is shared with env-power.yml, so a deploy and a
@@ -30,6 +40,16 @@ on:
         description: Run the smoke suite against the ingress after deploying.
         type: boolean
         default: true
+      resume_if_paused:
+        description: Resume a paused env before deploying (and fail, not skip, when it is down).
+        type: boolean
+        default: false
+      ref:
+        description: >-
+          Commit (40-hex SHA on main) to take the chart, tfvars and scripts from, e.g. the commit
+          the images were built and tested from. Empty = the workflow's own commit.
+        type: string
+        default: ''
     outputs:
       result:
         description: deployed | skipped
@@ -37,6 +57,12 @@ on:
       image_tag:
         description: The tag that was deployed (empty when skipped).
         value: ${{ jobs.deploy.outputs.image_tag }}
+      url:
+        description: The env's https URL (empty when skipped).
+        value: ${{ jobs.deploy.outputs.url }}
+      health:
+        description: Outcome of the /health check through the ingress (success | failure | skipped).
+        value: ${{ jobs.deploy.outputs.health }}
   workflow_dispatch:
     inputs:
       env:
@@ -52,6 +78,10 @@ on:
         description: Run the smoke suite after deploying
         type: boolean
         default: true
+      resume_if_paused:
+        description: Resume the env first if it is paused (fails if it is down)
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -75,6 +105,8 @@ jobs:
     outputs:
       result: ${{ steps.gate.outputs.go == 'true' && 'deployed' || 'skipped' }}
       image_tag: ${{ steps.tag.outputs.tag }}
+      url: ${{ steps.ingress.outputs.url }}
+      health: ${{ steps.ingress.outcome }}
     env:
       ENV_NAME: ${{ inputs.env }}
       ACR_NAME: ${{ vars.ACR_NAME }}
@@ -85,7 +117,11 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      # Names follow modules/naming; region from the bootstrap repo variables.
+      # Names follow modules/naming. The job is bound to the env's GitHub
+      # Environment, whose AZURE_LOCATION / AZURE_LOCATION_ABBR (bootstrap
+      # gh_setup_commands) override the home-region repo variables: each env
+      # has its own region (ADR 0002 section 8). Checked against
+      # envs/<env>/data.tfvars after checkout.
       DATA_RG: rg-bbm-${{ inputs.env }}-data-${{ vars.AZURE_LOCATION_ABBR }}
       COMPUTE_RG: rg-bbm-${{ inputs.env }}-compute-${{ vars.AZURE_LOCATION_ABBR }}
       CLUSTER: aks-bbm-${{ inputs.env }}-${{ vars.AZURE_LOCATION_ABBR }}
@@ -95,11 +131,16 @@ jobs:
       - name: Check inputs and configuration
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           case "$ENV_NAME" in staging | prod) ;; *)
             echo "::error::env must be staging or prod (got '$ENV_NAME')"; exit 1 ;;
           esac
+          if [[ -n "$REF" && ! "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::ref must be a full 40-hex commit SHA (got '$REF')"
+            exit 1
+          fi
           if [[ -z "$CLIENT_ID" ]]; then
             echo "::error::Environment '$ENV_NAME' has no AZURE_CLIENT_ID variable. Run the bootstrap gh_setup_commands."
             exit 1
@@ -109,8 +150,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Empty ref = the workflow's own commit (github.sha).
+          ref: ${{ inputs.ref }}
           # Full history + origin/main for the image provenance check.
           fetch-depth: 0
+
+      # The chart, tfvars and scripts may only come from main.
+      - name: Check the ref is on main
+        if: inputs.ref
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$REF" origin/main; then
+            echo "::error::ref $REF is not on main"
+            exit 1
+          fi
+          echo "chart, tfvars and scripts from $REF"
+
+      # Stale Environment variables (gh_setup_commands not re-run after a
+      # region change) would point every name at the wrong region.
+      - name: Check the env region
+        run: infra/terraform/scripts/env-region.sh "$ENV_NAME" --check
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -125,12 +186,51 @@ jobs:
         id: power
         run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
 
+      # resume_if_paused (cd.yml): the same resume as `env-power <env> resume`
+      # (Postgres start, az aks start, power-state=running; idempotent and safe
+      # next to a concurrent resume). For prod this step runs only after the
+      # `prod` approval, since the whole job is gated. The env stays running
+      # afterwards; the nightly auto-pause pauses it again. A down env (no
+      # cluster, or power-state=down) needs terraform: fail, do not guess.
+      - name: Resume if paused
+        id: resume
+        if: inputs.resume_if_paused
+        env:
+          AKS_POWER: ${{ steps.power.outputs.aks_power }}
+          PG_STATE: ${{ steps.power.outputs.pg_state }}
+          POWER_STATE: ${{ steps.power.outputs.power_state }}
+        run: |
+          set -euo pipefail
+          if [[ "$AKS_POWER" == "NotFound" || "$POWER_STATE" == "down" ]]; then
+            echo "::error::$ENV_NAME is down (cluster ${AKS_POWER}, power-state=${POWER_STATE:-unset}): run env-power $ENV_NAME up (Env power workflow, env=$ENV_NAME, action=up), then re-run this deploy."
+            {
+              echo "### Deploy to \`$ENV_NAME\`: failed, env is down"
+              echo
+              echo "Run **Env power** with \`env=$ENV_NAME\`, \`action=up\` (it redeploys the last deployed tag), then re-run this workflow."
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [[ "$AKS_POWER" == "Running" && "$PG_STATE" == "Ready" && "$POWER_STATE" != "paused" ]]; then
+            echo "$ENV_NAME is running; nothing to resume"
+            exit 0
+          fi
+          echo "::notice::$ENV_NAME is paused (power-state=${POWER_STATE:-unset}, AKS $AKS_POWER, Postgres $PG_STATE): resuming it before the deploy. The nightly auto-pause pauses it again."
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" resume
+          echo "resumed=true" >>"$GITHUB_OUTPUT"
+
+      # Fresh state for the gate after a resume.
+      - name: Environment status (after resume)
+        id: after
+        if: steps.resume.outputs.resumed == 'true'
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+
       - name: Power gate
         id: gate
         env:
-          AKS_POWER: ${{ steps.power.outputs.aks_power }}
-          AKS_PROV: ${{ steps.power.outputs.aks_provisioning }}
-          PG_STATE: ${{ steps.power.outputs.pg_state }}
+          AKS_POWER: ${{ steps.after.outputs.aks_power || steps.power.outputs.aks_power }}
+          AKS_PROV: ${{ steps.after.outputs.aks_provisioning || steps.power.outputs.aks_provisioning }}
+          PG_STATE: ${{ steps.after.outputs.pg_state || steps.power.outputs.pg_state }}
+          RESUME: ${{ inputs.resume_if_paused }}
         run: |
           set -euo pipefail
           if [[ "$AKS_POWER" == "Running" && "$PG_STATE" == "Ready" ]]; then
@@ -141,6 +241,12 @@ jobs:
             why="down (no cluster)"; fix="up"
           else
             why="paused (AKS $AKS_POWER/$AKS_PROV, Postgres $PG_STATE)"; fix="resume"
+          fi
+          # A caller that asked for a resume (cd.yml) must not see a green skip:
+          # it would treat the tag as having passed this env.
+          if [[ "$RESUME" == true ]]; then
+            echo "::error::$ENV_NAME is still $why after the resume step."
+            exit 1
           fi
           echo "go=false" >>"$GITHUB_OUTPUT"
           echo "::notice::Deploy skipped: $ENV_NAME is $why. Run env-power.yml with action=$fix."
@@ -380,6 +486,8 @@ jobs:
             echo
             echo "- URL: $URL"
             echo "- Release: \`helm history bbm -n bbm\` (revision $(helm history bbm -n bbm -o json | jq -r '.[-1].revision'))"
+            echo "- \`/health\` through the ingress: ok"
+            echo "- \`helm test\`: passed"
             echo "- Smoke: $([[ "$SMOKE" == true ]] && echo passed || echo skipped)"
             echo "- \`bbm-last-deployed-tag\` on \`$DATA_RG\` = \`$TAG\`"
           } >>"$GITHUB_STEP_SUMMARY"

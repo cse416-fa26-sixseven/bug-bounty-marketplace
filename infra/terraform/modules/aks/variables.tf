@@ -33,6 +33,34 @@ variable "kubernetes_version" {
   }
 }
 
+variable "automatic_upgrade_channel" {
+  description = "AKS cluster auto-upgrade channel. \"none\" when the vCPU quota has no room for an upgrade surge node."
+  type        = string
+  default     = "patch"
+
+  validation {
+    condition     = contains(["none", "patch", "stable", "rapid", "node-image"], var.automatic_upgrade_channel)
+    error_message = "automatic_upgrade_channel must be none, patch, stable, rapid or node-image."
+  }
+}
+
+variable "node_os_upgrade_channel" {
+  description = "Node OS upgrade channel. \"None\" when the vCPU quota has no room for an upgrade surge node."
+  type        = string
+  default     = "NodeImage"
+
+  validation {
+    condition     = contains(["None", "Unmanaged", "SecurityPatch", "NodeImage"], var.node_os_upgrade_channel)
+    error_message = "node_os_upgrade_channel must be None, Unmanaged, SecurityPatch or NodeImage."
+  }
+}
+
+variable "keda_enabled" {
+  description = "Enable the AKS KEDA add-on (workload_autoscaler_profile). It requests about 0.4 CPU; turn it off while nothing uses it (the analysis worker's ScaledObject)."
+  type        = bool
+  default     = true
+}
+
 variable "sku_tier" {
   description = "AKS control-plane tier: Free (no SLA) or Standard (uptime SLA; prod only, ADR 0002)."
   type        = string

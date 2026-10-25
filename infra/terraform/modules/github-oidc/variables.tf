@@ -52,3 +52,14 @@ variable "owner_object_ids" {
   type        = list(string)
   default     = []
 }
+
+variable "subject_prefix" {
+  description = "OIDC subject prefix GitHub sends for this repo, e.g. repo:owner@123/name@456 when the repo uses immutable subjects (gh api repos/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix). Empty = repo:<repo>."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.subject_prefix == "" || can(regex("^repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$", var.subject_prefix))
+    error_message = "subject_prefix must look like repo:owner/name or repo:owner@<id>/name@<id>."
+  }
+}

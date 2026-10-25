@@ -1,0 +1,237 @@
+name: CD
+
+# ---------------------------------------------------------------------
+# Continuous deployment (docs/devops/cd.md):
+#
+#   push to main → integration-azure.yml (builds + tests sha-<7>) → green
+#     → staging: deploy.yml (resume if paused, helm upgrade --atomic,
+#                helm test, /health, smoke, bbm-last-deployed-tag)
+#     → promote: summary for the approver, supersede older promotions
+#     → prod:    deploy.yml with the SAME tag, gated on the `prod`
+#                Environment's required reviewer (approve in the Actions UI)
+#
+# Trigger: workflow_run runs the workflow file from the DEFAULT branch
+# (main), never from the triggering commit, and gets a token for main
+# (so the main-only `staging` / `prod` Environments accept it). The
+# images and the chart come from the run's head_sha: deploy.yml checks
+# out that commit (`ref`), verifies every image exists in ACR and that
+# the api/web revision labels are on main.
+#
+# Only `push` runs of integration-azure deploy. Schedule and dispatch
+# runs also push sha-<7> images, but of the main head a push run already
+# built and deployed; letting them through would redeploy the same tag
+# and ask the prod reviewer again every night. To retry a failed push
+# run, use "Re-run failed jobs": the re-run keeps event=push and, once
+# green, triggers CD.
+#
+# Gates (the `gate` job; everything else needs it, so CD skips green
+# until bootstrap has set the repo vars):
+#   - the integration-azure run concluded success, on main, event push,
+#     from this repository
+#   - vars.AZURE_SUBSCRIPTION_ID, ACR_NAME, AZURE_LOCATION[_ABBR] set
+#   - vars.CD_ENABLED is not 'false' (repo variable kill switch)
+#
+# Concurrency: deploy.yml's job-level group env-<env>
+# (cancel-in-progress: false) is shared with env-power.yml and manual
+# deploys, so CD never races a power change, and a running deploy is
+# never cancelled. GitHub keeps one pending job per group, so a newer
+# queued staging deploy replaces an older queued one (that older run
+# then never promotes). A prod job parked on the reviewer gate holds
+# env-prod, so a newer green run would only queue behind it; instead the
+# `promote` job cancels older CD runs that are still `waiting` on that
+# approval (not-yet-approved; an approved run is `in_progress` and is
+# left alone). No workflow-level group: cancel-in-progress there would
+# also kill running deploys.
+#
+# Rollback stays manual: run "Deploy (AKS)" (deploy.yml) with an older
+# sha-<7>. Pause CD: set the repo variable CD_ENABLED=false, or disable
+# this workflow.
+# ---------------------------------------------------------------------
+
+on:
+  workflow_run:
+    workflows: [Integration (Azure)]
+    types: [completed]
+    branches: [main]
+
+run-name: "CD ${{ github.event.workflow_run.head_sha }}: ${{ github.event.workflow_run.display_title }}"
+
+permissions: {}
+
+jobs:
+  gate:
+    name: Gate
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.CD_ENABLED != 'false' &&
+      vars.AZURE_SUBSCRIPTION_ID != '' && vars.ACR_NAME != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.tag.outputs.sha }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Image tag from the integration run
+        id: tag
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::unexpected head_sha '$HEAD_SHA'"
+            exit 1
+          fi
+          # Same tag integration-azure.yml pushed (sha-${GITHUB_SHA::7}).
+          tag="sha-${HEAD_SHA::7}"
+          {
+            echo "sha=$HEAD_SHA"
+            echo "tag=$tag"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "### CD \`$tag\`"
+            echo
+            echo "- Commit: [\`${HEAD_SHA::7}\`]($SERVER/$REPO/commit/$HEAD_SHA)"
+            echo "- Tested by: [integration-azure run]($RUN_URL)"
+            echo "- Path: staging (automatic) → prod (\`prod\` reviewer approval)"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  staging:
+    name: Staging
+    needs: gate
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      env: staging
+      image_tag: ${{ needs.gate.outputs.tag }}
+      ref: ${{ needs.gate.outputs.sha }}
+      resume_if_paused: true
+      smoke: true
+
+  # ---------------------------------------------------------------------
+  # Runs only when staging really deployed this tag (not skipped, not
+  # failed: with resume_if_paused deploy.yml fails instead of skipping).
+  # Writes what the prod approver is about to ship, then cancels older CD
+  # runs still waiting on the prod approval (they carry an older tag).
+  # ---------------------------------------------------------------------
+  promote:
+    name: Promote to prod
+    needs: [gate, staging]
+    if: >-
+      needs.staging.result == 'success' &&
+      needs.staging.outputs.result == 'deployed' &&
+      needs.staging.outputs.image_tag == needs.gate.outputs.tag
+    runs-on: ubuntu-latest
+    permissions:
+      # gh run list / gh run cancel on this workflow's older runs.
+      actions: write
+    steps:
+      - name: Summary for the prod approver
+        env:
+          TAG: ${{ needs.gate.outputs.tag }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          STAGING_URL: ${{ needs.staging.outputs.url }}
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "### Ready for prod: \`$TAG\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| tag | \`$TAG\` |"
+            echo "| commit | [\`${SHA::7}\`]($SERVER/$REPO/commit/$SHA) |"
+            echo "| staging | $STAGING_URL (deployed, \`helm test\`, \`/health\` and smoke passed) |"
+            echo
+            echo "The **prod** job waits for a required reviewer of the \`prod\` Environment:"
+            echo "**Review deployments → prod → Approve and deploy**. A paused prod is resumed after approval;"
+            echo "a newer green main build cancels this run while it is still waiting."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Supersede older promotions waiting for approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          # `waiting` = parked on an Environment protection rule; in this
+          # workflow only the prod reviewer gate (staging has none).
+          # `gh run cancel` also cancels in_progress runs, so each run's
+          # status is re-read right before its cancel, and a run that was
+          # approved (in_progress) or finished meanwhile is skipped. An
+          # approval in the moment between that re-read and the cancel can
+          # still be cancelled (see docs/devops/cd.md).
+          older=$(gh run list --workflow cd.yml --status waiting --limit 50 \
+            --json databaseId,number \
+            --jq ".[] | select(.number < $RUN_NUMBER and .databaseId != $RUN_ID) | .databaseId")
+          for id in $older; do
+            st=$(gh run view "$id" --json status -q .status 2>/dev/null || echo unknown)
+            if [[ "$st" != waiting ]]; then
+              echo "skipping CD run $id: now '$st', no longer waiting for approval"
+              continue
+            fi
+            echo "cancelling CD run $id (older promotion still waiting for approval)"
+            if gh run cancel "$id"; then
+              echo "- Superseded older CD run $id (was waiting for prod approval)" >>"$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::could not cancel CD run $id (finished meanwhile?)"
+            fi
+          done
+          [[ -n "$older" ]] || echo "no older promotion is waiting"
+
+  prod:
+    name: Prod
+    needs: [gate, staging, promote]
+    if: needs.promote.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      env: prod
+      # The tag staging just passed, never a re-derived one.
+      image_tag: ${{ needs.staging.outputs.image_tag }}
+      ref: ${{ needs.gate.outputs.sha }}
+      resume_if_paused: true
+      smoke: true
+
+  summary:
+    name: Summary
+    needs: [gate, staging, promote, prod]
+    if: always() && needs.gate.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: CD summary
+        env:
+          TAG: ${{ needs.gate.outputs.tag }}
+          STAGING: ${{ needs.staging.result }}
+          STAGING_URL: ${{ needs.staging.outputs.url }}
+          STAGING_HEALTH: ${{ needs.staging.outputs.health }}
+          PROD: ${{ needs.prod.result }}
+          PROD_URL: ${{ needs.prod.outputs.url }}
+          PROD_HEALTH: ${{ needs.prod.outputs.health }}
+        run: |
+          {
+            echo "### CD result for \`$TAG\`"
+            echo
+            echo "| env | tag | job | URL | /health |"
+            echo "|---|---|---|---|---|"
+            echo "| staging | \`$TAG\` | $STAGING | ${STAGING_URL:--} | ${STAGING_HEALTH:-not run} |"
+            echo "| prod | \`$TAG\` | ${PROD:-not run} | ${PROD_URL:--} | ${PROD_HEALTH:-not run} |"
+            echo
+            if [[ "$STAGING" != success ]]; then
+              echo "Staging did not pass, so prod was not offered. A failed \`helm upgrade --atomic\` was rolled back by Helm;"
+              echo "a failure after it (helm test, /health, smoke) leaves the new release: roll back with **Deploy (AKS)** and the previous tag."
+            elif [[ "$PROD" == cancelled ]]; then
+              echo "Prod was cancelled (a newer green build superseded it, or the approval was rejected/cancelled)."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"

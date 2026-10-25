@@ -227,7 +227,8 @@ bootstrap repo variables exist.
 | `integration-azure.yml` | push to `main`, nightly, manual | namespace `run-<id>-<attempt>` on the test cluster: smoke, integration, e2e (+ k6), always deleted |
 | `preview.yml`           | PR open/push/close              | namespace `pr-<n>` on the test cluster (mocked web), sticky comment, deleted on close              |
 | `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, apply `global` on `main` (infra-global approval), manual plan/apply per stack         |
-| `deploy.yml`            | manual, called by env-power     | platform install check, Helm deploy to staging/prod AKS, then smoke                                |
+| `cd.yml`                | green `integration-azure` on a push to `main` | deploy that build to staging, then prod after reviewer approval ([cd.md](docs/devops/cd.md)) |
+| `deploy.yml`            | called by `cd.yml` / env-power, or manual | platform install, Helm deploy to staging/prod AKS, then smoke; manual runs for rollbacks |
 | `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for test/staging/prod, nightly auto-pause            |
 | `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                                               |
 | `infra-janitor.yml`     | every 6 h, weekly, manual       | delete expired ephemeral namespaces, weekly ACR purge                                              |

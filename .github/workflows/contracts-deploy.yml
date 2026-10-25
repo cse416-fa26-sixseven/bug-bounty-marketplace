@@ -83,6 +83,8 @@ jobs:
         working-directory: contracts
         env:
           KV_NAME: ${{ vars.SHARED_KEY_VAULT_NAME }}
+          # Home region: contracts-sepolia has no Environment-level region
+          # override, so this is the repo variable (shared RG).
           SHARED_RG: rg-bbm-shared-${{ vars.AZURE_LOCATION_ABBR }}
         run: |
           set -euo pipefail

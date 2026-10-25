@@ -25,8 +25,8 @@ module "naming_env" {
   for_each = toset(local.persistent_envs)
 
   env           = each.key
-  location      = var.location
-  location_abbr = var.location_abbr
+  location      = local.env_locations[each.key].location
+  location_abbr = local.env_locations[each.key].location_abbr
   suffix        = random_string.suffix.result
   dns_zone_name = var.dns_zone_name
   repo          = var.github_repo
@@ -36,6 +36,15 @@ locals {
   # Every AKS env (data + compute RGs, CI identity, budgets). test also hosts
   # the ephemeral CI-run / PR-preview namespaces (ADR 0002).
   persistent_envs = ["test", "staging", "prod"]
+
+  # Per-env region (ADR 0002 section 8); an env missing from var.env_locations
+  # stays in the home region. Shared resources always use var.location.
+  env_locations = {
+    for e in local.persistent_envs : e => lookup(var.env_locations, e, {
+      location      = var.location
+      location_abbr = var.location_abbr
+    })
+  }
 
   subscription_scope = data.azurerm_subscription.current.id
 
@@ -49,7 +58,9 @@ locals {
     "Microsoft.Network",
     "Microsoft.ManagedIdentity",
     "Microsoft.Compute",
-    "Microsoft.Insights",
+    # Azure lists this namespace in lowercase, and the azurerm provider check
+    # is case-sensitive ("Microsoft.Insights" fails the plan).
+    "microsoft.insights",
     "Microsoft.OperationsManagement",
     "Microsoft.AlertsManagement",
     "Microsoft.Consumption",
@@ -88,7 +99,7 @@ resource "azurerm_resource_group" "env_data" {
   for_each = module.naming_env
 
   name     = each.value.env.data_resource_group
-  location = var.location
+  location = each.value.location
   tags = merge(each.value.tags_by_layer.data, {
     "power-state" = "down"
     "auto-pause"  = "true"
@@ -115,7 +126,7 @@ resource "azurerm_resource_group" "env_compute" {
   for_each = module.naming_env
 
   name     = each.value.env.compute_resource_group
-  location = var.location
+  location = each.value.location
   tags     = each.value.tags_by_layer.compute
 }
 

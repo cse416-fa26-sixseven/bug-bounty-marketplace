@@ -9,6 +9,13 @@
 - **Amended:** 2026-10-25, the region becomes one setting and moves to `northcentralus` (`ncus`)
   (section 7), because the Azure for Students subscription's allowed-regions policy blocks
   `eastus2` and `centralus`.
+- **Amended:** 2026-10-25, one region per environment (test `canadacentral` on an arm64
+  `Standard_B4ps_v2` node, staging `denmarkeast` and prod `northcentralus` on an x86
+  `Standard_B4as_v2` node, one node per cluster) and the KEDA add-on off (section 8), because the app routing Gateway API's `istiod` does not fit a 2-vCPU node
+  and Azure for Students allows 6 vCPUs per region. The home region (tfstate, shared RG) stays
+  `northcentralus`; section 7 now describes the home region.
+- **Amended:** 2026-10-25, continuous deployment (section 9): green `main` builds deploy to staging
+  automatically, then to prod with the same tag after the `prod` reviewer approves.
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
   interfaces, and its region (`eastus2` / `eus2`, fallback `centralus`). Everything else in 0001
@@ -35,8 +42,8 @@
 
 | Env       | Cluster                  | AKS tier     | Hosts                                       | Database                    |
 | --------- | ------------------------ | ------------ | ------------------------------------------- | --------------------------- |
-| `test`    | `aks-bbm-test-ncus`      | Free         | CI runs and PR previews, a namespace each   | in-cluster Postgres per ns  |
-| `staging` | `aks-bbm-staging-ncus`   | Free         | one release in namespace `bbm`              | PG Flexible Server          |
+| `test`    | `aks-bbm-test-cac`       | Free         | CI runs and PR previews, a namespace each   | in-cluster Postgres per ns  |
+| `staging` | `aks-bbm-staging-dke`    | Free         | one release in namespace `bbm`              | PG Flexible Server          |
 | `prod`    | `aks-bbm-prod-ncus`      | **Standard** | one release in namespace `bbm`              | PG Flexible Server          |
 
 - `test` is a normal `data` + `compute` env (short code `tst`, VNet `10.10.0.0/16`) with
@@ -70,9 +77,9 @@ Owner, so no CI identity needs rights outside its own resource groups):
 | -------------------- | ------------------------ | ---------------------------------------- |
 | `<zone>`             | `rg-bbm-shared-ncus`     | parent; delegated from the domain's DNS  |
 | `prod.<zone>`        | `rg-bbm-prod-data-ncus`  | prod hosts                               |
-| `staging.<zone>`     | `rg-bbm-staging-data-ncus` | staging hosts                          |
-| `test.<zone>`        | `rg-bbm-test-data-ncus`  | CI run hosts                             |
-| `preview.<zone>`     | `rg-bbm-test-data-ncus`  | PR preview hosts                         |
+| `staging.<zone>`     | `rg-bbm-staging-data-dke` | staging hosts                           |
+| `test.<zone>`        | `rg-bbm-test-data-cac`   | CI run hosts                             |
+| `preview.<zone>`     | `rg-bbm-test-data-cac`   | PR preview hosts                         |
 
 Bootstrap also writes the NS delegation records for the four child zones into the parent zone.
 
@@ -219,7 +226,7 @@ dns:
   internalZone: prod.internal.<zone>
 platform:
   subscriptionId: ...
-  dnsResourceGroup: rg-bbm-<env>-data-ncus
+  dnsResourceGroup: rg-bbm-<env>-data-<env abbr>   # e.g. rg-bbm-staging-data-dke
   certManagerClientId: ... # id-bbm-<env>-certmgr client id
 ```
 
@@ -230,7 +237,8 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 ### 6. One-command bring-up and teardown
 
 - **`infra/up.sh --subscription <id> [--zone <zone>] [--location <region>] [--location-abbr <code>]
-  [--envs test,staging] [--prod] [--skip-github] [--yes] [--dry-run]`**, run locally after `az login --use-device-code`. `--envs` defaults to
+  [--env-location <env>=<region>[:<code>]]... [--envs test,staging] [--prod] [--skip-github] [--yes]
+  [--dry-run]`**, run locally after `az login --use-device-code`. `--envs` defaults to
   `test,staging`; `--prod` adds prod; `--skip-github` leaves the GitHub setup script for later; `--yes`
   answers every confirmation (and keeps going when the delegation has not propagated yet, then
   installs the platform without `--wait` and prints how to check the certificate later);
@@ -257,17 +265,18 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   per-tenant tfvars fields (`subscription_id`, `suffix`, the admin / power-operator / Key Vault
   officer object id lists, the global hint block's principal ids, the backend `.hcl` state account)
   to their placeholders, and keeps `dns_zone_name`, `alert_emails`, `github_reviewer_ids` and the
-  region (`location` / `location_abbr`: a user choice, not a per-tenant value; when the next
-  subscription needs another region, `up.sh --location <region>` rewrites it).
+  regions (home and per env, section 8: user choices, not per-tenant values; when the next
+  subscription needs others, `up.sh --location` / `--env-location` rewrites them).
 
-### 7. Region
+### 7. Region (home region; per-env regions in section 8)
 
-- **One setting:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars`.
-  `infra/up.sh --location <region>` writes both into every tfvars (bootstrap, global, each env's
-  data and compute) and into the backend `.hcl` state resource group (`rg-bbm-tfstate-<abbr>`), and
-  sets each env's `ingress_pip_zones` to `["1", "2", "3"]` or `[]` depending on whether
-  `az account list-locations` reports availability zones for the region. Without `--location` it
-  uses the committed value. The committed `ingress_pip_zones` is `[]`, which works in every region.
+- **Home region:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars` (and the same
+  in `global.tfvars`): tfstate, the shared RG (ACR, shared Log Analytics and Key Vault, parent DNS
+  zone). `infra/up.sh --location <region>` writes both there and into the backend `.hcl` state
+  resource group (`rg-bbm-tfstate-<abbr>`). Without `--location` it uses the committed value.
+  Each env's region is its own setting (section 8); `up.sh` sets each env's `ingress_pip_zones`
+  to `["1", "2", "3"]` or `[]` depending on whether `az account list-locations` reports
+  availability zones for that env's region.
 - **Abbreviation map:** `modules/naming/main.tf` `local.location_abbrs` (`northcentralus` → `ncus`,
   `canadacentral` → `cac`, `francecentral` → `frc`, `belgiumcentral` → `bec`, `denmarkeast` →
   `dke`, `eastus2` → `eus2`, `centralus` → `cus`, and a few more). Stacks default
@@ -275,24 +284,153 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   it need `--location-abbr`. `up.sh` parses the same map, so the shell and Terraform agree. Key
   Vault and storage names (24-char limits) carry no region code; the region-bearing names stay well
   under their limits (asserted in the `modules/naming` tests).
-- **Preflight:** `up.sh` checks that the region exists for the subscription and is permitted by
-  every "allowed locations" policy assignment (parameter `listOfAllowedLocations`) on the
+- **Preflight:** `up.sh` checks that every region (home and each env's) exists for the
+  subscription and is permitted by every "allowed locations" policy assignment (parameter `listOfAllowedLocations`) on the
   subscription or an inherited management group, and fails early with the allowed list. It refuses
   to switch regions while `rg-bbm-tfstate-<old abbr>` still exists (names embed the region, so run
   `down.sh --all` first). It registers `Microsoft.Compute` before the quota check (while it is
   unregistered, `az vm list-usage` returns nothing); step 3 then lists it in
   `preregistered_resource_providers`, so bootstrap imports the registration instead of failing on it.
 - **Workflows and scripts:** bootstrap's `gh_setup_commands` sets the repo variables
-  **`AZURE_LOCATION`** and **`AZURE_LOCATION_ABBR`**. `deploy.yml`, `_ephemeral-env.yml` (through
-  `integration-azure.yml` / `preview.yml`), `env-power.yml`, `infra-janitor.yml` and
-  `contracts-deploy.yml` build every resource group and cluster name from them, and their gate jobs
-  skip while either is unset, like the other repo variables. `env-power.sh` and `janitor.sh` read
-  `BBM_LOCATION` / `BBM_REGION_ABBR` (set from those variables in CI) and otherwise fall back to
-  `bootstrap.tfvars`.
+  **`AZURE_LOCATION`** and **`AZURE_LOCATION_ABBR`** to the home region (shared names, e.g.
+  `contracts-deploy.yml`'s shared RG), and gate jobs skip while either is unset, like the other
+  repo variables. Env-scoped names use the env's region (section 8).
 - **Why `northcentralus`:** the target subscription is Azure for Students, whose policy "Allowed
   resource deployment regions" permits only `francecentral`, `belgiumcentral`, `denmarkeast`,
   `northcentralus` and `canadacentral`. ADR 0001's `eastus2` and its `centralus` fallback are both
   blocked; the team chose `northcentralus`, the only allowed US region.
+
+### 8. One region per environment
+
+- **Finding.** The first bring-up put all three clusters in `northcentralus` on one
+  `Standard_B2als_v2` node each (2 vCPU / 4 GiB, 6 of the region's 6 vCPUs). It failed: the managed
+  app routing Gateway API (section 3) runs `istiod` with 2 replicas at 500m CPU / 2 GiB each, fixed
+  by Azure. A B2als_v2 node has about 1.9 CPU / 2.7 GiB allocatable, and the AKS system pods
+  already request about 1.67 CPU / 1.7 GiB of it, so `istiod` stayed Pending and no Gateway was
+  ever programmed. Azure for Students allows **6 vCPUs per region** ("Total Regional vCPUs"; 10 for
+  BASv2), and DASv5 / DSv5 are 0, so three bigger nodes do not fit in one region.
+- **SKU availability.** Not every allowed region offers a 4 vCPU B-series size to this
+  subscription. Measured with `az vm list-skus` on the Azure for Students subscription:
+  - only **`northcentralus`** and **`denmarkeast`** offer an x86 4 vCPU B-series size
+    (`Standard_B4as_v2`, BASv2);
+  - **`canadacentral`** offers only arm64 (`Standard_B4ps_v2`, family Bpsv2);
+  - **`francecentral`** lists no B-series sizes at all;
+  - **`belgiumcentral`** has its B-series sizes marked `NotAvailableForSubscription`.
+
+  So at most two envs can run x86 nodes, and the third has to be arm64 in canadacentral.
+- **Decision.** Each env gets its own allowed region and one 4 vCPU / 16 GiB node (min = max =
+  1): 4 of the 6 vCPUs in each region.
+
+  | Env       | Region           | Code   | Node                        | Cluster                | Data RG                    |
+  | --------- | ---------------- | ------ | --------------------------- | ---------------------- | -------------------------- |
+  | `test`    | `canadacentral`  | `cac`  | `Standard_B4ps_v2` (arm64)  | `aks-bbm-test-cac`     | `rg-bbm-test-data-cac`     |
+  | `staging` | `denmarkeast`    | `dke`  | `Standard_B4as_v2` (x86)    | `aks-bbm-staging-dke`  | `rg-bbm-staging-data-dke`  |
+  | `prod`    | `northcentralus` | `ncus` | `Standard_B4as_v2` (x86)    | `aks-bbm-prod-ncus`    | `rg-bbm-prod-data-ncus`    |
+
+  **Test runs on arm64.** It hosts only CI-run and PR-preview namespaces, so it can take the one
+  region without an x86 size. `.github/workflows/_build-push.yml` builds the api and web images for
+  `linux/amd64,linux/arm64`; analysis and contracts stay amd64 (analysis is off everywhere, and the
+  chart deploys no contracts image). Each platform builds natively (`ubuntu-24.04` and the free
+  public-repo `ubuntu-24.04-arm` runner), pushes by digest, and a merge job joins the digests into
+  one tag. Emulated arm64 builds under QEMU made `next build` 5–15× slower.
+  **Staging and prod get the two x86 regions,** so staging rehearses prod exactly: same
+  architecture, same node size, same images. Prod is in `northcentralus` to stay in North America
+  with the home region (tfstate, shared RG and ACR, so prod's image pulls stay in-region). The
+  shared names (`rg-bbm-tfstate-ncus`, `rg-bbm-shared-ncus`, `acrbbm<sfx>`,
+  `kv-bbm-shared-<sfx>`) are unchanged. canadacentral and denmarkeast have availability zones
+  (zone-redundant ingress PIPs); northcentralus has none, so prod's ingress IP has no zones
+  (`ingress_pip_zones = []`).
+- **Rejected: prod in canadacentral on arm64** (test or staging in northcentralus). Prod would run
+  a different architecture from staging, so staging would no longer rehearse prod (arm64-only bugs,
+  multi-arch builds of every prod image, including analysis once it is on).
+- **Rejected: two clusters** (one shared test/staging cluster in one x86 region, prod in the other).
+  It avoids arm64, but puts CI and PR previews next to staging on one 4 vCPU node and one Gateway,
+  so staging could not be paused while PRs are open and preview load would distort staging; it
+  also loses the isolation argued for under "Why not one shared cluster" below.
+- **Automatic upgrades stay off** (`automatic_upgrade_channel = "none"`, `node_os_upgrade_channel
+  = "None"`): a 4-vCPU surge node does not fit in the 2 vCPUs left, and AKS does not allow max
+  unavailable (an in-place upgrade without surge) on a system node pool, which is the only pool.
+  Upgrade by recreating the cluster: bump `kubernetes_version`, then `env-power <env> down` and
+  `up` (data, IP and DNS survive; the env is down meanwhile), or get regional quota for a surge
+  node first.
+- **KEDA add-on off.** It requests about 0.4 CPU and only serves the analysis worker's
+  ScaledObject, and analysis is disabled in every env (the chart renders no ScaledObject then).
+  `keda_enabled` is a compute input (default `true`); all three env tfvars set `false`. Turn it on
+  before enabling `analysis` with `analysis.keda.enabled`.
+- **Where the region lives.** `location` / `location_abbr` in `envs/<env>/{data,compute}.tfvars`
+  is each env's source of truth. Bootstrap (which owns the env RGs and child DNS zones) and global
+  (which looks the env RGs up for their budgets) take it as `env_locations = { <env> = { location,
+  location_abbr } }` in `bootstrap.tfvars` / `global.tfvars`; an env missing from the map uses the
+  home region. `modules/naming` is unchanged: each env's names embed its own code, shared names the
+  home code. Key Vault and storage names carry no region code. Region-independent pieces: the
+  state ABAC conditions (blob paths), role-assignment scopes (RG ids), OIDC subjects, and ACR pulls
+  across regions (kubelets pull from the home-region registry).
+- **`up.sh`.** `--env-location <env>=<region>[:<code>]` (repeatable, `all=` for every env)
+  rewrites that env's data/compute tfvars and both `env_locations` maps; default is the committed
+  tfvars. The allowed-locations, availability-zone, node-SKU (offered and not restricted for the
+  subscription; fails early otherwise), PostgreSQL and AKS-version checks run per env region, and
+  the vCPU check compares each region's needs (node vCPUs × max count of the envs brought up there
+  and not yet running) with that region's own `cores` and family quota. Moving an env is allowed
+  only when its old-region RGs hold nothing but the bootstrap-owned DNS zones (`down.sh --envs
+  <env>` first): bootstrap then recreates the RGs and child zones (with their NS delegation) in
+  the new region.
+- **Workflows.** `gh_setup_commands` also sets **Environment-level** `AZURE_LOCATION` /
+  `AZURE_LOCATION_ABBR` on `test`, `preview`, `test-infra` (test region), `staging` (staging
+  region), `prod` and `prod-power` (prod region); in a job bound to an Environment they override
+  the home-region repo variables. `infra-global` and `contracts-sepolia` get none (shared names).
+  `deploy.yml` and `_ephemeral-env.yml` build their names from the Environment's values at job
+  level and check them against the checkout (`scripts/env-region.sh <env> --check`). Jobs that
+  are not bound to the env's Environment (`env-power.yml`'s `status` and scheduled matrices,
+  `infra-janitor.yml`'s deployed-tag read) read the region from the checkout instead:
+  `scripts/env-region.sh <env>` prints `BBM_LOCATION`, `BBM_REGION_ABBR`, `DATA_RG`,
+  `COMPUTE_RG`, `CLUSTER` from `envs/<env>/data.tfvars`. `env-power.sh` and `janitor.sh` use
+  `BBM_LOCATION` / `BBM_REGION_ABBR` when set, else the same tfvars. `terraform.yml` needs nothing:
+  the stacks take the region from their tfvars, and state stays in the home region.
+- **Why not one shared cluster** (namespaces per env, ~4 vCPU in one region): one cluster for CI,
+  previews, staging and prod would mix test load and half-broken PR builds with prod, make it
+  impossible to pause staging while PRs are open, and put every env behind one control plane, one
+  Gateway and one set of cluster-admin identities (the preview identity has Cluster Admin on the
+  test cluster). Separate regions keep every env isolated at the cost of cross-region pulls from
+  the home ACR (small egress) and three regions to watch.
+- **Collapsing back to one region** on a bigger subscription: `infra/down.sh --envs staging,prod`,
+  then `infra/up.sh --env-location all=<region> --prod` (or edit `location` / `location_abbr` in
+  the env tfvars), raise `system_max_count` (and enable the `apps` pool) to taste, and restore
+  `automatic_upgrade_channel = "patch"` / `node_os_upgrade_channel = "NodeImage"` once the quota
+  leaves room for a surge node. Re-run the bootstrap `gh_setup_commands` so the Environment
+  variables follow.
+
+### 9. Continuous deployment
+
+- **Flow.** `cd.yml` runs on `workflow_run` of `integration-azure.yml` (completed, branch `main`).
+  When that run is green and was a `push` (not the nightly or a dispatch, which rebuild a head
+  already deployed), it deploys `sha-<7 of head_sha>` to **staging** through `deploy.yml`
+  (`workflow_call`). Only after staging reports `deployed` for that tag does a prod job deploy
+  **the same tag** to **prod**, gated on the `prod` Environment's required reviewer
+  (`github_reviewer_ids`). The run summary shows the tag and the staging URL for the approver.
+  Runbook: [docs/devops/cd.md](../devops/cd.md).
+- **One deploy path.** `deploy.yml` gains inputs `resume_if_paused` and `ref` (the tested commit,
+  must be on `main`) and outputs `url` and `health`. It keeps `workflow_dispatch` for manual
+  deploys and rollbacks. Its job is bound to the env's Environment, so the Environment-level
+  `AZURE_CLIENT_ID` / `AZURE_LOCATION[_ABBR]` (section 8) resolve under `workflow_call` too.
+  The existing checks run unchanged: images in ACR, revision on `main`, `helm upgrade --atomic`,
+  `helm test`, `/health`, smoke, `bbm-last-deployed-tag` on the data RG.
+- **Paused / down.** With `resume_if_paused`, a `paused` env is resumed first with
+  `env-power.sh <env> resume` and left running for the nightly auto-pause. Prod's resume runs
+  inside the gated job, after approval. A `down` env fails the run ("run env-power `<env>` up")
+  instead of skipping green, so a skip can never count as having passed staging.
+  `gh-bbm-staging` / `gh-bbm-prod` already hold Contributor on their data and compute RGs, which
+  covers AKS/Postgres start and the RG tags. No new role.
+- **Concurrency.** `deploy.yml`'s job-level group `env-<env>` (`cancel-in-progress: false`), shared
+  with `env-power.yml`, means CD never races a power change and a running deploy is never
+  cancelled. A prod job parked on the approval holds `env-prod`, so a newer green build cancels
+  older CD runs whose status is still `waiting` (not yet approved) rather than queueing behind
+  them.
+- **Off switch and rollback.** Repo variable `CD_ENABLED=false` (or disabling `cd.yml`) stops new
+  CD runs; the gate also skips green until bootstrap has set the repo variables. Rollback stays
+  manual: dispatch `deploy.yml` with an older `sha-<7>`.
+- **Why not a deploy step inside `integration-azure.yml`:** that workflow runs as the `test`
+  identity and also runs nightly. A separate `workflow_run` workflow keeps the integration run's
+  result independent of staging and prod, and is always taken from the default branch.
 
 ## Alternatives considered
 
@@ -339,15 +477,18 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 - **Cost:** five public DNS zones (~$0.50 each per month) plus private zones; prod's Standard tier
   adds about $0.10 per cluster-hour while the cluster runs; the test cluster adds one more paused/LB
   footprint (static PIP and load balancer while paused). Updated in `docs/devops/cost.md`.
-- **Quota:** three clusters' system pools (B2als_v2) can run at once; check BASv2 vCPU quota.
+- **Quota:** each cluster's one 4 vCPU node (B4ps_v2 in test, B4as_v2 in staging and prod) uses 4
+  of its region's 6 vCPUs (section 8); `up.sh` checks each region's quota against that region's
+  needs.
 - **CI latency:** the first Azure CI run after a nightly pause waits for the test cluster to start
   (~5–10 min).
 - **Account or domain switch:** `down.sh --all` on the old subscription, `up.sh` on the new one,
   then update the four NS records (automatic with a Cloudflare token). Commit the tfvars `up.sh`
   rewrote.
-- **Region switch:** `down.sh --all` in the old region, then `up.sh --location <region>` (it also
-  runs the regenerated `gh_setup_commands`, so `AZURE_LOCATION` / `AZURE_LOCATION_ABBR` follow).
-  Nothing else names the region. Azure for Students allows only five regions (section 7).
+- **Region switch:** home region: `down.sh --all`, then `up.sh --location <region>`. One env:
+  `down.sh --envs <env>`, then `up.sh --env-location <env>=<region>` (both also run the regenerated
+  `gh_setup_commands`, so the repo and Environment `AZURE_LOCATION*` variables follow). Azure for
+  Students allows only five regions (section 7).
 - New delegable roles (DNS Zone Contributor, Container Registry Repository Reader/Writer), the
   test-cluster roles for `gh-bbm-ephemeral` / `gh-bbm-preview` and the admins' registry roles are
   applied by bootstrap, locally, by an Owner. The registry is created in ABAC mode from the start

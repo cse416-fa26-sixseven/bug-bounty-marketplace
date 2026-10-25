@@ -76,62 +76,90 @@ Nothing else in the repo names a domain.
 
 ## 4. Check quota, SKUs and versions
 
-`up.sh` checks these and prints warnings, but it can't raise quota. Check early, because quota
-requests can take time.
+`up.sh` checks these per env region. It fails early when an env's node size is not offered or is
+restricted for the subscription in that env's region, and prints warnings for quota and versions;
+it can't raise quota. Check early, because quota requests can take time.
+
+Each env has its own region (ADR 0002 §8), each cluster on one 4 vCPU / 16 GiB node: test
+`canadacentral` on `Standard_B4ps_v2` (arm64), staging `denmarkeast` and prod `northcentralus` on
+`Standard_B4as_v2` (x86). On Azure for Students only northcentralus and denmarkeast offer an x86
+4 vCPU B-series size; canadacentral offers only arm64 (Bpsv2), francecentral lists no B-series sizes
+and belgiumcentral marks them `NotAvailableForSubscription`.
 
 ### vCPU quota
 
 ```sh
-az vm list-usage -l northcentralus -o table
+for r in canadacentral denmarkeast northcentralus; do az vm list-usage -l "$r" -o table; done
 ```
 
-| Row                         | Needed for                              | Rough need                                                             |
-| --------------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
-| Total Regional vCPUs        | everything                              | 2 per running node; three clusters at once is 6+, more when they scale |
-| Standard BASv2 Family vCPUs | `Standard_B2als_v2` (default node size) | test 1–3 nodes, staging 1–2, prod system 1–2 + apps 1–3                |
-| Standard DSv5 Family vCPUs  | Kata sandbox pool (disabled by default) | 0 until the sandbox is enabled                                         |
+| Row                         | Needed for                              | Rough need (per region)                                       |
+| --------------------------- | --------------------------------------- | ------------------------------------------------------------- |
+| Total Regional vCPUs        | everything                              | 4 for the env's one node (Azure for Students: 6)              |
+| Standard BASv2 Family vCPUs | `Standard_B4as_v2` (staging, prod)      | 4 (Azure for Students: 10)                                    |
+| Standard BPSv2 Family vCPUs | `Standard_B4ps_v2` (test, arm64)        | 4                                                             |
+| Standard DSv5 Family vCPUs  | Kata sandbox pool (disabled by default) | 0 until the sandbox is enabled (Azure for Students: 0)        |
 
-New subscriptions often show a low regional limit (sometimes 4–10) and 0 for some families. To ask
-for more: **Portal → Quotas → Compute**, filter by your region (`North Central US` by default), pick the family, **New quota
-request**. Small B-series increases are usually approved within minutes.
+`up.sh` compares each region's free quota with the needs of the envs brought up there (clusters
+that already exist are already in the usage). New subscriptions often show a low regional limit
+(sometimes 4–10) and 0 for some families. To ask for more: **Portal → Quotas → Compute**, filter
+by the region, pick the family, **New quota request**. Small B-series increases are usually
+approved within minutes. To check that the node size is offered in a region:
+`az vm list-skus -l denmarkeast --size Standard_B4as_v2 -o table` (no `Restrictions`; test:
+`-l canadacentral --size Standard_B4ps_v2`).
 
 ### PostgreSQL Flexible Server SKU
 
 ```sh
-az postgres flexible-server list-skus -l northcentralus -o json \
+az postgres flexible-server list-skus -l denmarkeast -o json \
   | jq -r '.[].supportedServerEditions[] | select(.name=="Burstable") | .supportedServerSkus[].name' \
   | grep -i b1ms
 ```
 
 If `Standard_B1ms` isn't listed, PG Flexible is restricted for this subscription in the region. Only
-staging and prod use it (test runs Postgres in each namespace).
+staging (`denmarkeast`) and prod (`northcentralus`) use it (test runs Postgres in each namespace).
 
 ### AKS versions
 
 `up.sh` lists the GA AKS minors and rewrites `kubernetes_version` in `envs/<env>/compute.tfvars` to
-the region default when the committed one isn't offered. To check by hand:
-`az aks get-versions -l northcentralus -o table`.
+that env's region default when the committed one isn't offered there. To check by hand:
+`az aks get-versions -l <env region> -o table`.
 
-### Region
+### Regions
 
-The region is one setting: `location` / `location_abbr` in `envs/global/bootstrap.tfvars`
-(default `northcentralus` / `ncus`, ADR 0002 §7). To use another one, pass it to `up.sh`:
+Two kinds of region (ADR 0002 §7, §8):
+
+- **Home region:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars` (and
+  `global.tfvars`), default `northcentralus` / `ncus`: tfstate (`rg-bbm-tfstate-ncus`) and the
+  shared RG (`rg-bbm-shared-ncus`: ACR, shared Log Analytics and Key Vault, parent DNS zone).
+- **Env regions:** `location` / `location_abbr` in `envs/<env>/data.tfvars` and `compute.tfvars`,
+  copied into the `env_locations` map of `bootstrap.tfvars` and `global.tfvars`: test
+  `canadacentral` (`cac`), staging `denmarkeast` (`dke`), prod `northcentralus` (`ncus`). Env
+  names embed the env's code: `rg-bbm-staging-data-dke`, `aks-bbm-prod-ncus`, ...
+
+To change them, pass them to `up.sh`:
 
 ```sh
-infra/up.sh --subscription <id> --location canadacentral   # writes every tfvars + backend .hcl
+infra/up.sh --subscription <id> --location canadacentral          # home region: bootstrap/global tfvars + backend .hcl
+infra/up.sh --subscription <id> --env-location test=canadacentral --env-location staging=denmarkeast
+infra/up.sh --subscription <id> --env-location all=northcentralus  # every env in one region (bigger subscription)
 ```
 
 `up.sh` takes the abbreviation from the map in `modules/naming/main.tf` (`northcentralus` → `ncus`,
 `canadacentral` → `cac`, `francecentral` → `frc`, `belgiumcentral` → `bec`, `denmarkeast` → `dke`,
-...); for a region outside it pass `--location-abbr <code>` too. It fails early when the region is
-not allowed by the subscription's "allowed locations" policy and lists the allowed ones.
-**Azure for Students** only allows `francecentral`, `belgiumcentral`, `denmarkeast`,
-`northcentralus` and `canadacentral`, which is why the default is no longer `eastus2`.
+...); for a region outside it pass `--location-abbr <code>` (home) or `--env-location
+<env>=<region>:<code>` too. It fails early when a region is not allowed by the subscription's
+"allowed locations" policy and lists the allowed ones. **Azure for Students** only allows
+`francecentral`, `belgiumcentral`, `denmarkeast`, `northcentralus` and `canadacentral`, with 6 vCPUs
+per region, which is why each env has its own.
 
-Pick the region **before** the first run: names embed it, so moving later means `down.sh --all`
-and a fresh `up.sh --location <region>` (`up.sh` refuses while the old state RG exists). The
-workflows read the region from the repo variables `AZURE_LOCATION` / `AZURE_LOCATION_ABBR`, which
-the bootstrap `gh_setup_commands` set, so nothing else needs editing.
+Pick the regions **before** the first run: names embed them. Moving the home region means
+`down.sh --all` and a fresh `up.sh --location <region>` (`up.sh` refuses while the old state RG
+exists). Moving one env means `down.sh --envs <env>` (its RGs stay, holding only DNS zones) and
+`up.sh --env-location <env>=<region>`: bootstrap recreates the env's RGs and child DNS zones in the
+new region (`up.sh` refuses while the old-region RGs still hold anything else). The workflows get
+the regions from the bootstrap `gh_setup_commands` (repo variables `AZURE_LOCATION` /
+`AZURE_LOCATION_ABBR` = home, the same names per GitHub Environment = that env's region) and from
+the env tfvars in the checkout, so nothing else needs editing.
 
 If quota looks empty right after `az login` on a new subscription, `Microsoft.Compute` is not
 registered yet; `up.sh` registers it during preflight.
@@ -188,10 +216,10 @@ Most of a first run's time goes to creating the AKS clusters and the Postgres se
 
 | Step | Name               | What happens                                                                                                                                                                                                   |
 | ---- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Preflight          | checks tools and Terraform 1.9.x, `az login`, selects the subscription, reads your object ID, warns if you lack Owner, checks you are a `gh` admin on the repo                                                 |
+| 1    | Preflight          | checks tools and Terraform 1.9.x, `az login`, selects the subscription, reads your object ID, warns if you lack Owner, checks you are a `gh` admin on the repo; resolves the home and env regions and checks each against the allowed-locations policy |
 | 2    | DNS zone           | takes `--zone`, the tfvars value or a prompt; writes `dns_zone_name`                                                                                                                                           |
-| 3    | `bootstrap.tfvars` | writes `subscription_id`, adds you to `admin_object_ids`, fills `preregistered_resource_providers` with the providers already registered, asks for the budget alert email and the GitHub reviewer IDs if unset |
-| 4    | Quota and versions | prints vCPU usage, checks PG `Standard_B1ms`, fixes `kubernetes_version` if not offered (warnings only)                                                                                                        |
+| 3    | `bootstrap.tfvars` | writes the home region, each env's region and `ingress_pip_zones`, the `env_locations` maps, `subscription_id`, adds you to `admin_object_ids`, fills `preregistered_resource_providers` with the providers already registered, asks for the budget alert email and the GitHub reviewer IDs if unset |
+| 4    | SKUs, quota, versions | per env region: fails if the node size is not offered or restricted; prints each region's vCPU usage against its needs, checks PG `Standard_B1ms`, fixes `kubernetes_version` if not offered (warnings) |
 | 5    | Bootstrap          | first run: applies on local state, then migrates the state into `stbbmtfstate<sfx>`. Later runs: applies on the remote state                                                                                   |
 | 6    | tfvars             | writes `suffix` and `subscription_id` into every `envs/**/*.tfvars`, the state account into every `backend*.hcl`, the bootstrap hint block into `global.tfvars`, and you into `secret_officer_user_object_ids` |
 | 7    | GitHub             | runs the bootstrap output `gh_setup_commands` after you confirm: repo variables, Environments, branch policies, `AZURE_CLIENT_ID` per Environment                                                              |
@@ -286,9 +314,11 @@ the new version within its 2-minute rotation interval. A 403 means your user isn
 | `prod-power`        | `gh-bbm-prod-power` | none (scheduled auto-pause must run unattended) | `main`                      |
 
 It also sets the repo variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLAN_CLIENT_ID`,
-`TFSTATE_RG`, `TFSTATE_ACCOUNT`, `ACR_NAME`, `AZURE_LOCATION` and `AZURE_LOCATION_ABBR` (the region
-every workflow builds resource group and cluster names from), and `AZURE_CLIENT_ID` per
-Environment. These are IDs, not secrets.
+`TFSTATE_RG`, `TFSTATE_ACCOUNT`, `ACR_NAME`, `AZURE_LOCATION` and `AZURE_LOCATION_ABBR` (the home
+region: shared names), and per Environment `AZURE_CLIENT_ID` plus `AZURE_LOCATION` /
+`AZURE_LOCATION_ABBR` with that env's region (`test`, `preview`, `test-infra`: test; `staging`;
+`prod`, `prod-power`: prod), which override the repo values in jobs bound to the Environment. These
+are IDs, not secrets. Re-run the script after changing a region.
 
 If `github_reviewer_ids` was empty, the reviewer-gated Environments are created without reviewers.
 Add one in **Settings → Environments → `<env>`** (tick **Required reviewers**), or with the CLI:
@@ -326,8 +356,11 @@ Use `--file` for the deployer key so it doesn't land in shell history, then dele
 
 1. Merge the PR from section 9. The push to `main` runs `integration-azure.yml`, which builds and
    pushes `sha-<7>` images and tests them in a namespace on the test cluster.
-2. Run **Deploy (AKS)** (`deploy.yml`) with `env=staging` and `image_tag=sha-<7>` from that green
-   run. For prod, run it with `env=prod`; a reviewer must approve.
+2. When that run is green, **CD** (`cd.yml`, [cd.md](cd.md)) deploys the same `sha-<7>` to
+   staging (resuming it if paused), then waits for the `prod` reviewer to approve the prod deploy
+   in the run's **Review deployments** dialog. To deploy by hand instead (CD off with
+   `CD_ENABLED=false`, or an older tag), run **Deploy (AKS)** (`deploy.yml`) with `env=staging` and
+   `image_tag=sha-<7>`; for prod, a reviewer must approve.
 3. Open `https://staging.<zone>`.
 
 After the first deploy, `env-power <env> up` redeploys the last deployed tag. Pause idle envs with
@@ -339,7 +372,9 @@ also covers them.
 - [ ] `up.sh` ended with `done` and no warnings you haven't dealt with.
 - [ ] `dig +short NS <zone> @1.1.1.1` prints the four Azure name servers.
 - [ ] `az group list --query "[?tags.project=='bbm'].name" -o tsv` lists the tfstate and shared
-      RGs and `rg-bbm-<env>-data-ncus` / `rg-bbm-<env>-compute-ncus` for test, staging and prod.
+      RGs and `rg-bbm-test-{data,compute}-cac`, `rg-bbm-staging-{data,compute}-dke`,
+      `rg-bbm-prod-{data,compute}-ncus` (`infra/terraform/scripts/env-region.sh <env>` prints each
+      env's names).
 - [ ] `az network dns zone list --query "[].name" -o tsv` lists `<zone>`, `test.<zone>`,
       `preview.<zone>`, `staging.<zone>` and `prod.<zone>`.
 - [ ] `az lock list -g rg-bbm-tfstate-ncus -o table` shows `lock-bbm-tfstate`.
@@ -449,7 +484,8 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
    az keyvault secret set --vault-name "$(./scripts/tf.sh data <env> output -raw key_vault_name)" \
      -n llm-api-key --value placeholder-set-me
    ./scripts/tf.sh compute <env> init && ./scripts/tf.sh compute <env> apply
-   az aks get-credentials -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus --overwrite-existing
+   source <(./scripts/env-region.sh <env>)   # COMPUTE_RG / CLUSTER in the env's region
+   az aks get-credentials -g "$COMPUTE_RG" -n "$CLUSTER" --overwrite-existing
    kubelogin convert-kubeconfig -l azurecli
    ./scripts/tf.sh compute <env> output -raw helm_values > /tmp/values-infra.yaml
    ../../deploy/platform/install.sh <env> --values /tmp/values-infra.yaml --wait

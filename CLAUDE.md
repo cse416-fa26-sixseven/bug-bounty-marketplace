@@ -130,12 +130,16 @@ infra/down.sh --subscription <guid> (--envs <list> | --all) [--dry-run]
 - **Azure workflows are gated on repo vars** (`vars.AZURE_SUBSCRIPTION_ID`,
   `vars.ACR_NAME`, `vars.AZURE_LOCATION`, `vars.AZURE_LOCATION_ABBR`, ...) and skip green until
   bootstrap has set them.
-- **Region is one setting** (ADR 0002 §7): `location` / `location_abbr` in
-  `envs/global/bootstrap.tfvars` (default `northcentralus` / `ncus`; Azure for Students allows only
-  five regions). `infra/up.sh --location <region>` rewrites every tfvars and backend `.hcl`; the
-  region → code map lives in `modules/naming`. Workflows and scripts build names such as
-  `rg-bbm-<env>-data-ncus` / `aks-bbm-<env>-ncus` from `vars.AZURE_LOCATION_ABBR` (or
-  `BBM_REGION_ABBR`), never from literals.
+- **Regions** (ADR 0002 §7–8): the home region (`location` / `location_abbr` in
+  `envs/global/*.tfvars`, `northcentralus` / `ncus`) holds tfstate and the shared layer. Each env
+  has its own region in `envs/<env>/{data,compute}.tfvars`, mirrored in `env_locations`
+  (bootstrap/global): test `cac` (canadacentral, arm64 `Standard_B4ps_v2`), staging `dke`
+  (denmarkeast) and prod `ncus` (northcentralus), both x86 `Standard_B4as_v2`, because Azure for
+  Students allows five regions at 6 vCPU each and only ncus/dke offer an x86 4 vCPU B-series
+  size. `infra/up.sh --location` / `--env-location <env>=<region>` rewrite them; the region →
+  code map lives in `modules/naming`. Workflows and scripts build names such as
+  `rg-bbm-<env>-data-<abbr>` from Environment-level `vars.AZURE_LOCATION_ABBR` or
+  `infra/terraform/scripts/env-region.sh <env>`, never from literals.
 - **`ci.yml` stays Azure-free**, so `CI OK` never depends on cloud
   credentials, quota or uptime. Anything that needs Azure goes in its own
   workflow.

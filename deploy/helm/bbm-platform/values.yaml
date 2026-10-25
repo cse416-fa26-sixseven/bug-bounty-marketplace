@@ -22,7 +22,7 @@ dns:
 platform:
   # -- Subscription holding the env zones.
   subscriptionId: ""
-  # -- Resource group of the env zones (rg-bbm-<env>-data-ncus).
+  # -- Resource group of the env zones (rg-bbm-<env>-data-<abbr>).
   dnsResourceGroup: ""
   # -- Client ID of id-bbm-<env>-certmgr (DNS Zone Contributor on the env
   # zones, federated with system:serviceaccount:cert-manager:cert-manager).
@@ -31,7 +31,7 @@ platform:
 ingress:
   # -- Static public IP the Gateway's LoadBalancer Service binds (pip-bbm-<env>-ingress).
   publicIpName: ""
-  # -- Resource group of that IP (rg-bbm-<env>-data-ncus).
+  # -- Resource group of that IP (rg-bbm-<env>-data-<abbr>).
   publicIpResourceGroup: ""
 
 # ---- chart settings ----

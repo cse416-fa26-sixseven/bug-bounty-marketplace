@@ -1,4 +1,4 @@
-# Staging cluster (aks-bbm-staging-ncus).
+# Staging cluster (aks-bbm-staging-dke).
 gateway:
   scaling:
     minReplicas: 2

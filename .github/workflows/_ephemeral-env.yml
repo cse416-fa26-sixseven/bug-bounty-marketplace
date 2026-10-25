@@ -75,16 +75,6 @@ on:
 permissions:
   contents: read
 
-# Names follow modules/naming; the region comes from the repo variables
-# AZURE_LOCATION / AZURE_LOCATION_ABBR (bootstrap gh_setup_commands). The
-# callers' gate jobs skip the run while they are unset.
-env:
-  DATA_RG: rg-bbm-test-data-${{ vars.AZURE_LOCATION_ABBR }}
-  COMPUTE_RG: rg-bbm-test-compute-${{ vars.AZURE_LOCATION_ABBR }}
-  CLUSTER: aks-bbm-test-${{ vars.AZURE_LOCATION_ABBR }}
-  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
-  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
-
 jobs:
   ns:
     name: ${{ inputs.action }} ${{ inputs.namespace }}
@@ -113,6 +103,17 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Names follow modules/naming. The region is the test env's: the `test`
+      # and `preview` GitHub Environments carry it as AZURE_LOCATION /
+      # AZURE_LOCATION_ABBR (bootstrap gh_setup_commands), overriding the
+      # home-region repo variables (ADR 0002 section 8). Set at job level so
+      # the Environment's values apply; both actions check them against
+      # envs/test/data.tfvars (delete reads it from the default branch).
+      DATA_RG: rg-bbm-test-data-${{ vars.AZURE_LOCATION_ABBR }}
+      COMPUTE_RG: rg-bbm-test-compute-${{ vars.AZURE_LOCATION_ABBR }}
+      CLUSTER: aks-bbm-test-${{ vars.AZURE_LOCATION_ABBR }}
+      BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+      BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
     steps:
       - name: Check inputs and configuration
         env:
@@ -135,15 +136,30 @@ jobs:
             exit 1
           fi
           if [[ -z "$BBM_REGION_ABBR" || -z "$BBM_LOCATION" ]]; then
-            echo "::error::Repo variables AZURE_LOCATION / AZURE_LOCATION_ABBR are not set. Run the bootstrap gh_setup_commands."
+            echo "::error::Variables AZURE_LOCATION / AZURE_LOCATION_ABBR are not set. Run the bootstrap gh_setup_commands."
             exit 1
           fi
           echo "VALUES_INFRA=$RUNNER_TEMP/values-infra.yaml" >>"$GITHUB_ENV"
 
-      # delete needs no repo files (and a closed PR's merge ref may be gone).
       - name: Checkout
         if: inputs.action == 'deploy'
         uses: actions/checkout@v4
+
+      # delete only needs the test env's region. Read it from the default
+      # branch, not the PR ref: a closed PR's merge ref or branch may be gone.
+      - name: Checkout region files (default branch)
+        if: inputs.action == 'delete'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          sparse-checkout: |
+            infra/terraform/scripts
+            infra/terraform/envs
+
+      # Stale AZURE_LOCATION(_ABBR) Environment variables would point
+      # DATA_RG / COMPUTE_RG / CLUSTER at the wrong region's names.
+      - name: Check the test env region
+        run: infra/terraform/scripts/env-region.sh test --check
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -161,7 +177,7 @@ jobs:
           set -euo pipefail
           ps=$(az group show -n "$DATA_RG" --query 'tags."power-state"' -o tsv 2>/dev/null || true)
           aks=$(az aks list -g "$COMPUTE_RG" \
-            --query "[?name=='$CLUSTER'] | [0].[powerState.code, provisioningState]" -o tsv 2>/dev/null | tr '\t' ' ' || true)
+            --query "[?name=='$CLUSTER'] | [0].join(' ', [powerState.code, provisioningState])" -o tsv 2>/dev/null || true)
           echo "power-state tag: ${ps:-unset}; $CLUSTER: ${aks:-not found}"
           if [[ "$ACTION" == delete ]]; then
             if [[ "$aks" == "Running Succeeded" ]]; then

@@ -388,3 +388,83 @@ run "rejects_bad_sku_tier" {
 
   expect_failures = [var.aks_sku_tier]
 }
+
+# Student-quota setting: upgrades off must plan (azurerm has no "none" value),
+# leave the channel unset and drop the maintenance windows.
+run "upgrades_off" {
+  command = plan
+
+  variables {
+    automatic_upgrade_channel = "none"
+    node_os_upgrade_channel   = "None"
+  }
+
+  assert {
+    condition = (
+      module.aks.upgrades.automatic_upgrade_channel == null &&
+      module.aks.upgrades.node_os_upgrade_channel == "None"
+    )
+    error_message = "upgrades off must leave automatic_upgrade_channel unset (null) and node OS upgrades None"
+  }
+
+  assert {
+    condition = (
+      module.aks.upgrades.maintenance_window_auto_upgrade == 0 &&
+      module.aks.upgrades.maintenance_window_node_os == 0
+    )
+    error_message = "upgrades off must drop both maintenance-window blocks"
+  }
+}
+
+# Contrast: the stack defaults (upgrades on) keep the channels and windows.
+run "upgrades_on_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      module.aks.upgrades.automatic_upgrade_channel == "patch" &&
+      module.aks.upgrades.node_os_upgrade_channel == "NodeImage" &&
+      module.aks.upgrades.maintenance_window_auto_upgrade == 1 &&
+      module.aks.upgrades.maintenance_window_node_os == 1
+    )
+    error_message = "default upgrade channels must plan with one maintenance window each"
+  }
+}
+
+# One region per env (ADR 0002 section 8): staging's cluster, its RGs and its
+# node pool size follow envs/staging/compute.tfvars; KEDA off.
+run "env_in_its_own_region" {
+  command = plan
+
+  variables {
+    location         = "francecentral"
+    location_abbr    = "frc"
+    system_vm_size   = "Standard_B4as_v2"
+    system_min_count = 1
+    system_max_count = 1
+    keda_enabled     = false
+  }
+
+  assert {
+    condition = (
+      module.aks.name == "aks-bbm-staging-frc" &&
+      data.azurerm_resource_group.compute.name == "rg-bbm-staging-compute-frc" &&
+      module.naming.env.aks_node_resource_group == "rg-bbm-staging-aksnodes-frc"
+    )
+    error_message = "cluster and RG names must follow the env's region"
+  }
+
+  assert {
+    condition     = !module.aks.keda_enabled
+    error_message = "keda_enabled = false must turn the KEDA add-on off"
+  }
+}
+
+run "keda_on_by_default" {
+  command = plan
+
+  assert {
+    condition     = module.aks.keda_enabled
+    error_message = "the KEDA add-on stays on by default"
+  }
+}

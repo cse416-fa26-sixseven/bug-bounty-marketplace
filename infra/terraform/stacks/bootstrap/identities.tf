@@ -343,8 +343,9 @@ locals {
 module "github_oidc" {
   source = "../../modules/github-oidc"
 
-  repo       = var.github_repo
-  identities = local.oidc_identities
+  repo           = var.github_repo
+  subject_prefix = var.github_oidc_subject_prefix
+  identities     = local.oidc_identities
 }
 
 # ---- human access -----------------------------------------------------------

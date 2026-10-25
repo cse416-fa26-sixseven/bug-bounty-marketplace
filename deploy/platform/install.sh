@@ -15,7 +15,9 @@
 #
 # After a successful install it stamps namespace bbm-platform with
 # bbm.io/platform-rev, a hash of what it installed (cert-manager version and
-# values, the bbm-platform chart minus README/ci). `install.sh --print-rev`
+# values, the bbm-platform chart minus README/ci; in YAML/template files,
+# whole-line # comments and blank lines are ignored, so comment-only edits
+# keep the revision). `install.sh --print-rev`
 # prints the hash of the current checkout, so PR previews (which never
 # install the platform) can tell a missing or outdated platform apart.
 set -euo pipefail
@@ -68,7 +70,15 @@ h = hashlib.sha256(("cert-manager " + cm_version + "\n").encode())
 for f in sorted(p.replace(os.sep, "/") for p in files):
     h.update(f.encode() + b"\0")
     with open(os.path.join(root, f), "rb") as fh:
-        h.update(hashlib.sha256(fh.read()).hexdigest().encode() + b"\n")
+        data = fh.read()
+    if f.endswith((".yaml", ".yml", ".tpl")):
+        # Drop whole-line "#" comments and blank lines. Caveat: a "#" line
+        # inside a YAML block scalar (key: |) is content, not a comment; the
+        # chart has none today, so keep it that way or hash such files raw.
+        data = b"\n".join(
+            ln.rstrip() for ln in data.splitlines()
+            if ln.strip() and not ln.lstrip().startswith(b"#"))
+    h.update(hashlib.sha256(data).hexdigest().encode() + b"\n")
 print(h.hexdigest()[:16])
 PYREV
 }

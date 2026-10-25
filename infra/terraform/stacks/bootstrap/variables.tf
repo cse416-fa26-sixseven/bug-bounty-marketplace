@@ -9,7 +9,7 @@ variable "subscription_id" {
 }
 
 variable "location" {
-  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
+  description = "Home region (full name), e.g. northcentralus: tfstate, the shared RG and its resources. Env regions come from env_locations. infra/up.sh --location writes it here, in global.tfvars and in the backend .hcl files."
   type        = string
   default     = "northcentralus"
 }
@@ -18,6 +18,20 @@ variable "location_abbr" {
   description = "Short region code used in names (e.g. ncus). Null derives it from location (modules/naming local.location_abbrs)."
   type        = string
   default     = null
+}
+
+variable "env_locations" {
+  description = "Region of each env (test, staging, prod): its data/compute resource groups and every env-scoped name (rg-bbm-<env>-data-<abbr>, aks-bbm-<env>-<abbr>, ...). location_abbr null derives it from modules/naming. An env missing from the map uses the home region (location / location_abbr). infra/up.sh writes it from envs/<env>/data.tfvars (ADR 0002 section 8)."
+  type = map(object({
+    location      = string
+    location_abbr = optional(string)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for e in keys(var.env_locations) : contains(["test", "staging", "prod"], e)])
+    error_message = "env_locations keys must be test, staging or prod."
+  }
 }
 
 variable "github_repo" {
@@ -85,4 +99,25 @@ variable "preregistered_resource_providers" {
   description = "Resource provider namespaces that are ALREADY registered on the subscription; they are imported instead of created (avoids 'already registered' errors)."
   type        = list(string)
   default     = []
+}
+
+variable "dns_mx_records" {
+  description = "MX records at the parent zone apex (mail forwarding for addresses like alerts@<zone>). Empty = no MX record."
+  type = list(object({
+    preference = number
+    exchange   = string
+  }))
+  default = []
+}
+
+variable "dns_txt_records" {
+  description = "TXT values at the parent zone apex (e.g. the mail provider's SPF record). Empty = no TXT record."
+  type        = list(string)
+  default     = []
+}
+
+variable "github_oidc_subject_prefix" {
+  description = "OIDC subject prefix GitHub sends for github_repo. Empty = repo:<github_repo>. Repos with GitHub's immutable subject setting need repo:<owner>@<id>/<name>@<id>; infra/up.sh reads it from gh api repos/<repo>/actions/oidc/customization/sub."
+  type        = string
+  default     = ""
 }

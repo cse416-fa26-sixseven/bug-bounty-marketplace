@@ -1,4 +1,4 @@
-# Staging (AKS aks-bbm-staging-ncus). Layer on top of values.yaml, then
+# Staging (AKS aks-bbm-staging-dke). Layer on top of values.yaml, then
 # values-infra.yaml (terraform compute output), then the image tag:
 #
 #   helm upgrade --install bbm deploy/helm/bbm -n bbm \
