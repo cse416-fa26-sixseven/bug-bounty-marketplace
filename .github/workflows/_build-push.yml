@@ -218,7 +218,8 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.id }}-${{ matrix.arch }}
+          # "--" separators: a "digests-web-*" pattern would also match web-mocked.
+          name: digests--${{ matrix.id }}--${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -245,7 +246,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-${{ matrix.id }}-*
+          pattern: digests--${{ matrix.id }}--*
           merge-multiple: true
 
       - name: Azure login (OIDC)
