@@ -7,6 +7,9 @@ locals {
   issuer   = "https://token.actions.githubusercontent.com"
   audience = "api://AzureADTokenExchange"
   owners   = distinct(concat([data.azuread_client_config.current.object_id], var.owner_object_ids))
+  # Entra makes the creator of an app registration its owner automatically, so
+  # an azuread_application_owner for the caller fails with "already exists".
+  extra_app_owners = [for o in local.owners : o if o != data.azuread_client_config.current.object_id]
 
   # "<identity>/<subject-suffix>" => {identity, subject}
   credentials = merge([
@@ -41,7 +44,7 @@ resource "azuread_application_registration" "this" {
 resource "azuread_application_owner" "this" {
   for_each = merge([
     for name in keys(var.identities) : {
-      for o in local.owners : "${name}/${o}" => { identity = name, owner = o }
+      for o in local.extra_app_owners : "${name}/${o}" => { identity = name, owner = o }
     }
   ]...)
 
