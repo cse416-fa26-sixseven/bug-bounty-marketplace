@@ -744,6 +744,10 @@ for e in "${ENVS[@]}"; do
 
   cluster=$(tf_out compute "$e" cluster_name)
   crg=$(tf_out compute "$e" resource_group_name)
+  # env-power, deploy.yml and cd.yml read the data RG's power-state tag
+  # (Terraform ignores it); a freshly applied cluster is running.
+  run az group update -n "$(tf_out data "$e" resource_group_name)" --subscription "$SUB" \
+    --set tags.power-state=running -o none
   kubeconfig="$WORK/kubeconfig-$e"
   run az aks get-credentials -g "$crg" -n "$cluster" --file "$kubeconfig" --overwrite-existing
   run kubelogin convert-kubeconfig -l azurecli --kubeconfig "$kubeconfig"
