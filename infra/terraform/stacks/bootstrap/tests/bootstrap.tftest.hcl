@@ -636,3 +636,19 @@ run "mail_records" {
     error_message = "one apex TXT record expected"
   }
 }
+
+# Repos with GitHub's immutable OIDC subjects send numeric ids in the subject.
+run "immutable_oidc_subject" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:example-org@111/example-repo@222"
+  }
+
+  assert {
+    condition = alltrue([
+      for c in flatten(values(module.github_oidc.subjects)) : startswith(c, "repo:example-org@111/example-repo@222:")
+    ]) && length(flatten(values(module.github_oidc.subjects))) > 0
+    error_message = "every federated subject must use github_oidc_subject_prefix"
+  }
+}

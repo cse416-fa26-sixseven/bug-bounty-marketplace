@@ -20,6 +20,8 @@ env_locations = {
 }
 
 github_repo = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs it with gh repo view
+# OIDC subject prefix GitHub sends (immutable subjects use numeric ids); infra/up.sh keeps it current.
+github_oidc_subject_prefix = "repo:cse416-fa26-sixseven@343170626/bug-bounty-marketplace@1398822185"
 
 # Object ID of the bbm-admins Entra group (az ad group show -g bbm-admins --query id -o tsv).
 admin_object_ids          = ["bf41ada0-7cb4-48ca-9c34-c2616abf5b54"]

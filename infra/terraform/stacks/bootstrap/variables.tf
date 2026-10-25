@@ -115,3 +115,9 @@ variable "dns_txt_records" {
   type        = list(string)
   default     = []
 }
+
+variable "github_oidc_subject_prefix" {
+  description = "OIDC subject prefix GitHub sends for github_repo. Empty = repo:<github_repo>. Repos with GitHub's immutable subject setting need repo:<owner>@<id>/<name>@<id>; infra/up.sh reads it from gh api repos/<repo>/actions/oidc/customization/sub."
+  type        = string
+  default     = ""
+}

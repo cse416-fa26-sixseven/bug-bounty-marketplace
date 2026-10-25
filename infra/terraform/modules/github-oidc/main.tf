@@ -6,7 +6,10 @@ data "azuread_client_config" "current" {}
 locals {
   issuer   = "https://token.actions.githubusercontent.com"
   audience = "api://AzureADTokenExchange"
-  owners   = distinct(concat([data.azuread_client_config.current.object_id], var.owner_object_ids))
+  # GitHub's default subject is repo:<owner>/<name>:...; repos with the
+  # immutable subject setting send repo:<owner>@<id>/<name>@<id>:... instead.
+  subject_prefix = var.subject_prefix != "" ? var.subject_prefix : "repo:${var.repo}"
+  owners         = distinct(concat([data.azuread_client_config.current.object_id], var.owner_object_ids))
   # Entra makes the creator of an app registration its owner automatically, so
   # an azuread_application_owner for the caller fails with "already exists".
   extra_app_owners = [for o in local.owners : o if o != data.azuread_client_config.current.object_id]
@@ -17,7 +20,7 @@ locals {
       for s in concat([for e in id.environments : "environment:${e}"], id.extra_subjects) :
       "${name}/${s}" => {
         identity = name
-        subject  = "repo:${var.repo}:${s}"
+        subject  = "${local.subject_prefix}:${s}"
         # Credential display names allow only [A-Za-z0-9_-], max 120 chars.
         display_name = substr(replace(s, "/[^A-Za-z0-9_-]/", "-"), 0, 120)
       }

@@ -199,6 +199,18 @@ if have gh && gh_repo=$(cd "$BBM_REPO_ROOT" && gh repo view --json nameWithOwner
 else
   info "gh repo view unavailable; using github_repo = $REPO from bootstrap.tfvars"
 fi
+# The OIDC subject GitHub sends: repo:<owner>/<name> by default, or with numeric
+# ids when the repo uses immutable subjects. The federated credentials must match.
+if have gh && sub_prefix=$(gh api "repos/$REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix 2>/dev/null) &&
+  [[ "$sub_prefix" =~ ^repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$ ]]; then
+  [[ "$sub_prefix" == "repo:$REPO" ]] && sub_prefix=""
+  if [[ "$sub_prefix" != "$(tfvars_get_string "$BOOT_VARS" github_oidc_subject_prefix)" ]]; then
+    info "GitHub OIDC subject prefix: ${sub_prefix:-repo:$REPO (default)}"
+    tfvars_set "$BOOT_VARS" github_oidc_subject_prefix "$(hcl_quote "$sub_prefix")"
+  fi
+else
+  info "could not read the repo's OIDC subject prefix; using github_oidc_subject_prefix from bootstrap.tfvars"
+fi
 if [[ $SKIP_GH == 0 ]]; then
   gh auth status >/dev/null 2>&1 || die "gh is not logged in: gh auth login (or pass --skip-github)"
   [[ "$(gh api "repos/$REPO" --jq .permissions.admin 2>/dev/null)" == true ]] ||
