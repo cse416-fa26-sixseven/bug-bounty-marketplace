@@ -11,7 +11,7 @@ location_abbr   = "ncus"
 kubernetes_version = "1.34"
 
 # One system pool runs everything (one node; see the quota note below).
-system_vm_size              = "Standard_B4as_v2"
+system_vm_size              = "Standard_B4ps_v2" # arm64 (Ampere): canadacentral offers no x86 B-series 4 vCPU size to this subscription
 system_min_count            = 1
 system_max_count            = 1
 system_only_critical_addons = false

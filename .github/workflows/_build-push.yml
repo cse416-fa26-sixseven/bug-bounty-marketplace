@@ -99,10 +99,11 @@ jobs:
           esac
           matrix=$(jq -cn --argjson services "$SERVICES" --arg tag "$TAG" --arg mocked "$WEB_MOCKED" '
             def spec:
-              { api:       { context: ".",                file: "apps/api/Dockerfile" },
-                web:       { context: ".",                file: "apps/web/Dockerfile" },
-                analysis:  { context: "workers/analysis", file: "workers/analysis/Dockerfile" },
-                contracts: { context: "contracts",        file: "contracts/Dockerfile" } };
+              # api and web also run on the arm64 test cluster (ADR 0002 §8).
+              { api:       { context: ".",                file: "apps/api/Dockerfile",            platforms: "linux/amd64,linux/arm64" },
+                web:       { context: ".",                file: "apps/web/Dockerfile",            platforms: "linux/amd64,linux/arm64" },
+                analysis:  { context: "workers/analysis", file: "workers/analysis/Dockerfile",    platforms: "linux/amd64" },
+                contracts: { context: "contracts",        file: "contracts/Dockerfile",           platforms: "linux/amd64" } };
             ($services | if type == "array" and length > 0 then . else error("services must be a non-empty JSON array") end) as $s
             | ($s - (spec | keys)) as $unknown
             | if ($unknown | length) > 0 then error("unknown services: \($unknown | join(", "))") else . end
@@ -156,6 +157,11 @@ jobs:
           ACR_NAME: ${{ vars.ACR_NAME }}
         run: az acr login --name "$ACR_NAME"
 
+      # arm64 images are cross-built under QEMU on the amd64 runner.
+      - name: Set up QEMU
+        if: contains(matrix.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -164,6 +170,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ env.IMAGE }}:${{ matrix.tag }}
           # Only apps/web declares this ARG; the other Dockerfiles ignore it.
