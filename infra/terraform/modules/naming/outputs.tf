@@ -8,6 +8,11 @@ output "location" {
   value       = var.location
 }
 
+output "location_abbr" {
+  description = "Short region code the names were built with (var.location_abbr, or derived from var.location)."
+  value       = local.loc
+}
+
 output "global" {
   description = "Names of global/shared resources (tfstate, shared RG, ACR, shared LAW/KV)."
   value       = local.global

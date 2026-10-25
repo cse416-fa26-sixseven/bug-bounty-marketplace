@@ -31,7 +31,9 @@
 # up.sh wrote (subscription_id, suffix, admin/power-operator/Key Vault officer
 # object ids, the global hint block's principal ids, backend state account)
 # are reset to their placeholders, so up.sh on another tenant starts clean.
-# dns_zone_name, alert_emails, github_reviewer_ids and github_repo are kept.
+# dns_zone_name, alert_emails, github_reviewer_ids, github_repo and the region
+# (location / location_abbr: a user choice, not per tenant) are kept; if the
+# next subscription needs another region, pass up.sh --location <region>.
 # --envs alone changes no files. Re-running after a failure continues where it
 # stopped.
 set -euo pipefail
@@ -340,7 +342,8 @@ reset_tenant_fields
 cat >&2 <<EOF
 
 Done. The per-tenant fields above were reset to placeholders ($PLACEHOLDER_GUID / "$PLACEHOLDER_SUFFIX" /
-stbbmtfstate$PLACEHOLDER_SUFFIX); commit them. Kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo.
+stbbmtfstate$PLACEHOLDER_SUFFIX); commit them. Kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo,
+location ($(tfvars_get_string "$BOOT_VARS" location); a new subscription in another region: infra/up.sh --location <region>).
   - Deleted Entra app registrations sit in the recycle bin for 30 days (only matters for reusing names at once).
   - stacks/bootstrap/terraform.tfstate.* backups (gitignored) can be deleted.
 EOF

@@ -3,9 +3,11 @@
 # Do not set tfstate_* here: -var-file values would override the TF_VAR_* that CI exports.
 subscription_id = "00000000-0000-0000-0000-000000000000"
 env             = "prod"
+location        = "northcentralus" # infra/up.sh --location (same in every tfvars)
+location_abbr   = "ncus"
 
 # Minor version only (patch channel keeps the patch current). Check GA versions
-# before the first apply: az aks get-versions -l eastus2 -o table
+# before the first apply: az aks get-versions -l <location> -o table (infra/up.sh checks it)
 kubernetes_version = "1.34"
 
 # Uptime SLA for prod only (ADR 0002); test and staging stay on Free.

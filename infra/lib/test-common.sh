@@ -41,7 +41,7 @@ eq() { # eq <name> <got> <want>
 make_tree() {
   local dst=$1
   mkdir -p "$dst"
-  (cd "$repo/infra/terraform" && tar --exclude=.terraform -cf - scripts envs stacks/bootstrap) | (cd "$dst" && tar -xf -)
+  (cd "$repo/infra/terraform" && tar --exclude=.terraform -cf - scripts envs stacks/bootstrap modules/naming) | (cd "$dst" && tar -xf -)
   local b="$dst/envs/global/bootstrap.tfvars" g="$dst/envs/global/global.tfvars"
   grep -q '^dns_zone_name' "$b" || printf '\ndns_zone_name = "" # set by infra/up.sh\n' >>"$b"
   if ! grep -qF '# >>> bootstrap hint' "$g"; then
@@ -74,7 +74,7 @@ G="$TREE/envs/global/global.tfvars"
 D="$TREE/envs/staging/data.tfvars"
 C="$TREE/envs/prod/compute.tfvars"
 
-eq "get string" "$(tfvars_get_string "$B" location)" "eastus2"
+eq "get string" "$(tfvars_get_string "$B" location)" "northcentralus"
 eq "get list" "$(tfvars_get "$B" admin_object_ids)" "[]"
 check_fails "get missing key dies" tfvars_get "$B" no_such_key
 check_fails "get multi-line value dies" tfvars_get "$D" subnet_cidrs
@@ -188,6 +188,7 @@ eq "reset: keeps dns_zone_name" "$(tfvars_get_string "$RB" dns_zone_name)" "bbm.
 eq "reset: keeps hint dns_zone_name" "$(tfvars_get_string "$RG_" dns_zone_name)" "bbm.example.com"
 eq "reset: keeps alert_emails" "$(tfvars_get "$RB" alert_emails)" '["me@uni.edu"]'
 eq "reset: keeps github_reviewer_ids" "$(tfvars_get "$RB" github_reviewer_ids)" "[12345]"
+eq "reset: keeps location" "$(tfvars_get_string "$RB" location)/$(tfvars_get_string "$RT/envs/prod/data.tfvars" location_abbr)" "northcentralus/ncus"
 if grep -qE '^bbm: set .*/envs/global/bootstrap.tfvars: admin_object_ids = \[\]$' <<<"$reset_out"; then
   ok_ "reset: prints what it reset"
 else
@@ -198,10 +199,61 @@ if [[ -n "$real_terraform" ]]; then
 fi
 BBM_TF_ROOT="$TREE"
 
+# region map (parsed from modules/naming/main.tf), validation and set_region
+for pair in northcentralus=ncus canadacentral=cac francecentral=frc eastus2=eus2 centralus=cus; do
+  eq "region_abbr ${pair%%=*}" "$(region_abbr "${pair%%=*}")" "${pair#*=}"
+done
+check_fails "region_abbr unknown region" region_abbr swedencentral
+eq "resolve: map" "$(resolve_location_abbr canadacentral)" "cac"
+eq "resolve: explicit abbr for unknown region" "$(resolve_location_abbr swedencentral sdc)" "sdc"
+eq "resolve: explicit abbr matching the map" "$(resolve_location_abbr northcentralus ncus)" "ncus"
+check_fails "resolve: unknown region without abbr dies" resolve_location_abbr swedencentral
+check_fails "resolve: abbr not matching the map dies" resolve_location_abbr northcentralus eus2
+check_fails "resolve: bad abbr dies" resolve_location_abbr swedencentral Sweden-1
+check_fails "resolve: bad region name dies" resolve_location_abbr "North Central US"
+
+SR="$T/tree-region"
+make_tree "$SR"
+BBM_TF_ROOT="$SR"
+set_region canadacentral cac 2>/dev/null
+n_tfvars=0 n_ok=0
+while IFS= read -r f; do
+  n_tfvars=$((n_tfvars + 1))
+  [[ "$(tfvars_get_string "$f" location)/$(tfvars_get_string "$f" location_abbr)" == canadacentral/cac ]] && n_ok=$((n_ok + 1))
+done < <(find "$SR/envs" -name '*.tfvars' | sort)
+eq "set_region: location + abbr in every tfvars ($n_tfvars files)" "$n_ok" "$n_tfvars"
+eq "set_region: covers bootstrap, global, data and compute" "$n_tfvars" "8"
+eq "set_region: backend state RGs" \
+  "$(grep -h '^resource_group_name' "$SR"/envs/*/backend*.hcl | sort -u | tr -s ' ')" 'resource_group_name = "rg-bbm-tfstate-cac"'
+eq "set_region: no old region left" "$(grep -rhE '^[^#]*(northcentralus|"ncus"|tfstate-ncus)' "$SR/envs" | wc -l | tr -d ' ')" "0"
+if [[ -n "$real_terraform" ]]; then
+  tf_fmt -recursive "$SR/envs"
+  check "set_region tfvars pass terraform fmt -check" terraform fmt -check -recursive "$SR/envs"
+fi
+sed '/^location_abbr/d' "$SR/envs/test/compute.tfvars" >"$T/c.tmp" && cat "$T/c.tmp" >"$SR/envs/test/compute.tfvars"
+check_fails "set_region: compute.tfvars without location_abbr dies" set_region canadacentral cac
+BBM_TF_ROOT="$TREE"
+
+# allowed_locations_json with a stubbed az (the subscription's policy assignments)
+az() { printf '%s' "$AZ_POLICY_OUT"; }
+S1=/subscriptions/11111111-2222-3333-4444-555555555555
+AZ_POLICY_OUT='[{"scope":"'$S1'","locs":["francecentral","belgiumcentral","denmarkeast","northcentralus","canadacentral"]}]'
+eq "allowed: student policy" "$(allowed_locations_json 11111111-2222-3333-4444-555555555555)" \
+  '["belgiumcentral","canadacentral","denmarkeast","francecentral","northcentralus"]'
+AZ_POLICY_OUT='[{"scope":"'$S1'","locs":["northcentralus","canadacentral","global"]},{"scope":"/providers/Microsoft.Management/managementGroups/mg1","locs":["CanadaCentral","eastus2","global"]},{"scope":"'$S1'/resourceGroups/rg1","locs":["eastus2"]}]'
+eq "allowed: intersection, management group inherited, RG scope ignored" \
+  "$(allowed_locations_json 11111111-2222-3333-4444-555555555555)" '["canadacentral","global"]'
+AZ_POLICY_OUT='[]'
+eq "allowed: no assignment → null" "$(allowed_locations_json 11111111-2222-3333-4444-555555555555)" "null"
+# shellcheck disable=SC2317 # stub, called by allowed_locations_json
+az() { return 1; }
+check_fails "allowed: az failure is reported" allowed_locations_json 11111111-2222-3333-4444-555555555555
+unset -f az
+
 # shellcheck disable=SC2034 # read by common.sh
 DRY_RUN=1
 before=$(cat "$B")
-tfvars_set "$B" location '"centralus"' 2>/dev/null
+tfvars_set "$B" location '"canadacentral"' 2>/dev/null
 tfvars_list_add "$B" admin_object_ids x 2>/dev/null
 eq "dry-run does not write" "$(cat "$B")" "$before"
 DRY_RUN=0
@@ -255,15 +307,33 @@ case "$1 $2" in
       name) echo "bbm-student-sub" ;; tenantId) echo "99999999-0000-0000-0000-000000000000" ;;
       user.name) echo "me@uni.edu" ;; *) ;; esac ;;
   "account set") ;;
+  "account list-locations")
+    loc=$(sed -nE "s/.*name=='([a-z0-9]+)'.*/\1/p" <<<"$q")
+    case "$loc" in
+      canadacentral | eastus2) echo "{\"name\":\"$loc\",\"availabilityZoneMappings\":[{\"logicalZone\":\"1\"}]}" ;;
+      northcentralus | francecentral | swedencentral) echo "{\"name\":\"$loc\"}" ;;
+      *) ;;
+    esac ;;
+  "policy assignment")
+    # Azure for Students: "Allowed resource deployment regions" on the subscription
+    def='[{"scope":"/subscriptions/11111111-2222-3333-4444-555555555555","locs":["francecentral","belgiumcentral","denmarkeast","northcentralus","canadacentral"]}]'
+    echo "${BBM_TEST_POLICY:-$def}" ;;
+  "provider show") echo "${BBM_TEST_COMPUTE_STATE:-Registered}" ;;
+  "provider register") ;;
   "ad signed-in-user") echo "aaaaaaaa-0000-0000-0000-000000000001" ;;
   "role assignment") echo 1 ;;
   "provider list") printf 'Microsoft.Network\nMicrosoft.Storage\nMicrosoft.Web\n' ;;
-  "group exists") echo false ;;
+  "group exists")
+    n=""; prev=""
+    for a in "$@"; do [[ "$prev" == -n ]] && n=$a; prev=$a; done
+    if [[ -n "$n" && "$n" == "${BBM_TEST_GROUP_EXISTS:-}" ]]; then echo true; else echo false; fi ;;
   "storage account") echo "stbbmtfstateab12" ;;
-  "vm list-usage") echo '[{"name":{"value":"cores"},"currentValue":0,"limit":10},{"name":{"value":"standardBASv2Family"},"currentValue":0,"limit":2}]' ;;
+  "vm list-usage")
+    def='[{"name":{"value":"cores"},"currentValue":0,"limit":10},{"name":{"value":"standardBASv2Family"},"currentValue":0,"limit":2}]'
+    echo "${BBM_TEST_USAGE:-$def}" ;;
   "postgres flexible-server") echo '[{"supportedServerEditions":[{"name":"Burstable","supportedServerSkus":[{"name":"Standard_B1ms"}]}]}]' ;;
   "aks get-versions") echo '{"values":[{"version":"1.32","isPreview":null},{"version":"1.33","isPreview":null,"isDefault":true},{"version":"1.35","isPreview":true}]}' ;;
-  "keyvault list-deleted") printf 'kv-bbm-stg-ab12\teastus2\nkv-bbm-shared-ab12\teastus2\nkv-bbm-stg-zz99\teastus2\nkv-bbm-prd-ab12\teastus2\n' ;;
+  "keyvault list-deleted") printf 'kv-bbm-stg-ab12\tnorthcentralus\nkv-bbm-shared-ab12\tnorthcentralus\nkv-bbm-stg-zz99\tnorthcentralus\nkv-bbm-prd-ab12\tnorthcentralus\n' ;;
   *) exit 1 ;;
 esac
 EOF
@@ -289,7 +359,7 @@ case "${args[0]}" in
     [[ "${chdir:-}" == */stacks/bootstrap ]] || exit 1
     case "${args[2]}" in
       suffix) printf ab12 ;;
-      tfstate_resource_group) printf rg-bbm-tfstate-eus2 ;;
+      tfstate_resource_group) printf rg-bbm-tfstate-ncus ;;
       tfstate_storage_account) printf stbbmtfstateab12 ;;
       global_tfvars_hint) printf 'subscription_id = "11111111-2222-3333-4444-555555555555"\nsuffix = "ab12"\n' ;;
       dns_name_servers) echo '["ns1-01.azure-dns.com.","ns2-01.azure-dns.net.","ns3-01.azure-dns.org.","ns4-01.azure-dns.info."]' ;;
@@ -362,10 +432,90 @@ has "up: llm-api-key placeholder" 'llm-api-key --value placeholder-set-me'
 has "up: platform install" 'install.sh test --values'
 has "up: github_repo follows gh repo view" 'github_repo = "neworg/bbm-renamed"'
 has "up: gh admin check uses the new repo" 'gh: admin on neworg/bbm-renamed'
+has "up: region from bootstrap.tfvars" 'region: northcentralus (names use ncus)'
+has "up: allowed-locations policy checked" 'region northcentralus is allowed by the subscription'
+has "up: no zones in northcentralus → ingress_pip_zones = []" 'northcentralus has no availability zones: ingress_pip_zones = []'
 if grep -qF 'filled in for subscription' <<<"$out"; then bad "up: no tenant warning on placeholder"; else ok_ "up: no tenant warning on placeholder"; fi
 eq "up: dry-run left the tree untouched" "$(snapshot)" "$snap0"
-mut=$(grep -E '^az .*(import|secret set|purge|create|delete( |$)| update)|^gh (variable|api -X)|^terraform .*(apply|destroy|init|plan)|^(kubectl|kubelogin|helm) ' "$LOG" || true)
+mut=$(grep -E '^az .*(import|secret set|purge|create|delete( |$)| update| register)|^gh (variable|api -X)|^terraform .*(apply|destroy|init|plan)|^(kubectl|kubelogin|helm) ' "$LOG" || true)
 eq "up: no mutating CLI calls" "$mut" ""
+
+# --location: rewrites every tfvars and backend; checked against the policy
+: >"$LOG"
+TREE4="$T/tree4"
+make_tree "$TREE4"
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --location canadacentral --yes --dry-run; then
+  ok_ "up --location canadacentral --dry-run exits 0"
+else
+  bad "up --location canadacentral --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up --location: region resolved from the map" 'region: canadacentral (names use cac)'
+for f in global/bootstrap.tfvars global/global.tfvars test/data.tfvars staging/data.tfvars prod/data.tfvars \
+  test/compute.tfvars staging/compute.tfvars prod/compute.tfvars; do
+  has "up --location: $f location" "envs/$f: location = \"canadacentral\" (was \"northcentralus\")"
+  has "up --location: $f location_abbr" "envs/$f: location_abbr = \"cac\" (was \"ncus\")"
+done
+for f in global/backend.hcl test/backend-data.hcl staging/backend-compute.hcl prod/backend-data.hcl; do
+  has "up --location: $f state RG" "envs/$f: resource_group_name = \"rg-bbm-tfstate-cac\""
+done
+has "up --location: zones in canadacentral" 'staging/data.tfvars: ingress_pip_zones = ["1", "2", "3"] (was [])'
+has "up --location: quota checked in the new region" 'Quota, SKUs and AKS versions in canadacentral'
+check "up --location: state RG looked up in the new region" grep -qF 'az group exists -n rg-bbm-tfstate-cac' "$LOG"
+check "up --location: quota queried in canadacentral" grep -qF 'az vm list-usage -l canadacentral' "$LOG"
+
+# --location outside the subscription's allowed-locations policy fails early
+: >"$LOG"
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --location eastus2 --yes --dry-run; then
+  bad "up --location eastus2 (not allowed) dies"
+else
+  ok_ "up --location eastus2 (not allowed) dies"
+fi
+out=$(cat "$T/out")
+has "up: policy refusal lists the allowed regions" 'region eastus2 is not allowed by this subscription'"'"'s allowed-locations policy. Allowed: belgiumcentral, canadacentral, denmarkeast, francecentral, northcentralus'
+hasnt_log() { if grep -qE -- "$2" "$LOG"; then bad "$1"; else ok_ "$1"; fi; }
+hasnt_log "up: policy refusal stops before any terraform" '^terraform .*(init|plan|output)'
+
+export BBM_TEST_POLICY='[]'
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --location swedencentral --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: unknown region without --location-abbr dies" 'region swedencentral has no abbreviation in modules/naming/main.tf'
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --location swedencentral --location-abbr sdc --yes --dry-run; then
+  ok_ "up: unknown region with --location-abbr exits 0"
+else
+  bad "up: unknown region with --location-abbr exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: no policy → no restriction" 'no allowed-locations policy assignment on the subscription'
+has "up: explicit abbreviation written" 'location_abbr = "sdc"'
+unset BBM_TEST_POLICY
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --location atlantis --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: nonexistent region dies" "region 'atlantis' is not available to this subscription"
+
+# an existing deployment in the old region blocks --location
+export BBM_TEST_GROUP_EXISTS=rg-bbm-tfstate-ncus
+RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --location francecentral --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: refuses to move a live deployment" 'a deployment still exists in northcentralus (rg-bbm-tfstate-ncus): run infra/down.sh --all first'
+unset BBM_TEST_GROUP_EXISTS
+
+# Microsoft.Compute not registered yet: register early, explain empty quota
+: >"$LOG"
+export BBM_TEST_COMPUTE_STATE=NotRegistered BBM_TEST_USAGE='[]'
+if RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  ok_ "up: unregistered Microsoft.Compute --dry-run exits 0"
+else
+  bad "up: unregistered Microsoft.Compute --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: registers Microsoft.Compute early" 'az provider register -n Microsoft.Compute --wait'
+has "up: quota unknown message" 'vCPU quota unknown until Microsoft.Compute is registered (bootstrap registers it); re-run up.sh after bootstrap to see it'
+hasnt_log "up: dry run does not register providers" '^az provider register'
+unset BBM_TEST_COMPUTE_STATE BBM_TEST_USAGE
 
 check_fails "up: missing --subscription" run_script up.sh
 
@@ -428,9 +578,9 @@ has "down: gh var delete parsed" 'gh variable delete ACR_NAME --repo'
 has "down: gh env delete parsed" 'repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments/test-infra'
 has "down: bootstrap state pull" 'tf.sh bootstrap global state pull'
 has "down: bootstrap destroy" 'tf.sh bootstrap global plan -destroy'
-has "down: purge vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l eastus2'
-has "down --all: purge shared vault" 'az keyvault purge -n kv-bbm-shared-ab12 -l eastus2'
-has "down --all: purge prod vault" 'az keyvault purge -n kv-bbm-prd-ab12 -l eastus2'
+has "down: purge vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l northcentralus'
+has "down --all: purge shared vault" 'az keyvault purge -n kv-bbm-shared-ab12 -l northcentralus'
+has "down --all: purge prod vault" 'az keyvault purge -n kv-bbm-prd-ab12 -l northcentralus'
 hasnt() { if grep -qF -- "$2" <<<"$out"; then bad "$1 (unexpected: $2)"; else ok_ "$1"; fi; }
 hasnt "down --all: other tenant's/suffix's vault kept" 'kv-bbm-stg-zz99'
 has "down --all: prod confirmation noted in dry run" "a real run asks you to type 'prod'"
@@ -459,7 +609,7 @@ else
   sed 's/^/      /' "$T/out"
 fi
 out=$(cat "$T/out")
-has "down --envs staging: purges its vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l eastus2'
+has "down --envs staging: purges its vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l northcentralus'
 hasnt "down --envs staging: keeps the shared vault" 'purge -n kv-bbm-shared-ab12'
 hasnt "down --envs staging: keeps prod's vault" 'purge -n kv-bbm-prd-ab12'
 hasnt "down --envs staging: keeps other suffixes" 'purge -n kv-bbm-stg-zz99'

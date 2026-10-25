@@ -55,7 +55,10 @@ jobs:
   # ---------------------------------------------------------------------
   gate:
     name: Gate
-    if: vars.AZURE_SUBSCRIPTION_ID != '' && vars.ACR_NAME != '' && github.ref == 'refs/heads/main'
+    if: >-
+      vars.AZURE_SUBSCRIPTION_ID != '' && vars.ACR_NAME != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != '' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}

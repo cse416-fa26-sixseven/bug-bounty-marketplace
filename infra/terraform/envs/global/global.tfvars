@@ -10,8 +10,8 @@ secret_officer_sp_object_ids = []   # gh-bbm-global SP (CI can apply)
 dns_zone_name                = ""   # parent zone, e.g. bug-bounty.example.com
 # <<< bootstrap hint
 
-location      = "eastus2"
-location_abbr = "eus2"
+location      = "northcentralus" # infra/up.sh --location (same in every tfvars)
+location_abbr = "ncus"
 
 alert_emails       = ["bbm-admins@example.com"]
 rg_budget_amount   = 20

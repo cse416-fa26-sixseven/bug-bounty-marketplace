@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # One-command, idempotent bring-up of the whole Azure footprint (ADR 0002 §6).
 #
-#   infra/up.sh --subscription <id> [--zone <zone>] [--envs test,staging]
-#               [--prod] [--skip-github] [--yes] [--dry-run]
+#   infra/up.sh --subscription <id> [--zone <zone>] [--location <region>]
+#               [--location-abbr <code>] [--envs test,staging] [--prod]
+#               [--skip-github] [--yes] [--dry-run]
 #
 #   --subscription  target subscription GUID (required)
 #   --zone          DNS zone, e.g. bbm.example.com (default: dns_zone_name in
 #                   envs/global/bootstrap.tfvars, else an interactive prompt)
+#   --location      Azure region, e.g. northcentralus (default: location in
+#                   envs/global/bootstrap.tfvars). Written into every tfvars
+#                   and the backend .hcl state RG names. Must be allowed by
+#                   the subscription's "allowed locations" policy, if any
+#   --location-abbr short code used in names (default: from the region map in
+#                   modules/naming/main.tf; required for regions not in it)
 #   --envs          comma-separated envs to bring up (default: test,staging)
 #   --prod          also bring up prod (same as listing it in --envs)
 #   --skip-github   do not run the generated gh setup script (repo vars + envs)
@@ -20,10 +27,13 @@
 #
 # Steps (each idempotent; a failed run is resumed by running it again):
 #    1 preflight            tools, az login, subscription, your object id, github_repo
-#                           (from gh repo view), gh admin, tenant-switch check
+#                           (from gh repo view), gh admin, tenant-switch check, region
+#                           (exists, allowed by policy, no deployment left in the old
+#                           one), registers Microsoft.Compute (for the quota check)
 #    2 DNS zone             --zone / bootstrap.tfvars / prompt
-#    3 bootstrap.tfvars     subscription, admin ids, providers, alert email, reviewers
-#    4 quota and versions   BASv2/regional vCPU, PG B1ms, AKS GA minor (warnings)
+#    3 bootstrap.tfvars     subscription, admin ids, providers, alert email, reviewers;
+#                           region (location, location_abbr, ingress PIP zones) everywhere
+#    4 quota and versions   BASv2/regional vCPU, PG B1ms, AKS GA minor in the region (warnings)
 #    5 bootstrap            apply on local state, migrate it into the state account
 #    6 tfvars               suffix/subscription everywhere, global hint block, KV officers
 #    7 GitHub               run the generated gh_setup_commands (unless --skip-github)
@@ -50,13 +60,17 @@ usage() {
 
 # ---- args -------------------------------------------------------------------
 
-SUB="" ZONE="" ENVS_ARG="test,staging" WITH_PROD=0 SKIP_GH=0
+SUB="" ZONE="" ENVS_ARG="test,staging" WITH_PROD=0 SKIP_GH=0 LOCATION_ARG="" LOC_ABBR_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --subscription) SUB=${2:?--subscription needs a value}; shift 2 ;;
     --subscription=*) SUB=${1#*=}; shift ;;
     --zone) ZONE=${2:?--zone needs a value}; shift 2 ;;
     --zone=*) ZONE=${1#*=}; shift ;;
+    --location) LOCATION_ARG=${2:?--location needs a value}; shift 2 ;;
+    --location=*) LOCATION_ARG=${1#*=}; shift ;;
+    --location-abbr) LOC_ABBR_ARG=${2:?--location-abbr needs a value}; shift 2 ;;
+    --location-abbr=*) LOC_ABBR_ARG=${1#*=}; shift ;;
     --envs) ENVS_ARG=${2:?--envs needs a value}; shift 2 ;;
     --envs=*) ENVS_ARG=${1#*=}; shift ;;
     --prod) WITH_PROD=1; shift ;;
@@ -160,13 +174,71 @@ if have gh && gh_repo=$(cd "$BBM_REPO_ROOT" && gh repo view --json nameWithOwner
 else
   info "gh repo view unavailable; using github_repo = $REPO from bootstrap.tfvars"
 fi
-LOCATION=$(tfvars_get_string "$BOOT_VARS" location)
-LOC_ABBR=$(tfvars_get_string "$BOOT_VARS" location_abbr)
 if [[ $SKIP_GH == 0 ]]; then
   gh auth status >/dev/null 2>&1 || die "gh is not logged in: gh auth login (or pass --skip-github)"
   [[ "$(gh api "repos/$REPO" --jq .permissions.admin 2>/dev/null)" == true ]] ||
     die "your gh account is not an admin of $REPO (needed to create Environments); or pass --skip-github"
   ok "gh: admin on $REPO"
+fi
+
+# Region: --location, else bootstrap.tfvars (the single source of truth; kept
+# across account switches). The abbreviation comes from modules/naming.
+prev_loc=$(tfvars_get_string "$BOOT_VARS" location)
+prev_abbr=$(tfvars_get_string "$BOOT_VARS" location_abbr)
+LOCATION=$(lower "${LOCATION_ARG:-$prev_loc}")
+[[ -n "$LOCATION" ]] || die "no region: pass --location <region> (e.g. northcentralus)"
+is_location "$LOCATION" || die "'$LOCATION' is not an Azure region name (lowercase, e.g. northcentralus)"
+
+loc_json=$(az account list-locations --query "[?name=='$LOCATION'] | [0]" -o json 2>/dev/null) || loc_json=error
+HAS_ZONES=""
+case "$loc_json" in
+  error) warn "az account list-locations failed; cannot confirm that $LOCATION exists" ;;
+  "" | null) die "region '$LOCATION' is not available to this subscription (az account list-locations -o table)" ;;
+  *)
+    if [[ "$(jq '(.availabilityZoneMappings // []) | length' <<<"$loc_json" 2>/dev/null || echo 0)" -gt 0 ]]; then
+      HAS_ZONES=true
+    else
+      HAS_ZONES=false
+    fi
+    ;;
+esac
+
+abbr_given=$(lower "$LOC_ABBR_ARG")
+[[ -n "$abbr_given" || "$LOCATION" != "$prev_loc" ]] || abbr_given=$prev_abbr
+LOC_ABBR=$(resolve_location_abbr "$LOCATION" "$abbr_given")
+info "region: $LOCATION (names use $LOC_ABBR)"
+
+# Azure for Students (and many org subscriptions) assign an "allowed
+# locations" policy; a region outside it fails every create deep in bootstrap.
+if allowed=$(allowed_locations_json "$SUB"); then
+  allowed_list=$(jq -r 'if . == null then empty else [.[] | select(. != "global")] | join(", ") end' <<<"$allowed")
+  if [[ "$allowed" == null ]]; then
+    info "no allowed-locations policy assignment on the subscription"
+  elif jq -e --arg l "$LOCATION" 'index($l) != null' <<<"$allowed" >/dev/null; then
+    ok "region $LOCATION is allowed by the subscription's allowed-locations policy ($allowed_list)"
+  else
+    die "region $LOCATION is not allowed by this subscription's allowed-locations policy. Allowed: ${allowed_list:-none}. Re-run with --location <one of them>."
+  fi
+else
+  warn "could not read policy assignments (az policy assignment list); not checking allowed locations"
+fi
+
+# Moving an existing deployment is not supported: names embed the region.
+if [[ -n "$prev_abbr" && "$prev_abbr" != "$LOC_ABBR" ]] && is_location_abbr "$prev_abbr" &&
+  az group exists -n "rg-bbm-tfstate-$prev_abbr" -o tsv 2>/dev/null | grep -qx true; then
+  die "a deployment still exists in $prev_loc (rg-bbm-tfstate-$prev_abbr): run infra/down.sh --all first, or re-run without --location"
+fi
+
+# Quota and SKU queries need Microsoft.Compute; bootstrap registers it too
+# (and imports it, since step 3 lists it in preregistered_resource_providers).
+compute_state=$(az provider show -n Microsoft.Compute --query registrationState -o tsv 2>/dev/null || echo unknown)
+if [[ "$compute_state" != Registered ]]; then
+  info "Microsoft.Compute is ${compute_state:-unknown} on this subscription: registering it now (bootstrap needs it anyway; takes a minute or two)"
+  if run az provider register -n Microsoft.Compute --wait; then
+    [[ "$DRY_RUN" == 1 ]] || compute_state=Registered
+  else
+    warn "could not register Microsoft.Compute; bootstrap will register it"
+  fi
 fi
 
 # ---- 2. DNS zone ------------------------------------------------------------
@@ -185,7 +257,17 @@ ZONE=$(lower "$ZONE")
 tfvars_set "$BOOT_VARS" dns_zone_name "$(hcl_quote "$ZONE")"
 
 # ---- 3. bootstrap.tfvars ----------------------------------------------------
-step 3 "Fill envs/global/bootstrap.tfvars"
+step 3 "Fill envs/global/bootstrap.tfvars and the region in every tfvars"
+
+set_region "$LOCATION" "$LOC_ABBR"
+if [[ -n "$HAS_ZONES" ]]; then
+  if [[ "$HAS_ZONES" == true ]]; then zones='["1", "2", "3"]'; else zones='[]'; fi
+  info "$LOCATION $([[ "$HAS_ZONES" == true ]] && echo has || echo "has no") availability zones: ingress_pip_zones = $zones"
+  for e in test staging prod; do
+    tfvars_set_if_present "$ENVS_DIR/$e/data.tfvars" ingress_pip_zones "$zones"
+  done
+fi
+tf_fmt -recursive "$ENVS_DIR"
 
 tfvars_set "$BOOT_VARS" subscription_id "$(hcl_quote "$SUB")"
 tfvars_list_add "$BOOT_VARS" admin_object_ids "$ME"
@@ -227,14 +309,22 @@ step 4 "Quota, SKUs and AKS versions in $LOCATION"
 
 usage_json=$(az vm list-usage -l "$LOCATION" -o json 2>/dev/null || echo '[]')
 need_vcpu=$((2 * ${#ENVS[@]}))
-for fam in cores standardBASv2Family; do
-  read -r cur lim < <(echo "$usage_json" | jq -r --arg n "$fam" \
-    '(.[] | select(.name.value == $n) | "\(.currentValue) \(.limit)") // "? ?"' | head -n1) || true
-  info "vCPU $fam: ${cur:-?} used of ${lim:-?} (this run needs about $need_vcpu for system nodes)"
-  if [[ "${lim:-?}" =~ ^[0-9]+$ && "${cur:-?}" =~ ^[0-9]+$ ]] && ((lim - cur < need_vcpu)); then
-    warn "$fam has only $((lim - cur)) vCPUs free: request more under Portal → Quotas → Compute ($LOCATION)"
+if [[ "$(jq 'length' <<<"$usage_json" 2>/dev/null || echo 0)" == 0 ]]; then
+  if [[ "$compute_state" != Registered ]]; then
+    info "vCPU quota unknown until Microsoft.Compute is registered (bootstrap registers it); re-run up.sh after bootstrap to see it (this run needs about $need_vcpu BASv2 vCPUs)"
+  else
+    warn "az vm list-usage returned no quota data for $LOCATION; check Portal → Quotas → Compute (this run needs about $need_vcpu BASv2 vCPUs)"
   fi
-done
+else
+  for fam in cores standardBASv2Family; do
+    read -r cur lim < <(echo "$usage_json" | jq -r --arg n "$fam" \
+      '(.[] | select(.name.value == $n) | "\(.currentValue) \(.limit)") // "? ?"' | head -n1) || true
+    info "vCPU $fam: ${cur:-?} used of ${lim:-?} (this run needs about $need_vcpu for system nodes)"
+    if [[ "${lim:-?}" =~ ^[0-9]+$ && "${cur:-?}" =~ ^[0-9]+$ ]] && ((lim - cur < need_vcpu)); then
+      warn "$fam has only $((lim - cur)) vCPUs free: request more under Portal → Quotas → Compute ($LOCATION)"
+    fi
+  done
+fi
 
 if az postgres flexible-server list-skus -l "$LOCATION" -o json 2>/dev/null |
   jq -e '[.[].supportedServerEditions[]? | select(.name == "Burstable") | .supportedServerSkus[]?.name] | index("Standard_B1ms")' >/dev/null; then

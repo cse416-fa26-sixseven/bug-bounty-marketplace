@@ -1,9 +1,14 @@
 # stacks/bootstrap — applied once by a subscription Owner (who can also create
 # Entra app registrations). Example values only; no secrets belong here.
 subscription_id = "00000000-0000-0000-0000-000000000000"
-location        = "eastus2"
-location_abbr   = "eus2"
-github_repo     = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs it with gh repo view
+# Region: the single source of truth. infra/up.sh --location <region> rewrites
+# location / location_abbr here and in every other tfvars and backend .hcl
+# (Azure for Students allows only francecentral, belgiumcentral, denmarkeast,
+# northcentralus and canadacentral; up.sh checks the subscription's policy).
+location      = "northcentralus"
+location_abbr = "ncus" # modules/naming local.location_abbrs
+
+github_repo = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs it with gh repo view
 
 # Object ID of the bbm-admins Entra group (az ad group show -g bbm-admins --query id -o tsv).
 admin_object_ids          = []

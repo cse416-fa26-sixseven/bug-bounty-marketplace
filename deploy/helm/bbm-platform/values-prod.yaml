@@ -1,4 +1,4 @@
-# Prod cluster (aks-bbm-prod-eus2).
+# Prod cluster (aks-bbm-prod-ncus).
 gateway:
   scaling:
     minReplicas: 2

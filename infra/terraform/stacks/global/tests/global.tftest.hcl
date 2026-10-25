@@ -15,19 +15,19 @@ mock_provider "azurerm" {
 
   mock_resource "azurerm_container_registry" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.ContainerRegistry/registries/acrbbma1b2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-ncus/providers/Microsoft.ContainerRegistry/registries/acrbbma1b2"
     }
   }
 
   mock_resource "azurerm_log_analytics_workspace" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-shared-eus2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-ncus/providers/Microsoft.OperationalInsights/workspaces/log-bbm-shared-ncus"
     }
   }
 
   mock_resource "azurerm_key_vault" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-shared-a1b2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-shared-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-shared-a1b2"
     }
   }
 

@@ -4,15 +4,15 @@ variable "subscription_id" {
 }
 
 variable "location" {
-  description = "Azure region."
+  description = "Azure region (full name), e.g. northcentralus. infra/up.sh --location writes it into every tfvars."
   type        = string
-  default     = "eastus2"
+  default     = "northcentralus"
 }
 
 variable "location_abbr" {
-  description = "Short region code used in names."
+  description = "Short region code used in names (e.g. ncus). Null derives it from location (modules/naming local.location_abbrs)."
   type        = string
-  default     = "eus2"
+  default     = null
 }
 
 variable "suffix" {

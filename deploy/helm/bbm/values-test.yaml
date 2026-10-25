@@ -1,4 +1,4 @@
-# Ephemeral namespaces on the test cluster (aks-bbm-test-eus2): CI runs
+# Ephemeral namespaces on the test cluster (aks-bbm-test-ncus): CI runs
 # (run-<run_id>-<attempt>) and PR previews (pr-<n>). See ADR 0002 section 1.
 # Layered after the test env's values-infra.yaml (registry, dns, ...), then the
 # per-namespace values, exactly as .github/workflows/_ephemeral-env.yml does:

@@ -3,8 +3,8 @@
 # in-cluster Postgres. dns_zone_name is read from global state.
 subscription_id = "00000000-0000-0000-0000-000000000000"
 env             = "test"
-location        = "eastus2"
-location_abbr   = "eus2"
+location        = "northcentralus" # infra/up.sh --location (same in every tfvars)
+location_abbr   = "ncus"
 suffix          = "0000" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.10.0.0/16"
@@ -17,7 +17,7 @@ subnet_cidrs = {
 postgres_enabled = false
 
 law_daily_quota_gb = 0.25
-ingress_pip_zones  = ["1", "2", "3"]
+ingress_pip_zones  = [] # infra/up.sh: ["1", "2", "3"] if the region has availability zones, else []
 
 # Key Vault Secrets Officer on the env KV (llm-api-key is set out of band).
 # gh-bbm-test already has Secrets Officer on the data RG via bootstrap.

@@ -8,7 +8,7 @@
 #
 # What it does (needs `az login`, kubectl and kubelogin; CI uses the
 # gh-bbm-ephemeral OIDC identity, which has AKS RBAC Cluster Admin there):
-#   1. Skips cleanly (exit 0) when aks-bbm-test-eus2 is not Running
+#   1. Skips cleanly (exit 0) when aks-bbm-test-<region abbr> is not Running
 #      (paused or down): nothing on it is billed per namespace, and the next
 #      run after a resume catches up.
 #   2. Fetches credentials into a temporary kubeconfig (yours is untouched).
@@ -25,10 +25,20 @@
 # reviewer-gated infra-global environment. That job delete-locks the
 # staging/prod bbm-last-deployed-tag tags first and fails closed.
 #
-# Env (optional): BBM_REGION_ABBR (eus2).
+# Env (optional): BBM_REGION_ABBR (default: location_abbr in
+# envs/global/bootstrap.tfvars; CI sets it from repo var AZURE_LOCATION_ABBR).
 set -euo pipefail
 
-abbr=${BBM_REGION_ABBR:-eus2}
+# Region: BBM_LOCATION / BBM_REGION_ABBR (CI: repo vars AZURE_LOCATION /
+# AZURE_LOCATION_ABBR), else location / location_abbr in
+# envs/global/bootstrap.tfvars, the single source of truth infra/up.sh writes.
+boot_tfvars="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/envs/global/bootstrap.tfvars"
+boot_var() { # boot_var <key> → string value from bootstrap.tfvars (empty if absent)
+  [[ -f "$boot_tfvars" ]] || return 0
+  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$boot_tfvars" | head -n1
+}
+abbr=${BBM_REGION_ABBR:-$(boot_var location_abbr)}
+[[ -n "$abbr" ]] || { echo "janitor: region unknown: set BBM_REGION_ABBR" >&2; exit 1; }
 compute_rg="rg-bbm-test-compute-$abbr"
 cluster="aks-bbm-test-$abbr"
 name_re='^(run-[0-9]+-[0-9]+|pr-[0-9]+)$'

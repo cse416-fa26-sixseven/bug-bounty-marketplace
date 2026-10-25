@@ -18,7 +18,7 @@
 "ingress":
   "host": "prod.bbm.example.com"
   "publicIpName": "pip-bbm-prod-ingress"
-  "publicIpResourceGroup": "rg-bbm-prod-data-eus2"
+  "publicIpResourceGroup": "rg-bbm-prod-data-ncus"
 "networkPolicy":
   "postgresCidr": "10.30.2.0/24"
 "dns":
@@ -28,5 +28,5 @@
   "internalZone": "prod.internal.bbm.example.com"
 "platform":
   "subscriptionId": "44444444-4444-4444-4444-444444444444"
-  "dnsResourceGroup": "rg-bbm-prod-data-eus2"
+  "dnsResourceGroup": "rg-bbm-prod-data-ncus"
   "certManagerClientId": "55555555-5555-5555-5555-555555555555"

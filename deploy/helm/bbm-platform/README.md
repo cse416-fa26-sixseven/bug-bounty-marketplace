@@ -40,11 +40,11 @@ dns:
   envZones: [<env>.<zone>]          # test: [test.<zone>, preview.<zone>]
 platform:
   subscriptionId: <guid>
-  dnsResourceGroup: rg-bbm-<env>-data-eus2
+  dnsResourceGroup: rg-bbm-<env>-data-ncus
   certManagerClientId: <guid>       # id-bbm-<env>-certmgr
 ingress:
   publicIpName: pip-bbm-<env>-ingress
-  publicIpResourceGroup: rg-bbm-<env>-data-eus2
+  publicIpResourceGroup: rg-bbm-<env>-data-ncus
 ```
 
 All other keys in the file (`global`, `azure`, `ingress.host`, ...) are
@@ -55,7 +55,7 @@ ignored. Optional chart settings: `acme.email`, `certificate.issuer`,
 ## Install
 
 ```sh
-az aks get-credentials -g rg-bbm-<env>-compute-eus2 -n aks-bbm-<env>-eus2
+az aks get-credentials -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus
 kubelogin convert-kubeconfig -l azurecli
 infra/terraform/scripts/tf.sh compute <env> output -raw helm_values > values-infra.yaml
 deploy/platform/install.sh <env> --values values-infra.yaml [--issuer letsencrypt-staging] [--wait]
@@ -128,13 +128,13 @@ kubectl get httproute -A                              # per-route Accepted / Res
 ```
 
 - No GatewayClass `approuting-istio`: the Gateway API settings are not on
-  the cluster. `az aks show -g rg-bbm-<env>-compute-eus2 -n aks-bbm-<env>-eus2
+  the cluster. `az aks show -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus
   --query ingressProfile` should show `gatewayApi.installation: Standard` and
   `webAppRouting.gatewayApiImplementations.appRoutingIstio.mode: Enabled`;
   re-apply the compute stack.
 - Gateway not `Programmed`, Service `EXTERNAL-IP` pending, events
   `AuthorizationFailed` / `PublicIPNotFound`: the cluster identity lacks
-  Network Contributor on `rg-bbm-<env>-data-eus2`, or the annotations name the
+  Network Contributor on `rg-bbm-<env>-data-ncus`, or the annotations name the
   wrong PIP / resource group.
 - Listener `ResolvedRefs=False` (`InvalidCertificateRef`): Secret
   `bbm-wildcard-tls` does not exist yet (Certificate not issued).

@@ -1,4 +1,4 @@
-# Test cluster (aks-bbm-test-eus2): CI run and PR preview namespaces.
+# Test cluster (aks-bbm-test-ncus): CI run and PR preview namespaces.
 # dns.envZones from values-infra.yaml: [test.<zone>, preview.<zone>].
 gateway:
   scaling:

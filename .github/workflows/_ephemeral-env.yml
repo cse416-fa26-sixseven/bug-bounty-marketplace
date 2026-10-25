@@ -75,10 +75,15 @@ on:
 permissions:
   contents: read
 
+# Names follow modules/naming; the region comes from the repo variables
+# AZURE_LOCATION / AZURE_LOCATION_ABBR (bootstrap gh_setup_commands). The
+# callers' gate jobs skip the run while they are unset.
 env:
-  DATA_RG: rg-bbm-test-data-eus2
-  COMPUTE_RG: rg-bbm-test-compute-eus2
-  CLUSTER: aks-bbm-test-eus2
+  DATA_RG: rg-bbm-test-data-${{ vars.AZURE_LOCATION_ABBR }}
+  COMPUTE_RG: rg-bbm-test-compute-${{ vars.AZURE_LOCATION_ABBR }}
+  CLUSTER: aks-bbm-test-${{ vars.AZURE_LOCATION_ABBR }}
+  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
 
 jobs:
   ns:
@@ -127,6 +132,10 @@ jobs:
           fi
           if [[ -z "$CLIENT_ID" ]]; then
             echo "::error::Environment '$ENVIRONMENT' has no AZURE_CLIENT_ID variable. Run the bootstrap gh_setup_commands."
+            exit 1
+          fi
+          if [[ -z "$BBM_REGION_ABBR" || -z "$BBM_LOCATION" ]]; then
+            echo "::error::Repo variables AZURE_LOCATION / AZURE_LOCATION_ABBR are not set. Run the bootstrap gh_setup_commands."
             exit 1
           fi
           echo "VALUES_INFRA=$RUNNER_TEMP/values-infra.yaml" >>"$GITHUB_ENV"

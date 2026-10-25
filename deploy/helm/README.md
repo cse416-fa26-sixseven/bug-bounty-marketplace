@@ -278,7 +278,7 @@ ct install --config deploy/helm/ct.yaml --charts deploy/helm/bbm \
 
 ```sh
 infra/terraform/scripts/tf.sh compute "$ENV" output -raw helm_values > values-infra.yaml
-az aks get-credentials -g "rg-bbm-$ENV-compute-eus2" -n "aks-bbm-$ENV-eus2"   # then kubelogin convert-kubeconfig -l azurecli
+az aks get-credentials -g "rg-bbm-$ENV-compute-ncus" -n "aks-bbm-$ENV-ncus"   # then kubelogin convert-kubeconfig -l azurecli
 deploy/platform/install.sh "$ENV" --values values-infra.yaml --wait   # idempotent; cert-manager + bbm-platform
 kubectl create namespace bbm --dry-run=client -o yaml | kubectl apply -f -
 kubectl label namespace bbm --overwrite bbm.io/gateway-access=true    # HTTPRoute admission

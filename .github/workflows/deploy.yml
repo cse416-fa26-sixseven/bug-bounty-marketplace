@@ -61,7 +61,9 @@ jobs:
   deploy:
     name: deploy (${{ inputs.env }})
     # Azure is not configured until the bootstrap `gh variable set` commands ran.
-    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    if: >-
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.env }}
@@ -83,9 +85,12 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      DATA_RG: rg-bbm-${{ inputs.env }}-data-eus2
-      COMPUTE_RG: rg-bbm-${{ inputs.env }}-compute-eus2
-      CLUSTER: aks-bbm-${{ inputs.env }}-eus2
+      # Names follow modules/naming; region from the bootstrap repo variables.
+      DATA_RG: rg-bbm-${{ inputs.env }}-data-${{ vars.AZURE_LOCATION_ABBR }}
+      COMPUTE_RG: rg-bbm-${{ inputs.env }}-compute-${{ vars.AZURE_LOCATION_ABBR }}
+      CLUSTER: aks-bbm-${{ inputs.env }}-${{ vars.AZURE_LOCATION_ABBR }}
+      BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+      BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
     steps:
       - name: Check inputs and configuration
         env:

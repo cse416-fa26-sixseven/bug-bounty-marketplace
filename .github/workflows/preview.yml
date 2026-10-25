@@ -63,6 +63,8 @@ jobs:
     if: >-
       vars.AZURE_SUBSCRIPTION_ID != '' &&
       vars.ACR_NAME != '' &&
+      vars.AZURE_LOCATION != '' &&
+      vars.AZURE_LOCATION_ABBR != '' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:

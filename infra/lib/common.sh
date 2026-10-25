@@ -364,19 +364,122 @@ tf_fmt() {
   terraform fmt -list=false "$@" >/dev/null || warn "terraform fmt failed on $*"
 }
 
+# ---- region -------------------------------------------------------------------
+#
+# The region lives in envs/global/bootstrap.tfvars (location, location_abbr)
+# and is copied into every other tfvars and the backend .hcl state RG names by
+# set_region. Region → abbreviation comes from the one map in
+# modules/naming/main.tf (local.location_abbrs), parsed here so the shell and
+# Terraform never disagree.
+
+NAMING_MAIN="$BBM_TF_ROOT/modules/naming/main.tf"
+
+is_location() { [[ "$1" =~ ^[a-z][a-z0-9]+$ ]]; }
+is_location_abbr() { [[ "$1" =~ ^[a-z][a-z0-9]{1,5}$ ]]; }
+
+# region_abbr <location> → abbreviation from the naming module's map; exit 1
+# when the region is not in it.
+region_abbr() {
+  local a
+  [[ -f "$NAMING_MAIN" ]] || die "missing $NAMING_MAIN (region map)"
+  a=$(awk -v loc="$1" '
+    /location_abbrs[ \t]*=[ \t]*\{/ { on = 1; next }
+    on && /^[ \t]*\}/ { exit }
+    on && $1 == loc && $2 == "=" { v = $3; gsub(/"/, "", v); print v; exit }
+  ' "$NAMING_MAIN")
+  [[ -n "$a" ]] || return 1
+  printf '%s\n' "$a"
+}
+
+# region_known_list → "loc=abbr ..." for messages.
+region_known_list() {
+  awk '
+    /location_abbrs[ \t]*=[ \t]*\{/ { on = 1; next }
+    on && /^[ \t]*\}/ { exit }
+    on && $2 == "=" { v = $3; gsub(/"/, "", v); printf "%s%s=%s", sep, $1, v; sep = " " }
+  ' "$NAMING_MAIN"
+}
+
+# resolve_location_abbr <location> [abbr]: print the abbreviation to use.
+# A region in the map must use its mapped code (Terraform validates the same);
+# other regions need an explicit abbr.
+resolve_location_abbr() {
+  local loc=$1 given=${2:-} mapped=""
+  is_location "$loc" || die "'$loc' is not an Azure region name (lowercase, e.g. northcentralus)"
+  mapped=$(region_abbr "$loc") || mapped=""
+  if [[ -n "$given" ]]; then
+    is_location_abbr "$given" || die "--location-abbr '$given' must be 2-6 lowercase letters/digits starting with a letter"
+    [[ -z "$mapped" || "$mapped" == "$given" ]] ||
+      die "--location-abbr $given does not match $loc's code $mapped in modules/naming (local.location_abbrs)"
+    printf '%s\n' "$given"
+  elif [[ -n "$mapped" ]]; then
+    printf '%s\n' "$mapped"
+  else
+    die "region $loc has no abbreviation in modules/naming/main.tf (local.location_abbrs: $(region_known_list)); pass --location-abbr <code> or add it to the map"
+  fi
+}
+
+# set_region <location> <abbr>: write the region into every tfvars (the
+# bootstrap, global, data and compute ones must have both keys) and the
+# backend .hcl state resource group names.
+set_region() {
+  local loc=$1 abbr=$2 envs="$BBM_TF_ROOT/envs" f
+  while IFS= read -r f; do
+    case "$f" in
+      */global/bootstrap.tfvars | */global/global.tfvars | */data.tfvars | */compute.tfvars)
+        tfvars_set "$f" location "$(hcl_quote "$loc")"
+        tfvars_set "$f" location_abbr "$(hcl_quote "$abbr")"
+        ;;
+      *)
+        tfvars_set_if_present "$f" location "$(hcl_quote "$loc")"
+        tfvars_set_if_present "$f" location_abbr "$(hcl_quote "$abbr")"
+        ;;
+    esac
+  done < <(find "$envs" -name '*.tfvars' | sort)
+  while IFS= read -r f; do
+    tfvars_set_if_present "$f" resource_group_name "$(hcl_quote "rg-bbm-tfstate-$abbr")"
+  done < <(find "$envs" -name 'backend*.hcl' | sort)
+}
+
+# allowed_locations_json <subscription-id> → JSON array of the regions every
+# "allowed locations" policy assignment on the subscription (or inherited from
+# a management group) permits, i.e. the intersection of their
+# listOfAllowedLocations parameters; `null` when no assignment has that
+# parameter. Exit 1 when az fails. Expects `az account set` to that
+# subscription already. Azure for Students assigns "Allowed resource
+# deployment regions" this way.
+allowed_locations_json() {
+  local raw
+  raw=$(az policy assignment list --disable-scope-strict-match \
+    --query "[?parameters.listOfAllowedLocations].{scope: scope, locs: parameters.listOfAllowedLocations.value}" \
+    -o json 2>/dev/null) || return 1
+  printf '%s' "$raw" | jq -c --arg sub "/subscriptions/$1" '
+    [ .[]
+      | select((.scope | ascii_downcase) as $s
+               | ($sub | ascii_downcase) as $t
+               | $s == $t or ($s | startswith("/providers/microsoft.management/managementgroups/")))
+      | [.locs[]? | ascii_downcase | gsub(" "; "")] ]
+    | if length == 0 then null
+      else reduce .[1:][] as $l (.[0]; [.[] | select(. as $x | $l | index($x))]) | unique
+      end'
+}
+
 # ---- account switch -----------------------------------------------------------
 
 # reset_tenant_fields: put every per-tenant / per-subscription value that
 # infra/up.sh writes back to its committed placeholder, so the next up.sh on
 # another tenant does not carry the old object ids, suffix or state account.
 # Kept (they survive an account switch): dns_zone_name, alert_emails,
-# github_reviewer_ids, github_repo.
+# github_reviewer_ids, github_repo, and the region (location / location_abbr,
+# a user choice, not per tenant; the backend state RG keeps its region code).
+# When the new subscription needs another region (e.g. its policy allows
+# different ones), run `up.sh --location <region>`: it rewrites them all.
 reset_tenant_fields() {
   local envs="$BBM_TF_ROOT/envs" boot glob loc f empty='[]'
   boot="$envs/global/bootstrap.tfvars"
   glob="$envs/global/global.tfvars"
   loc=$(tfvars_get_string "$boot" location_abbr)
-  info "resetting per-tenant fields in ${envs#"$BBM_REPO_ROOT/"} to placeholders (kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo)"
+  info "resetting per-tenant fields in ${envs#"$BBM_REPO_ROOT/"} to placeholders (kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo, location)"
   tfvars_set "$boot" admin_object_ids "$empty"
   tfvars_set "$boot" power_operator_object_ids "$empty"
   tfvars_set_if_present "$boot" preregistered_resource_providers "$empty"

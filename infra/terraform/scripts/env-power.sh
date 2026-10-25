@@ -26,12 +26,13 @@
 # Long-running operations use --no-wait and poll `az ... list`, so the role
 # needs no operation-status permissions.
 #
-# Live state is stored as tags on rg-bbm-<env>-data-eus2:
+# Live state is stored as tags on rg-bbm-<env>-data-<region abbr>:
 #   power-state=running|paused|down, auto-pause=true|false, db-paused=true|false,
 #   <state>-at=<UTC timestamp>, bbm-last-deployed-tag=<image tag> (written by deploy.yml)
 #
 # Environment (optional):
-#   BBM_REGION_ABBR (eus2)  BBM_LOCATION (eastus2)
+#   BBM_REGION_ABBR, BBM_LOCATION  region abbreviation and name (default: location_abbr /
+#                                  location in envs/global/bootstrap.tfvars)
 #   ENV_POWER_TIMEOUT (seconds per wait, 1800)  ENV_POWER_POLL (seconds, 20)
 #   GITHUB_STEP_SUMMARY / GITHUB_OUTPUT: when set (GitHub Actions), a markdown
 #   summary and key=value outputs are appended.
@@ -80,8 +81,17 @@ esac
 
 command -v az >/dev/null 2>&1 || die "az CLI not found on PATH"
 
-abbr=${BBM_REGION_ABBR:-eus2}
-location=${BBM_LOCATION:-eastus2}
+# Region: BBM_LOCATION / BBM_REGION_ABBR (CI: repo vars AZURE_LOCATION /
+# AZURE_LOCATION_ABBR), else location / location_abbr in
+# envs/global/bootstrap.tfvars, the single source of truth infra/up.sh writes.
+boot_tfvars="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/envs/global/bootstrap.tfvars"
+boot_var() { # boot_var <key> → string value from bootstrap.tfvars (empty if absent)
+  [[ -f "$boot_tfvars" ]] || return 0
+  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$boot_tfvars" | head -n1
+}
+abbr=${BBM_REGION_ABBR:-$(boot_var location_abbr)}
+location=${BBM_LOCATION:-$(boot_var location)}
+[[ -n "$abbr" && -n "$location" ]] || die "region unknown: set BBM_LOCATION and BBM_REGION_ABBR (or location/location_abbr in $boot_tfvars)"
 timeout=${ENV_POWER_TIMEOUT:-1800}
 poll=${ENV_POWER_POLL:-20}
 

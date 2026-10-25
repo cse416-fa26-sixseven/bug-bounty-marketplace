@@ -1,6 +1,6 @@
 # infra/terraform
 
-Terraform for the BBM Azure deployment (region `eastus2`, project code `bbm`).
+Terraform for the BBM Azure deployment (region `northcentralus`, project code `bbm`).
 Three AKS environments (`test`, `staging`, `prod`) behind Azure DNS, per
 [ADR 0002](../../docs/adr/0002-aks-everywhere-and-azure-dns.md) (which
 supersedes the ACA parts of ADR 0001). `infra/up.sh` / `infra/down.sh` drive
@@ -79,7 +79,7 @@ TFSTATE_ACCOUNT=stbbmtfstate<sfx> ./scripts/tf.sh data test plan
 ## State model
 
 - All remote state lives in storage account `stbbmtfstate<sfx>`, container
-  `tfstate`, in RG `rg-bbm-tfstate-eus2`. The account allows Entra auth only
+  `tfstate`, in RG `rg-bbm-tfstate-ncus`. The account allows Entra auth only
   (`shared_access_key_enabled = false`). Every backend sets
   `use_azuread_auth = true` and `use_oidc = true`. Blob versioning and 14-day
   soft delete let you recover a damaged state file. A `CanNotDelete` lock
@@ -118,7 +118,7 @@ TFSTATE_ACCOUNT=stbbmtfstate<sfx> ./scripts/tf.sh data test plan
   | `gh-bbm-plan`       | `BBM tfstate reader` | —                | `global.tfstate`, `staging/*`, `test/*` |
   | `gh-bbm-prod-power` | none                 | —                | —                                       |
 
-  The two custom roles (defined on `rg-bbm-tfstate-eus2`) carry only
+  The two custom roles (defined on `rg-bbm-tfstate-ncus`) carry only
   `containers/read` as a control-plane action plus blob data actions
   (writer: `blobs/read`, `write`, `add/action`, `delete`, `move/action`;
   reader: `blobs/read`). The built-in Storage Blob Data roles are avoided for
@@ -177,7 +177,7 @@ instead of registering it. You can also import it by hand:
 | `prod`    | Standard | B2als_v2 + `apps`   | yes       | `prod.<zone>`                     | `10.30.0.0/16` |
 
 - **Bootstrap** (`dns.tf`) creates the parent zone `dns_zone_name` in
-  `rg-bbm-shared-eus2`, the child zones above, and NS delegation records for
+  `rg-bbm-shared-ncus`, the child zones above, and NS delegation records for
   them in the parent. Outputs: `dns_zone_name`, `dns_name_servers` (to set at
   the domain's DNS host), `dns_child_zones` (env => zones).
 - **Data** (`dns.tf`) reads `dns_zone_name` from global state, looks up its
@@ -203,7 +203,7 @@ instead of registering it. You can also import it by hand:
   also needs the `Azure/azapi` provider (same OIDC / CLI auth as azurerm). The
   Gateway itself (static PIP binding, TLS) is in `deploy/helm/bbm-platform`.
   Check after an apply:
-  `az aks show -g rg-bbm-<env>-compute-eus2 -n aks-bbm-<env>-eus2 --query ingressProfile`
+  `az aks show -g rg-bbm-<env>-compute-ncus -n aks-bbm-<env>-ncus --query ingressProfile`
   and `kubectl get gatewayclass approuting-istio`.
 
 `helm_values` (compute output, `values-infra.yaml`):
@@ -215,7 +215,7 @@ azure: {} # tenantId, keyVaultName, *ClientId, storage*, queueName (unchanged)
 ingress:
   host: <env>.<zone> # test: test.<zone>
   publicIpName: pip-bbm-<env>-ingress
-  publicIpResourceGroup: rg-bbm-<env>-data-eus2
+  publicIpResourceGroup: rg-bbm-<env>-data-ncus
 networkPolicy:
   postgresCidr: <snet-psql CIDR>
 dns:
@@ -224,7 +224,7 @@ dns:
   internalZone: <env>.internal.<zone>
 platform:
   subscriptionId: <subscription>
-  dnsResourceGroup: rg-bbm-<env>-data-eus2
+  dnsResourceGroup: rg-bbm-<env>-data-ncus
   certManagerClientId: <client id> # id-bbm-<env>-certmgr
 ```
 

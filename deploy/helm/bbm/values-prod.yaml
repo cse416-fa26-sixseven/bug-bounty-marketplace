@@ -1,4 +1,4 @@
-# Prod (AKS aks-bbm-prod-eus2). Layer on top of values.yaml, then
+# Prod (AKS aks-bbm-prod-ncus). Layer on top of values.yaml, then
 # values-infra.yaml (terraform compute output), then the image tag:
 #
 #   helm upgrade --install bbm deploy/helm/bbm -n bbm \

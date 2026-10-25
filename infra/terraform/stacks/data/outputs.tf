@@ -2,7 +2,7 @@
 # helm_values output, by the Helm chart. Keep in sync with the infra spec.
 
 output "resource_group_name" {
-  description = "Data resource group name (rg-bbm-<env>-data-eus2)."
+  description = "Data resource group name (rg-bbm-<env>-data-<abbr>)."
   value       = data.azurerm_resource_group.data.name
 }
 

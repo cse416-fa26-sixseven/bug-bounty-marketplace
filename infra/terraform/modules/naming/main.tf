@@ -2,8 +2,29 @@
 # from the inputs, so every stack agrees on names without remote lookups.
 
 locals {
+  # Region → abbreviation used in names. The single place that maps regions to
+  # codes: stacks pass location_abbr = null (or the matching value) and get it
+  # from here. Add a region here (or set location_abbr) before moving to it.
+  # Azure for Students only allows francecentral, belgiumcentral, denmarkeast,
+  # northcentralus and canadacentral (subscription policy, ADR 0002).
+  location_abbrs = {
+    northcentralus = "ncus"
+    canadacentral  = "cac"
+    francecentral  = "frc"
+    belgiumcentral = "bec"
+    denmarkeast    = "dke"
+    eastus         = "eus"
+    eastus2        = "eus2"
+    centralus      = "cus"
+    southcentralus = "scus"
+    westus2        = "wus2"
+    westus3        = "wus3"
+    westeurope     = "weu"
+    northeurope    = "neu"
+  }
+
   p   = var.project
-  loc = var.location_abbr
+  loc = var.location_abbr != null ? var.location_abbr : lookup(local.location_abbrs, var.location, "")
   sfx = var.suffix
 
   # Short env codes for names with tight length limits (Key Vault, storage).

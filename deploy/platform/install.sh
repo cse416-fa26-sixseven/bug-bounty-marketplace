@@ -143,7 +143,7 @@ context="$(kubectl config current-context 2>/dev/null || true)"
 [[ -n "$context" ]] || die "no current kubectl context (run az aks get-credentials first)"
 echo "==> env=$env_name context=$context cert-manager=$CERT_MANAGER_VERSION"
 [[ "$context" == *"bbm-$env_name"* ]] ||
-  echo "warning: context '$context' does not look like the $env_name cluster (aks-bbm-$env_name-eus2)" >&2
+  echo "warning: context '$context' does not look like the $env_name cluster (aks-bbm-$env_name-<region abbr>)" >&2
 
 # The add-on creates the GatewayClass a few minutes after
 # `--enable-app-routing-istio` (terraform apply of the compute stack).

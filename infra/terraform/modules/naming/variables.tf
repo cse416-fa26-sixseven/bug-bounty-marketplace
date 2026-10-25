@@ -21,15 +21,35 @@ variable "env" {
 }
 
 variable "location" {
-  description = "Azure region (full name), e.g. eastus2."
+  description = "Azure region (full name), e.g. northcentralus."
   type        = string
-  default     = "eastus2"
+  default     = "northcentralus"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]+$", var.location))
+    error_message = "location must be an Azure region name like northcentralus (lowercase, no spaces)."
+  }
 }
 
 variable "location_abbr" {
-  description = "Short region code used in names, e.g. eus2."
+  description = "Short region code used in names, e.g. ncus. Null derives it from the built-in map in main.tf (local.location_abbrs); required for regions not in that map, and must match the map for regions in it."
   type        = string
-  default     = "eus2"
+  default     = null
+
+  validation {
+    condition     = var.location_abbr == null || can(regex("^[a-z][a-z0-9]{1,5}$", var.location_abbr))
+    error_message = "location_abbr must be 2-6 lowercase alphanumeric characters starting with a letter."
+  }
+
+  validation {
+    condition     = var.location_abbr != null || contains(keys(local.location_abbrs), var.location)
+    error_message = "location has no built-in abbreviation (modules/naming local.location_abbrs): set location_abbr explicitly, or add the region to the map."
+  }
+
+  validation {
+    condition     = var.location_abbr == null || lookup(local.location_abbrs, var.location, var.location_abbr) == var.location_abbr
+    error_message = "location_abbr does not match the built-in abbreviation for location (modules/naming local.location_abbrs); a mismatch would name resources after another region."
+  }
 }
 
 variable "suffix" {

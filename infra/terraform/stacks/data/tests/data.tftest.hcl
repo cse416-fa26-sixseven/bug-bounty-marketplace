@@ -9,88 +9,88 @@ mock_provider "azurerm" {
 
   mock_data "azurerm_resource_group" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus"
     }
   }
 
   mock_data "azurerm_dns_zone" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/dnsZones/staging.bbm.example.com"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Network/dnsZones/staging.bbm.example.com"
     }
   }
 
   mock_resource "azurerm_virtual_network" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-eus2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-ncus"
     }
   }
 
   mock_resource "azurerm_subnet" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-eus2/subnets/mock"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Network/virtualNetworks/vnet-bbm-staging-ncus/subnets/mock"
     }
   }
 
   mock_resource "azurerm_network_security_group" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/networkSecurityGroups/mock"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Network/networkSecurityGroups/mock"
     }
   }
 
   mock_resource "azurerm_private_dns_zone" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/privateDnsZones/staging.private.postgres.database.azure.com"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Network/privateDnsZones/staging.private.postgres.database.azure.com"
     }
   }
 
   mock_resource "azurerm_public_ip" {
     defaults = {
-      id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/publicIPAddresses/pip-bbm-staging-ingress"
+      id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Network/publicIPAddresses/pip-bbm-staging-ingress"
       ip_address = "20.0.0.10"
     }
   }
 
   mock_resource "azurerm_log_analytics_workspace" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-staging-eus2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.OperationalInsights/workspaces/log-bbm-staging-ncus"
     }
   }
 
   mock_resource "azurerm_key_vault" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2"
     }
   }
 
   mock_resource "azurerm_storage_account" {
     defaults = {
-      id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Storage/storageAccounts/stbbmstga1b2"
+      id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Storage/storageAccounts/stbbmstga1b2"
       primary_blob_endpoint = "https://stbbmstga1b2.blob.core.windows.net/"
     }
   }
 
   mock_resource "azurerm_storage_container" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Storage/storageAccounts/stbbmstga1b2/blobServices/default/containers/sources"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Storage/storageAccounts/stbbmstga1b2/blobServices/default/containers/sources"
     }
   }
 
   mock_resource "azurerm_storage_queue" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Storage/storageAccounts/stbbmstga1b2/queueServices/default/queues/analysis-jobs"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.Storage/storageAccounts/stbbmstga1b2/queueServices/default/queues/analysis-jobs"
     }
   }
 
   mock_resource "azurerm_postgresql_flexible_server" {
     defaults = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-bbm-staging-eus2"
-      fqdn = "psql-bbm-staging-eus2.postgres.database.azure.com"
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-bbm-staging-ncus"
+      fqdn = "psql-bbm-staging-ncus.postgres.database.azure.com"
     }
   }
 
   mock_resource "azurerm_user_assigned_identity" {
     defaults = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mock"
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mock"
       client_id    = "33333333-3333-3333-3333-333333333333"
       principal_id = "44444444-4444-4444-4444-444444444444"
     }
@@ -129,11 +129,11 @@ run "plan_names_and_settings" {
 
   assert {
     condition = (
-      module.network.vnet_name == "vnet-bbm-staging-eus2" &&
-      module.postgres[0].name == "psql-bbm-staging-eus2" &&
+      module.network.vnet_name == "vnet-bbm-staging-ncus" &&
+      module.postgres[0].name == "psql-bbm-staging-ncus" &&
       module.keyvault.name == "kv-bbm-stg-a1b2" &&
       module.storage.name == "stbbmstga1b2" &&
-      module.law.name == "log-bbm-staging-eus2" &&
+      module.law.name == "log-bbm-staging-ncus" &&
       azurerm_public_ip.ingress.name == "pip-bbm-staging-ingress"
     )
     error_message = "resource names do not follow the naming module"
@@ -186,7 +186,7 @@ run "plan_names_and_settings" {
   }
 
   assert {
-    condition     = output.ingress_fqdn == "bbm-staging.eastus2.cloudapp.azure.com"
+    condition     = output.ingress_fqdn == "bbm-staging.northcentralus.cloudapp.azure.com"
     error_message = "ingress_fqdn wrong"
   }
 
@@ -198,7 +198,7 @@ run "plan_names_and_settings" {
   assert {
     condition = (
       toset(keys(azurerm_dns_a_record.ingress)) == toset(["@.staging.bbm.example.com", "*.staging.bbm.example.com"]) &&
-      alltrue([for r in azurerm_dns_a_record.ingress : r.zone_name == "staging.bbm.example.com" && r.resource_group_name == "rg-bbm-staging-data-eus2"])
+      alltrue([for r in azurerm_dns_a_record.ingress : r.zone_name == "staging.bbm.example.com" && r.resource_group_name == "rg-bbm-staging-data-ncus"])
     )
     error_message = "expected apex + wildcard alias A records in staging.<zone>"
   }
@@ -234,9 +234,9 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      module.postgres[0].fqdn == "psql-bbm-staging-eus2.postgres.database.azure.com" &&
+      module.postgres[0].fqdn == "psql-bbm-staging-ncus.postgres.database.azure.com" &&
       output.pg_fqdn == module.postgres[0].fqdn &&
-      output.pg_server_name == "psql-bbm-staging-eus2"
+      output.pg_server_name == "psql-bbm-staging-ncus"
     )
     error_message = "PG outputs wrong"
   }
@@ -249,7 +249,7 @@ run "apply_with_mocks" {
   assert {
     condition = (
       azurerm_dns_a_record.ingress["@.staging.bbm.example.com"].target_resource_id == azurerm_public_ip.ingress.id &&
-      azurerm_private_dns_cname_record.postgres[0].record == "psql-bbm-staging-eus2.postgres.database.azure.com" &&
+      azurerm_private_dns_cname_record.postgres[0].record == "psql-bbm-staging-ncus.postgres.database.azure.com" &&
       output.dns_zone_names == tolist(["staging.bbm.example.com"]) &&
       output.internal_dns_zone_name == "staging.internal.bbm.example.com" &&
       output.postgres_enabled
@@ -271,7 +271,7 @@ run "apply_with_mocks" {
       output.queue_name == "analysis-jobs" &&
       output.ingress_pip_name == "pip-bbm-staging-ingress" &&
       output.tenant_id == "11111111-1111-1111-1111-111111111111" &&
-      output.location == "eastus2" &&
+      output.location == "northcentralus" &&
       output.subnet_aks_id != "" &&
       output.law_id != "" &&
       output.key_vault_id != ""
@@ -280,7 +280,7 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = startswith(nonsensitive(module.postgres[0].database_url), "postgres://bbmadmin:") && endswith(nonsensitive(module.postgres[0].database_url), "@psql-bbm-staging-eus2.postgres.database.azure.com:5432/bbm?sslmode=require")
+    condition     = startswith(nonsensitive(module.postgres[0].database_url), "postgres://bbmadmin:") && endswith(nonsensitive(module.postgres[0].database_url), "@psql-bbm-staging-ncus.postgres.database.azure.com:5432/bbm?sslmode=require")
     error_message = "database-url format wrong"
   }
 

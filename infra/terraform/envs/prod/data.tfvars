@@ -1,8 +1,8 @@
 # stacks/data for prod — persistent data layer (VNet, PG, KV, storage, UAMIs, PIP, LAW).
 subscription_id = "00000000-0000-0000-0000-000000000000"
 env             = "prod"
-location        = "eastus2"
-location_abbr   = "eus2"
+location        = "northcentralus" # infra/up.sh --location (same in every tfvars)
+location_abbr   = "ncus"
 suffix          = "0000" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.30.0.0/16"
@@ -17,7 +17,7 @@ postgres_storage_mb            = 32768
 postgres_backup_retention_days = 7
 
 law_daily_quota_gb = 0.5
-ingress_pip_zones  = ["1", "2", "3"]
+ingress_pip_zones  = [] # infra/up.sh: ["1", "2", "3"] if the region has availability zones, else []
 
 # Key Vault Secrets Officer on the env KV (mirrors envs/global/global.tfvars).
 # gh-bbm-prod already has Secrets Officer on the data RG via bootstrap.

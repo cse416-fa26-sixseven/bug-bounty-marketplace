@@ -23,7 +23,7 @@ mock_provider "azurerm" {
 
   mock_resource "azurerm_storage_account" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-tfstate-eus2/providers/Microsoft.Storage/storageAccounts/mock"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-tfstate-ncus/providers/Microsoft.Storage/storageAccounts/mock"
     }
   }
 
@@ -322,8 +322,8 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      azurerm_resource_group.env_data["test"].name == "rg-bbm-test-data-eus2" &&
-      azurerm_resource_group.env_compute["test"].name == "rg-bbm-test-compute-eus2" &&
+      azurerm_resource_group.env_data["test"].name == "rg-bbm-test-data-ncus" &&
+      azurerm_resource_group.env_compute["test"].name == "rg-bbm-test-compute-ncus" &&
       azurerm_resource_group.env_data["test"].tags["power-state"] == "down" &&
       azurerm_resource_group.env_data["test"].tags["auto-pause"] == "true"
     )
@@ -331,23 +331,23 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = !contains(values(output.resource_groups), "rg-bbm-test-eus2") && !contains(values(output.resource_groups), "rg-bbm-preview-eus2") && length(output.resource_groups) == 8
+    condition     = !contains(values(output.resource_groups), "rg-bbm-test-ncus") && !contains(values(output.resource_groups), "rg-bbm-preview-ncus") && length(output.resource_groups) == 8
     error_message = "ACA resource groups must be gone (shared, tfstate + 3 envs x data/compute)"
   }
 
   # ---- DNS -------------------------------------------------------------------
   assert {
-    condition     = azurerm_dns_zone.parent.name == "bbm.example.com" && azurerm_dns_zone.parent.resource_group_name == "rg-bbm-shared-eus2"
+    condition     = azurerm_dns_zone.parent.name == "bbm.example.com" && azurerm_dns_zone.parent.resource_group_name == "rg-bbm-shared-ncus"
     error_message = "parent zone must be dns_zone_name in the shared RG"
   }
 
   assert {
     condition = (
       { for k, z in azurerm_dns_zone.child : k => [z.name, z.resource_group_name] } == {
-        prod    = ["prod.bbm.example.com", "rg-bbm-prod-data-eus2"]
-        staging = ["staging.bbm.example.com", "rg-bbm-staging-data-eus2"]
-        test    = ["test.bbm.example.com", "rg-bbm-test-data-eus2"]
-        preview = ["preview.bbm.example.com", "rg-bbm-test-data-eus2"]
+        prod    = ["prod.bbm.example.com", "rg-bbm-prod-data-ncus"]
+        staging = ["staging.bbm.example.com", "rg-bbm-staging-data-ncus"]
+        test    = ["test.bbm.example.com", "rg-bbm-test-data-ncus"]
+        preview = ["preview.bbm.example.com", "rg-bbm-test-data-ncus"]
       }
     )
     error_message = "child zones / resource groups wrong"
@@ -355,7 +355,7 @@ run "apply_with_mocks" {
 
   assert {
     condition = alltrue([for k, r in azurerm_dns_ns_record.delegation : (
-      r.name == k && r.zone_name == "bbm.example.com" && r.resource_group_name == "rg-bbm-shared-eus2" && length(r.records) == 4
+      r.name == k && r.zone_name == "bbm.example.com" && r.resource_group_name == "rg-bbm-shared-ncus" && length(r.records) == 4
     )]) && length(azurerm_dns_ns_record.delegation) == 4
     error_message = "expected 4 NS delegation records in the parent zone"
   }
@@ -391,6 +391,14 @@ run "apply_with_mocks" {
   assert {
     condition     = strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo cse416-fa26-sixseven/bug-bounty-marketplace --env prod-power")
     error_message = "gh_setup_commands missing prod-power client id"
+  }
+
+  assert {
+    condition = (
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION --repo cse416-fa26-sixseven/bug-bounty-marketplace --body 'northcentralus'") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION_ABBR --repo cse416-fa26-sixseven/bug-bounty-marketplace --body 'ncus'")
+    )
+    error_message = "gh_setup_commands must set the AZURE_LOCATION / AZURE_LOCATION_ABBR repo variables"
   }
 
   assert {
@@ -490,5 +498,26 @@ run "preregistered_providers_filtered" {
   assert {
     condition     = length(azurerm_resource_provider_registration.this) == 14
     error_message = "preregistered providers outside the managed list must be ignored"
+  }
+}
+
+# Region switch (up.sh --location): names and repo variables follow location;
+# location_abbr = null derives the code from modules/naming.
+run "other_region" {
+  command = plan
+
+  variables {
+    location      = "canadacentral"
+    location_abbr = null
+  }
+
+  assert {
+    condition = (
+      azurerm_resource_group.tfstate.name == "rg-bbm-tfstate-cac" &&
+      azurerm_resource_group.shared.location == "canadacentral" &&
+      azurerm_resource_group.env_compute["prod"].name == "rg-bbm-prod-compute-cac" &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_LOCATION_ABBR --repo cse416-fa26-sixseven/bug-bounty-marketplace --body 'cac'")
+    )
+    error_message = "names and AZURE_LOCATION_ABBR must follow location"
   }
 }

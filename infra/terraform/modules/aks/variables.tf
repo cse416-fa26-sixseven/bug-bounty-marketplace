@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Cluster name (aks-bbm-<env>-eus2)."
+  description = "Cluster name (aks-bbm-<env>-<abbr>)."
   type        = string
 }
 
@@ -9,12 +9,12 @@ variable "dns_prefix" {
 }
 
 variable "resource_group_name" {
-  description = "Existing resource group for the cluster (rg-bbm-<env>-compute-eus2)."
+  description = "Existing resource group for the cluster (rg-bbm-<env>-compute-<abbr>)."
   type        = string
 }
 
 variable "node_resource_group_name" {
-  description = "Name of the AKS-managed node resource group (rg-bbm-<env>-aksnodes-eus2). AKS creates and deletes it."
+  description = "Name of the AKS-managed node resource group (rg-bbm-<env>-aksnodes-<abbr>). AKS creates and deletes it."
   type        = string
 }
 
@@ -24,7 +24,7 @@ variable "location" {
 }
 
 variable "kubernetes_version" {
-  description = "Kubernetes minor version (e.g. \"1.33\"). The patch auto-upgrade channel keeps the patch level current. List GA versions with `az aks get-versions -l eastus2 -o table`."
+  description = "Kubernetes minor version (e.g. \"1.33\"). The patch auto-upgrade channel keeps the patch level current. List GA versions with `az aks get-versions -l <location> -o table`."
   type        = string
 
   validation {

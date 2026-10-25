@@ -53,6 +53,12 @@ on:
 permissions:
   contents: read
 
+# Region of the resource names (janitor.sh, deployed-tag reads); set by the
+# bootstrap gh_setup_commands. The gate skips every job while they are unset.
+env:
+  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
+  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
+
 jobs:
   # ---------------------------------------------------------------------
   # Skip everything until the bootstrap repo vars exist, and resolve the
@@ -60,7 +66,9 @@ jobs:
   # ---------------------------------------------------------------------
   gate:
     name: Gate
-    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    if: >-
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     outputs:
       apply: ${{ steps.mode.outputs.apply }}
@@ -126,7 +134,7 @@ jobs:
           set -euo pipefail
           tags=()
           for env in staging prod; do
-            rg="rg-bbm-${env}-data-eus2"
+            rg="rg-bbm-${env}-data-${BBM_REGION_ABBR}"
             if [[ "$(az group exists --name "$rg" --only-show-errors)" != "true" ]]; then
               echo "$rg: not found"
               continue

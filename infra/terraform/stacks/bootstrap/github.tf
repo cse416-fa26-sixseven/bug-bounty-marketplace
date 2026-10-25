@@ -25,6 +25,10 @@ locals {
     TFSTATE_RG            = azurerm_resource_group.tfstate.name
     TFSTATE_ACCOUNT       = azurerm_storage_account.tfstate.name
     ACR_NAME              = module.naming.global.acr
+    # Region of every resource name the workflows build (RGs, clusters);
+    # their gate jobs skip while these are unset (ADR 0002).
+    AZURE_LOCATION      = var.location
+    AZURE_LOCATION_ABBR = module.naming.location_abbr
   }
 
   reviewer_list = [for id in var.github_reviewer_ids : { type = "User", id = id }]

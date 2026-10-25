@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Virtual network name (vnet-bbm-<env>-eus2)."
+  description = "Virtual network name (vnet-bbm-<env>-<abbr>)."
   type        = string
 }
 

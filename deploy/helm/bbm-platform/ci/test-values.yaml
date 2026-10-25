@@ -6,7 +6,7 @@ global:
 ingress:
   host: test.bbm.example.com
   publicIpName: pip-bbm-test-ingress
-  publicIpResourceGroup: rg-bbm-test-data-eus2
+  publicIpResourceGroup: rg-bbm-test-data-ncus
 networkPolicy:
   postgresCidr: ""
 dns:
@@ -17,5 +17,5 @@ dns:
   internalZone: test.internal.bbm.example.com
 platform:
   subscriptionId: 44444444-4444-4444-4444-444444444444
-  dnsResourceGroup: rg-bbm-test-data-eus2
+  dnsResourceGroup: rg-bbm-test-data-ncus
   certManagerClientId: 66666666-6666-6666-6666-666666666666

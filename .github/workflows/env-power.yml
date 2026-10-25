@@ -67,6 +67,10 @@ env:
   TFSTATE_RG: ${{ vars.TFSTATE_RG }}
   TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
   TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  # Region of every resource name (env-power.sh, platform install); set by the
+  # bootstrap gh_setup_commands. Every job is skipped while they are unset.
+  BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
+  BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
 
 jobs:
   # ---------------------------------------------------------------------
@@ -77,7 +81,8 @@ jobs:
     name: status (${{ inputs.env }})
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.action == 'status' &&
-      vars.AZURE_PLAN_CLIENT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != ''
+      vars.AZURE_PLAN_CLIENT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -105,7 +110,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'pause' || inputs.action == 'resume') &&
-      vars.AZURE_SUBSCRIPTION_ID != ''
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     environment: ${{ inputs.env == 'test' && 'test-infra' || ((inputs.env == 'prod' && inputs.action == 'pause') && 'prod-power' || inputs.env) }}
     concurrency:
@@ -191,7 +197,8 @@ jobs:
     name: down (${{ inputs.env }})
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.action == 'down' &&
-      vars.AZURE_SUBSCRIPTION_ID != ''
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     environment: ${{ inputs.env == 'test' && 'test-infra' || inputs.env }}
     concurrency:
@@ -272,7 +279,8 @@ jobs:
     name: up (${{ inputs.env }})
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.action == 'up' &&
-      vars.AZURE_SUBSCRIPTION_ID != ''
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     environment: ${{ inputs.env == 'test' && 'test-infra' || inputs.env }}
     concurrency:
@@ -353,7 +361,7 @@ jobs:
       - name: Platform install
         run: |
           set -euo pipefail
-          az aks get-credentials -g "rg-bbm-$ENV_NAME-compute-eus2" -n "aks-bbm-$ENV_NAME-eus2" \
+          az aks get-credentials -g "rg-bbm-$ENV_NAME-compute-$BBM_REGION_ABBR" -n "aks-bbm-$ENV_NAME-$BBM_REGION_ABBR" \
             --format azure --overwrite-existing
           kubelogin convert-kubeconfig -l azurecli
           deploy/platform/install.sh "$ENV_NAME" --values "$RUNNER_TEMP/values-infra.yaml" --wait
@@ -390,7 +398,8 @@ jobs:
     name: auto-pause (${{ matrix.env }})
     if: >-
       github.event_name == 'schedule' && github.event.schedule != '30 6 * * *' &&
-      vars.AZURE_SUBSCRIPTION_ID != ''
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -488,7 +497,8 @@ jobs:
     name: re-pause Postgres (${{ matrix.env }})
     if: >-
       github.event_name == 'schedule' && github.event.schedule == '30 6 * * *' &&
-      vars.AZURE_SUBSCRIPTION_ID != ''
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
