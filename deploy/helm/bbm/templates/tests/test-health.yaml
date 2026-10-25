@@ -7,7 +7,10 @@ metadata:
     {{- include "bbm.labels" (dict "root" $ "component" "test") | nindent 4 }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    # Keep the pod until the next `helm test`: deploy.yml runs `helm test
+    # --logs`, which fails ("pod not found") if hook-succeeded already
+    # deleted it, turning a passing test into a failed deploy.
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
