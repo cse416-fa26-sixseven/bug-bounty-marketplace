@@ -206,6 +206,9 @@ jobs:
       environment: preview
       namespace: ${{ needs.gate.outputs.namespace }}
       kind: preview
+      # The input check pairs environment preview with bbm-preview, also for
+      # deletes (which pull no images); the default (bbm) is for test.
+      image_repository_prefix: bbm-preview
 
   # ---------------------------------------------------------------------
   # Sticky PR comment (one per PR, updated in place). Kept in its own job
