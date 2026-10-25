@@ -60,6 +60,30 @@ make_tree() {
     sed 's/"staging"/"test"/' "$dst/envs/staging/compute.tfvars" >"$dst/envs/test/compute.tfvars"
   fi
   untenant "$dst"
+  pin_fixture_regions "$dst"
+}
+
+# pin_fixture_regions <tree>: give the copy a fixed region layout (test ncus,
+# staging frc, prod cac, every env on Standard_B4as_v2), so the assertions
+# below don't depend on the regions the real subscription uses. The real
+# envs/** layout is checked for consistency separately ("repo:" checks).
+pin_fixture_regions() {
+  local dst=$1 e loc abbr f
+  for pair in test=northcentralus/ncus staging=francecentral/frc prod=canadacentral/cac; do
+    e=${pair%%=*} loc=${pair#*=}; abbr=${loc#*/}; loc=${loc%/*}
+    for f in "$dst/envs/$e/data.tfvars" "$dst/envs/$e/compute.tfvars"; do
+      sed -E -e "s/^(location[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$loc\"/" \
+        -e "s/^(location_abbr[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$abbr\"/" \
+        -e 's/^(system_vm_size[[:space:]]*=[[:space:]]*)"[^"]*"/\1"Standard_B4as_v2"/' "$f" >"$f.tmp"
+      cat "$f.tmp" >"$f"
+      rm -f "$f.tmp"
+    done
+    for f in "$dst/envs/global/bootstrap.tfvars" "$dst/envs/global/global.tfvars"; do
+      sed -E "s/^([[:space:]]+${e}[[:space:]]*=[[:space:]]*\{ location = )\"[^\"]*\", location_abbr = \"[^\"]*\"/\1\"$loc\", location_abbr = \"$abbr\"/" "$f" >"$f.tmp"
+      cat "$f.tmp" >"$f"
+      rm -f "$f.tmp"
+    done
+  done
 }
 
 # untenant <tree>: put the per-tenant values infra/up.sh writes (subscription,
@@ -240,18 +264,30 @@ check_fails "resolve: abbr not matching the map dies" resolve_location_abbr nort
 check_fails "resolve: bad abbr dies" resolve_location_abbr swedencentral Sweden-1
 check_fails "resolve: bad region name dies" resolve_location_abbr "North Central US"
 
-# committed regions: one per env (ADR 0002 section 8), home = test's region
-eq "committed: home region" "$(tfvars_get_string "$B" location)/$(tfvars_get_string "$G" location_abbr)" "northcentralus/ncus"
+# fixture regions (pin_fixture_regions): one per env (ADR 0002 section 8)
+eq "fixture: home region" "$(tfvars_get_string "$B" location)/$(tfvars_get_string "$G" location_abbr)" "northcentralus/ncus"
 for pair in test=northcentralus/ncus staging=francecentral/frc prod=canadacentral/cac; do
   e=${pair%%=*}
-  eq "committed: $e region (data + compute)" \
+  eq "fixture: $e region (data + compute)" \
     "$(tfvars_get_string "$TREE/envs/$e/data.tfvars" location)/$(tfvars_get_string "$TREE/envs/$e/compute.tfvars" location_abbr)" "${pair#*=}"
   eq "env_region $e" "$(env_region "$e" | tr ' ' /)" "${pair#*=}"
 done
-eq "committed: env_locations matches the env tfvars (bootstrap)" \
+eq "fixture: env_locations matches the env tfvars (bootstrap)" \
   "$(grep -A4 '^env_locations' "$B")" "$(env_locations_block)"
-eq "committed: env_locations matches the env tfvars (global)" \
+eq "fixture: env_locations matches the env tfvars (global)" \
   "$(grep -A4 '^env_locations' "$G")" "$(env_locations_block)"
+# repo: the real envs/** layout must agree with itself, whatever regions it uses
+for e in test staging prod; do
+  rd="$repo/infra/terraform/envs/$e/data.tfvars" rc="$repo/infra/terraform/envs/$e/compute.tfvars"
+  eq "repo: $e data and compute share a region" \
+    "$(tfvars_get_string "$rd" location)/$(tfvars_get_string "$rd" location_abbr)" \
+    "$(tfvars_get_string "$rc" location)/$(tfvars_get_string "$rc" location_abbr)"
+  for gf in bootstrap global; do
+    eq "repo: env_locations ($gf) lists $e in its region" \
+      "$(grep -E "^[[:space:]]+${e}[[:space:]]*=" "$repo/infra/terraform/envs/global/$gf.tfvars" | grep -oE 'location = "[^"]*"' | head -1)" \
+      "location = \"$(tfvars_get_string "$rd" location)\""
+  done
+done
 for e in test staging prod; do
   eq "env-region.sh $e = env_region" "$("$TREE/scripts/env-region.sh" "$e" --get abbr)" "$(env_region "$e" | awk '{print $2}')"
 done
