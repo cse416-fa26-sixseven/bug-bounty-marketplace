@@ -14,6 +14,8 @@
   add-on off (section 8), because the app routing Gateway API's `istiod` does not fit a 2-vCPU node
   and Azure for Students allows 6 vCPUs per region. The home region (tfstate, shared RG) stays
   `northcentralus`; section 7 now describes the home region.
+- **Amended:** 2026-10-25, continuous deployment (section 9): green `main` builds deploy to staging
+  automatically, then to prod with the same tag after the `prod` reviewer approves.
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
   interfaces, and its region (`eastus2` / `eus2`, fallback `centralus`). Everything else in 0001
@@ -371,6 +373,39 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   `automatic_upgrade_channel = "patch"` / `node_os_upgrade_channel = "NodeImage"` once the quota
   leaves room for a surge node. Re-run the bootstrap `gh_setup_commands` so the Environment
   variables follow.
+
+### 9. Continuous deployment
+
+- **Flow.** `cd.yml` runs on `workflow_run` of `integration-azure.yml` (completed, branch `main`).
+  When that run is green and was a `push` (not the nightly or a dispatch, which rebuild a head
+  already deployed), it deploys `sha-<7 of head_sha>` to **staging** through `deploy.yml`
+  (`workflow_call`). Only after staging reports `deployed` for that tag does a prod job deploy
+  **the same tag** to **prod**, gated on the `prod` Environment's required reviewer
+  (`github_reviewer_ids`). The run summary shows the tag and the staging URL for the approver.
+  Runbook: [docs/devops/cd.md](../devops/cd.md).
+- **One deploy path.** `deploy.yml` gains inputs `resume_if_paused` and `ref` (the tested commit,
+  must be on `main`) and outputs `url` and `health`. It keeps `workflow_dispatch` for manual
+  deploys and rollbacks. Its job is bound to the env's Environment, so the Environment-level
+  `AZURE_CLIENT_ID` / `AZURE_LOCATION[_ABBR]` (section 8) resolve under `workflow_call` too.
+  The existing checks run unchanged: images in ACR, revision on `main`, `helm upgrade --atomic`,
+  `helm test`, `/health`, smoke, `bbm-last-deployed-tag` on the data RG.
+- **Paused / down.** With `resume_if_paused`, a `paused` env is resumed first with
+  `env-power.sh <env> resume` and left running for the nightly auto-pause. Prod's resume runs
+  inside the gated job, after approval. A `down` env fails the run ("run env-power `<env>` up")
+  instead of skipping green, so a skip can never count as having passed staging.
+  `gh-bbm-staging` / `gh-bbm-prod` already hold Contributor on their data and compute RGs, which
+  covers AKS/Postgres start and the RG tags. No new role.
+- **Concurrency.** `deploy.yml`'s job-level group `env-<env>` (`cancel-in-progress: false`), shared
+  with `env-power.yml`, means CD never races a power change and a running deploy is never
+  cancelled. A prod job parked on the approval holds `env-prod`, so a newer green build cancels
+  older CD runs whose status is still `waiting` (not yet approved) rather than queueing behind
+  them.
+- **Off switch and rollback.** Repo variable `CD_ENABLED=false` (or disabling `cd.yml`) stops new
+  CD runs; the gate also skips green until bootstrap has set the repo variables. Rollback stays
+  manual: dispatch `deploy.yml` with an older `sha-<7>`.
+- **Why not a deploy step inside `integration-azure.yml`:** that workflow runs as the `test`
+  identity and also runs nightly. A separate `workflow_run` workflow keeps the integration run's
+  result independent of staging and prod, and is always taken from the default branch.
 
 ## Alternatives considered
 

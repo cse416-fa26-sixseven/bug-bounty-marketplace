@@ -351,8 +351,11 @@ Use `--file` for the deployer key so it doesn't land in shell history, then dele
 
 1. Merge the PR from section 9. The push to `main` runs `integration-azure.yml`, which builds and
    pushes `sha-<7>` images and tests them in a namespace on the test cluster.
-2. Run **Deploy (AKS)** (`deploy.yml`) with `env=staging` and `image_tag=sha-<7>` from that green
-   run. For prod, run it with `env=prod`; a reviewer must approve.
+2. When that run is green, **CD** (`cd.yml`, [cd.md](cd.md)) deploys the same `sha-<7>` to
+   staging (resuming it if paused), then waits for the `prod` reviewer to approve the prod deploy
+   in the run's **Review deployments** dialog. To deploy by hand instead (CD off with
+   `CD_ENABLED=false`, or an older tag), run **Deploy (AKS)** (`deploy.yml`) with `env=staging` and
+   `image_tag=sha-<7>`; for prod, a reviewer must approve.
 3. Open `https://staging.<zone>`.
 
 After the first deploy, `env-power <env> up` redeploys the last deployed tag. Pause idle envs with

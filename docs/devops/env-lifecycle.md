@@ -22,6 +22,11 @@ page is the runbook. To create or delete environments, see
 Everything goes through one workflow, **Env power** (`.github/workflows/env-power.yml`). Its logic
 lives in `infra/terraform/scripts/env-power.sh`, which you can also run locally after `az login`.
 
+**Continuous deployment** ([cd.md](cd.md)) also turns envs on. A green `main` build resumes a
+**paused** staging (and, after the reviewer approves, a paused prod) with the same
+`env-power.sh <env> resume`, deploys, and leaves the env running until the nightly auto-pause. A
+**down** env fails the CD run with "run env-power `<env>` up".
+
 ## States
 
 ```mermaid
@@ -182,7 +187,9 @@ the one environment open to PR branches). `status` uses the plan identity, which
 
 `deploy.yml` and every manual mutating env-power job share the concurrency group `env-<env>`. A
 deploy waits for a pause or resume to finish and the other way round. GitHub keeps at most one
-pending run per group, so a newer queued run replaces an older queued one.
+pending run per group, so a newer queued run replaces an older queued one. CD (`cd.yml`) deploys
+through `deploy.yml`, so it uses the same groups; a CD prod promotion still waiting for approval is
+cancelled by the next green build instead (see [cd.md](cd.md#concurrency)).
 
 The scheduled jobs (`scheduled-pause`, `scheduled-repause-db`) use their own group,
 `env-power-scheduled-<env>`. A prod run waiting on an unanswered `prod` approval holds `env-prod`,
@@ -271,7 +278,7 @@ infra/terraform/scripts/env-power.sh staging resume
 
 | symptom                                                       | cause / fix                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Deploy run is green but says "skipped: env is paused/down"    | Expected. Run `resume` (or `up`), then deploy again. `up` redeploys automatically.                                                                                                                                                               |
+| Deploy run is green but says "skipped: env is paused/down"    | Expected for manual deploys. Run `resume` (or `up`) and deploy again, or set `resume_if_paused`. CD resumes on its own. `up` redeploys automatically.                                                                                            |
 | `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr> --query provisioningState`.                                                                                                   |
 | `cluster ... not found: <env> is down`                        | The compute stack was destroyed. Use `up`, not `resume`.                                                                                                                                                                                         |
 | Resume finished but `/health` never answers                   | Pods are still starting or crash-looping. `kubectl -n bbm get pods`, `kubectl -n bbm describe pod ...`. Check Postgres is `Ready`. A failing Key Vault CSI mount usually means a broken federated credential: run `up`, which reapplies compute. |

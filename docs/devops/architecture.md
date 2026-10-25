@@ -256,8 +256,10 @@ flowchart TB
     end
     MAIN -- "infra/terraform changes" --> TFA["terraform.yml apply-global<br/>(infra-global reviewer)"]
 
-    IA -. "planned: auto-deploy if staging running" .-> DS
-    DS["deploy.yml staging<br/>power gate, image check, helm upgrade --atomic, smoke"]
+    IA -- "green push run" --> CDW["cd.yml<br/>staging, then prod after approval"]
+    CDW --> DS
+    CDW -- "staging passed, same tag" --> DP
+    DS["deploy.yml staging<br/>resume if paused (CD), image check,<br/>helm upgrade --atomic, helm test, smoke"]
     MAN(["Manual dispatch from main"]) --> DS
     MAN --> DP["deploy.yml prod<br/>1 required reviewer"]
     MAN --> EP["env-power.yml<br/>status, pause, resume, down, up"]
@@ -270,9 +272,11 @@ flowchart TB
 
 - Every Azure workflow starts with a `gate` job that skips green until bootstrap has set the repo
   variables, and never runs Azure steps for fork PRs.
-- Today staging is deployed by dispatching `deploy.yml` (or by `env-power.yml up`, which redeploys
-  the last tag). An automatic staging deploy after a green `integration-azure.yml` run is not wired
-  yet.
+- **Continuous deployment** ([cd.md](cd.md)): every green `integration-azure.yml` push run on
+  `main` deploys its `sha-<7>` tag to staging through `cd.yml` → `deploy.yml` (resuming a paused
+  staging first). When staging passes, the same tag waits on the `prod` reviewer and then deploys to
+  prod. Manual `deploy.yml` dispatches (rollbacks, specific tags) and `env-power.yml up` (redeploys
+  the last tag) still work as before. Pause CD with the repo variable `CD_ENABLED=false`.
 - `deploy.yml` and every manual mutating `env-power.yml` job share the concurrency group
   `env-<env>`, so a deploy never races a manual pause or resume. The scheduled auto-pause and PG
   re-pause use `env-power-scheduled-<env>` instead, so a parked prod approval can't block the nightly
@@ -371,7 +375,6 @@ recreated.
   on the one node) and enable `analysis` and the KEDA ScaledObject in the env values.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
-- **Automatic staging deploy** from `main` after `integration-azure.yml` passes.
 - **Sandbox pool** once Dsv5 quota is granted.
 - **Observability.** Container Insights is on in prod only. There are no alert rules on error
   rate, latency or PG connections yet.
