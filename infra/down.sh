@@ -20,8 +20,13 @@
 # Afterwards soft-deleted Key Vaults named kv-bbm-* in this subscription are
 # purged so the names can be reused at once.
 #
-# The tfvars/backend files are left as they are; the script prints what to
-# revert. Re-running after a failure continues where it stopped.
+# With --all, after a successful teardown the per-tenant tfvars/backend fields
+# up.sh wrote (subscription_id, suffix, admin/power-operator/Key Vault officer
+# object ids, the global hint block's principal ids, backend state account)
+# are reset to their placeholders, so up.sh on another tenant starts clean.
+# dns_zone_name, alert_emails, github_reviewer_ids and github_repo are kept.
+# --envs alone changes no files. Re-running after a failure continues where it
+# stopped.
 set -euo pipefail
 
 export BBM_LOG_PREFIX=down
@@ -111,6 +116,7 @@ if [[ $ALL == 1 ]]; then
   info "  bootstrap stack (state account, every bbm resource group, OIDC apps, DNS zones${ZONE:+ for $ZONE})"
 fi
 info "  then purge soft-deleted kv-bbm-* Key Vaults"
+[[ $ALL == 1 ]] && info "  finally reset the per-tenant fields in infra/terraform/envs/** to placeholders"
 if [[ "$DRY_RUN" == 0 && "$ASSUME_YES" == 0 ]]; then
   _tty_ok || die "no terminal for the confirmation: pass --yes"
   printf 'Type the subscription name (%s) to confirm: ' "$SUB_NAME" >/dev/tty
@@ -263,12 +269,14 @@ fi
 step 8 "Purge soft-deleted Key Vaults"
 purge_vaults
 
+# ---- 9. tfvars --------------------------------------------------------------
+step 9 "Reset per-tenant tfvars fields"
+reset_tenant_fields
+
 cat >&2 <<EOF
 
-Done. Left as they were (revert or overwrite on the next up.sh):
-  - infra/terraform/envs/**/*.tfvars: subscription_id, suffix, admin/officer object ids,
-    the global.tfvars bootstrap hint block, dns_zone_name (placeholders: $PLACEHOLDER_GUID / "$PLACEHOLDER_SUFFIX")
-  - infra/terraform/envs/**/backend*.hcl: storage_account_name (placeholder stbbmtfstate$PLACEHOLDER_SUFFIX)
+Done. The per-tenant fields above were reset to placeholders ($PLACEHOLDER_GUID / "$PLACEHOLDER_SUFFIX" /
+stbbmtfstate$PLACEHOLDER_SUFFIX); commit them. Kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo.
   - Deleted Entra app registrations sit in the recycle bin for 30 days (only matters for reusing names at once).
   - stacks/bootstrap/terraform.tfstate.* backups (gitignored) can be deleted.
 EOF

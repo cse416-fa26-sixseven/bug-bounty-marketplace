@@ -3,7 +3,7 @@
 subscription_id = "00000000-0000-0000-0000-000000000000"
 location        = "eastus2"
 location_abbr   = "eus2"
-github_repo     = "LoistCloist/bug-bounty-marketplace"
+github_repo     = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs it with gh repo view
 
 # Object ID of the bbm-admins Entra group (az ad group show -g bbm-admins --query id -o tsv).
 admin_object_ids          = []

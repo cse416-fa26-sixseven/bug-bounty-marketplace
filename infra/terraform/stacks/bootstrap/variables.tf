@@ -23,7 +23,12 @@ variable "location_abbr" {
 variable "github_repo" {
   description = "GitHub repository (owner/name) trusted by the OIDC identities."
   type        = string
-  default     = "LoistCloist/bug-bounty-marketplace"
+  default     = "cse416-fa26-sixseven/bug-bounty-marketplace"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repo))
+    error_message = "github_repo must be owner/name (infra/up.sh writes it from gh repo view)."
+  }
 }
 
 variable "admin_object_ids" {

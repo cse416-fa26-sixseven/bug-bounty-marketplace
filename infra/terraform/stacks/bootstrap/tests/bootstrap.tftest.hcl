@@ -88,12 +88,12 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = module.github_oidc.subjects["gh-bbm-prod"] == ["repo:LoistCloist/bug-bounty-marketplace:environment:prod"]
+    condition     = module.github_oidc.subjects["gh-bbm-prod"] == ["repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:prod"]
     error_message = "gh-bbm-prod must trust only the reviewer-gated prod environment"
   }
 
   assert {
-    condition     = module.github_oidc.subjects["gh-bbm-prod-power"] == ["repo:LoistCloist/bug-bounty-marketplace:environment:prod-power"]
+    condition     = module.github_oidc.subjects["gh-bbm-prod-power"] == ["repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:prod-power"]
     error_message = "gh-bbm-prod-power must trust only prod-power"
   }
 
@@ -107,7 +107,7 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = contains(module.github_oidc.subjects["gh-bbm-plan"], "repo:LoistCloist/bug-bounty-marketplace:pull_request")
+    condition     = contains(module.github_oidc.subjects["gh-bbm-plan"], "repo:cse416-fa26-sixseven/bug-bounty-marketplace:pull_request")
     error_message = "plan identity must trust pull_request"
   }
 
@@ -246,7 +246,7 @@ run "apply_with_mocks" {
   # ---- test env + ephemeral namespaces -----------------------------------------
   assert {
     condition = (
-      module.github_oidc.subjects["gh-bbm-test"] == ["repo:LoistCloist/bug-bounty-marketplace:environment:test-infra"] &&
+      module.github_oidc.subjects["gh-bbm-test"] == ["repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:test-infra"] &&
       [for ra in local.oidc_identities["gh-bbm-test"].role_assignments : ra.key] == [for ra in local.oidc_identities["gh-bbm-staging"].role_assignments : ra.key] &&
       local.oidc_identities["gh-bbm-test"].role_assignments[0].scope == azurerm_resource_group.env_data["test"].id
     )
@@ -336,20 +336,20 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo LoistCloist/bug-bounty-marketplace --env prod-power")
+    condition     = strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo cse416-fa26-sixseven/bug-bounty-marketplace --env prod-power")
     error_message = "gh_setup_commands missing prod-power client id"
   }
 
   assert {
-    condition     = strcontains(output.gh_setup_commands, "repos/LoistCloist/bug-bounty-marketplace/environments/infra-global/deployment-branch-policies")
+    condition     = strcontains(output.gh_setup_commands, "repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments/infra-global/deployment-branch-policies")
     error_message = "gh_setup_commands missing infra-global branch policy"
   }
 
   assert {
     condition = (
       strcontains(output.gh_setup_commands, "# --- environment: test-infra (gh-bbm-test)") &&
-      strcontains(output.gh_setup_commands, "repos/LoistCloist/bug-bounty-marketplace/environments/test-infra/deployment-branch-policies") &&
-      strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo LoistCloist/bug-bounty-marketplace --env test-infra") &&
+      strcontains(output.gh_setup_commands, "repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments/test-infra/deployment-branch-policies") &&
+      strcontains(output.gh_setup_commands, "gh variable set AZURE_CLIENT_ID --repo cse416-fa26-sixseven/bug-bounty-marketplace --env test-infra") &&
       jsondecode(local.env_payload["test-infra"]).reviewers == [] &&
       alltrue([for e in ["test", "preview", "infra-global", "contracts-sepolia", "staging", "prod", "prod-power"] :
       strcontains(output.gh_setup_commands, "# --- environment: ${e} (")])

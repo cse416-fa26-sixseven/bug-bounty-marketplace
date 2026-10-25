@@ -136,6 +136,66 @@ else
   echo "  skip terraform fmt check (no terraform on PATH)"
 fi
 
+# reset_tenant_fields (down.sh --all / up.sh on a subscription mismatch)
+RT="$T/tree-reset"
+make_tree "$RT"
+BBM_TF_ROOT="$RT"
+RB="$RT/envs/global/bootstrap.tfvars" RG_="$RT/envs/global/global.tfvars"
+OLD=aaaaaaaa-0000-0000-0000-00000000000a
+{
+  tfvars_set "$RB" subscription_id '"11111111-2222-3333-4444-555555555555"'
+  tfvars_set "$RB" dns_zone_name '"bbm.example.com"'
+  tfvars_set "$RB" alert_emails '["me@uni.edu"]'
+  tfvars_set "$RB" github_reviewer_ids '[12345]'
+  tfvars_list_add "$RB" admin_object_ids "$OLD"
+  tfvars_list_add "$RB" power_operator_object_ids "$OLD"
+  tfvars_set "$RB" preregistered_resource_providers '["Microsoft.Network"]'
+  { cat "$T/hint"; echo 'dns_zone_name = "bbm.example.com"'; } >"$T/hint2"
+  tfvars_replace_block "$RG_" "$T/hint2"
+  tfvars_list_add "$RG_" secret_officer_user_object_ids "$OLD"
+  for e in test staging prod; do
+    tfvars_set "$RT/envs/$e/data.tfvars" suffix '"ab12"'
+    tfvars_list_add "$RT/envs/$e/data.tfvars" secret_officer_user_object_ids "$OLD"
+    tfvars_set "$RT/envs/$e/compute.tfvars" subscription_id '"11111111-2222-3333-4444-555555555555"'
+  done
+  for f in "$RT"/envs/*/backend*.hcl; do
+    tfvars_set "$f" storage_account_name '"stbbmtfstateab12"'
+    tfvars_set "$f" resource_group_name '"rg-bbm-tfstate-xyz"'
+  done
+} 2>/dev/null
+check "reset: old values present before" grep -qF "$OLD" "$RT/envs/prod/data.tfvars"
+reset_out=$(reset_tenant_fields 2>&1)
+eq "reset: bootstrap subscription_id" "$(tfvars_get_string "$RB" subscription_id)" "$PLACEHOLDER_GUID"
+eq "reset: admin_object_ids" "$(tfvars_get "$RB" admin_object_ids)" "[]"
+eq "reset: power_operator_object_ids" "$(tfvars_get "$RB" power_operator_object_ids)" "[]"
+eq "reset: preregistered providers" "$(tfvars_get "$RB" preregistered_resource_providers)" "[]"
+eq "reset: global suffix" "$(tfvars_get_string "$RG_" suffix)" "$PLACEHOLDER_SUFFIX"
+eq "reset: global ephemeral principal" "$(tfvars_get "$RG_" ephemeral_ci_principal_id)" "null"
+eq "reset: global sp officers" "$(tfvars_get "$RG_" secret_officer_sp_object_ids)" "[]"
+eq "reset: global user officers" "$(tfvars_get "$RG_" secret_officer_user_object_ids)" "[]"
+for e in test staging prod; do
+  eq "reset: $e data officers" "$(tfvars_get "$RT/envs/$e/data.tfvars" secret_officer_user_object_ids)" "[]"
+  eq "reset: $e data suffix" "$(tfvars_get_string "$RT/envs/$e/data.tfvars" suffix)" "$PLACEHOLDER_SUFFIX"
+  eq "reset: $e compute subscription" "$(tfvars_get_string "$RT/envs/$e/compute.tfvars" subscription_id)" "$PLACEHOLDER_GUID"
+done
+eq "reset: no old object id left" "$(grep -rlF "$OLD" "$RT/envs" | wc -l | tr -d ' ')" "0"
+eq "reset: backends back to committed placeholders" \
+  "$(cd "$RT/envs" && find . -name 'backend*.hcl' | sort | xargs cat | cksum)" \
+  "$(cd "$repo/infra/terraform/envs" && find . -name 'backend*.hcl' | sort | xargs cat | cksum)"
+eq "reset: keeps dns_zone_name" "$(tfvars_get_string "$RB" dns_zone_name)" "bbm.example.com"
+eq "reset: keeps hint dns_zone_name" "$(tfvars_get_string "$RG_" dns_zone_name)" "bbm.example.com"
+eq "reset: keeps alert_emails" "$(tfvars_get "$RB" alert_emails)" '["me@uni.edu"]'
+eq "reset: keeps github_reviewer_ids" "$(tfvars_get "$RB" github_reviewer_ids)" "[12345]"
+if grep -qE '^bbm: set .*/envs/global/bootstrap.tfvars: admin_object_ids = \[\]$' <<<"$reset_out"; then
+  ok_ "reset: prints what it reset"
+else
+  bad "reset: prints what it reset"
+fi
+if [[ -n "$real_terraform" ]]; then
+  check "reset tfvars pass terraform fmt -check" terraform fmt -check -recursive "$RT/envs"
+fi
+BBM_TF_ROOT="$TREE"
+
 # shellcheck disable=SC2034 # read by common.sh
 DRY_RUN=1
 before=$(cat "$B")
@@ -211,6 +271,7 @@ cat >"$SHIM/gh" <<'EOF'
 echo "gh $*" >>"$BBM_TEST_LOG"
 case "$1" in
   auth) exit 0 ;;
+  repo) [[ "$2" == view ]] && { echo "neworg/bbm-renamed"; exit 0; }; exit 1 ;;
   api) [[ "$2" == user ]] && { echo 12345; exit 0; }; [[ "$2" == repos/* ]] && { echo true; exit 0; }; exit 1 ;;
   *) exit 1 ;;
 esac
@@ -260,7 +321,8 @@ snap0=$(snapshot)
 SUB=11111111-2222-3333-4444-555555555555
 export BBM_TEST_LOG="$LOG"
 run_script() { # run_script <script> <args...> → output in $T/out
-  env -u CLOUDFLARE_API_TOKEN PATH="$SHIM:/usr/bin:/bin" BBM_TF_ROOT="$TREE2" BBM_REPO_ROOT="$repo" \
+  # shellcheck disable=SC2086 # RUN_WRAP is empty or a single word (setsid -w)
+  ${RUN_WRAP:-} env -u CLOUDFLARE_API_TOKEN PATH="$SHIM:/usr/bin:/bin" BBM_TF_ROOT="${RUN_TREE:-$TREE2}" BBM_REPO_ROOT="$repo" \
     NO_COLOR=1 "$repo/infra/$1" "${@:2}" >"$T/out" 2>&1
 }
 
@@ -290,16 +352,57 @@ has "up: acr import curl" 'mirror/curl:8.10.1'
 has "up: prod env included" 'data prod init -reconfigure'
 has "up: llm-api-key placeholder" 'llm-api-key --value placeholder-set-me'
 has "up: platform install" 'install.sh test --values'
+has "up: github_repo follows gh repo view" 'github_repo = "neworg/bbm-renamed"'
+has "up: gh admin check uses the new repo" 'gh: admin on neworg/bbm-renamed'
+if grep -qF 'filled in for subscription' <<<"$out"; then bad "up: no tenant warning on placeholder"; else ok_ "up: no tenant warning on placeholder"; fi
 eq "up: dry-run left the tree untouched" "$(snapshot)" "$snap0"
 mut=$(grep -E '^az .*(import|secret set|purge|create|delete( |$)| update)|^gh (variable|api -X)|^terraform .*(apply|destroy|init|plan)|^(kubectl|kubelogin|helm) ' "$LOG" || true)
 eq "up: no mutating CLI calls" "$mut" ""
 
 check_fails "up: missing --subscription" run_script up.sh
+
+# tenant switch: bootstrap.tfvars still holds another subscription's values
+TREE3="$T/tree3"
+make_tree "$TREE3"
+OLD_SUB=22222222-0000-0000-0000-000000000000
+{
+  BBM_TF_ROOT="$TREE3" tfvars_set "$TREE3/envs/global/bootstrap.tfvars" subscription_id "\"$OLD_SUB\""
+  BBM_TF_ROOT="$TREE3" tfvars_set "$TREE3/envs/global/bootstrap.tfvars" admin_object_ids '["bbbbbbbb-0000-0000-0000-00000000000b"]'
+} 2>/dev/null
+if RUN_TREE="$TREE3" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  ok_ "up: tenant mismatch --yes --dry-run exits 0"
+else
+  bad "up: tenant mismatch --yes --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: tenant mismatch warned" "filled in for subscription $OLD_SUB, not $SUB"
+has "up: tenant mismatch resets admin ids" 'admin_object_ids = [] (was ["bbbbbbbb-0000-0000-0000-00000000000b"])'
+has "up: tenant mismatch resets subscription" "subscription_id = \"$PLACEHOLDER_GUID\" (was \"$OLD_SUB\")"
+if setsid -w true 2>/dev/null; then # no controlling terminal and no --yes: refuse, don't guess
+  if RUN_WRAP="setsid -w" RUN_TREE="$TREE3" run_script up.sh --subscription "$SUB" --zone bbm.example.com --dry-run; then
+    bad "up: tenant mismatch without --yes or a tty dies"
+  else
+    ok_ "up: tenant mismatch without --yes or a tty dies"
+  fi
+  if grep -qF 'per-tenant fields not reset' "$T/out"; then ok_ "up: tenant mismatch refusal explains"; else bad "up: tenant mismatch refusal explains"; fi
+else
+  echo "  skip tenant-mismatch no-tty check (no setsid -w)"
+fi
 check_fails "up: bad env name" run_script up.sh --subscription "$SUB" --envs dev --dry-run
 check "up: --help" run_script up.sh --help
 if grep -qi 'one-command' "$T/out"; then ok_ "up: --help prints usage"; else bad "up: --help prints usage"; fi
 
 : >"$LOG"
+# down --all resets per-tenant fields; prefill TREE2 as up.sh would have
+{
+  BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/bootstrap.tfvars" subscription_id "\"$SUB\""
+  BBM_TF_ROOT="$TREE2" tfvars_list_add "$TREE2/envs/global/bootstrap.tfvars" admin_object_ids aaaaaaaa-0000-0000-0000-000000000001
+  BBM_TF_ROOT="$TREE2" tfvars_list_add "$TREE2/envs/test/data.tfvars" secret_officer_user_object_ids aaaaaaaa-0000-0000-0000-000000000001
+  BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/backend.hcl" storage_account_name '"stbbmtfstateab12"'
+  BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/bootstrap.tfvars" dns_zone_name '"bbm.example.com"'
+} 2>/dev/null
+snap0=$(snapshot)
 if run_script down.sh --subscription "$SUB" --all --yes --dry-run; then
   ok_ "down.sh --all --dry-run exits 0"
 else
@@ -310,10 +413,19 @@ out=$(cat "$T/out")
 has "down: compute before data (test)" 'tf.sh compute test plan -destroy -out=down.tfplan'
 has "down: global destroy" 'tf.sh global global plan -destroy'
 has "down: gh var delete parsed" 'gh variable delete ACR_NAME --repo'
-has "down: gh env delete parsed" 'repos/LoistCloist/bug-bounty-marketplace/environments/test-infra'
+has "down: gh env delete parsed" 'repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments/test-infra'
 has "down: bootstrap state pull" 'tf.sh bootstrap global state pull'
 has "down: bootstrap destroy" 'tf.sh bootstrap global plan -destroy'
 has "down: purge vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l eastus2'
+has "down: resets admin ids" 'bootstrap.tfvars: admin_object_ids = [] (was ["aaaaaaaa-0000-0000-0000-000000000001"])'
+has "down: resets subscription" "bootstrap.tfvars: subscription_id = \"$PLACEHOLDER_GUID\" (was \"$SUB\")"
+has "down: resets data officers" 'test/data.tfvars: secret_officer_user_object_ids = [] (was'
+has "down: resets backend account" 'global/backend.hcl: storage_account_name = "stbbmtfstate0000" (was "stbbmtfstateab12")'
+if grep -qE 'dns_zone_name|alert_emails|github_reviewer_ids' <<<"$(grep 'would set' <<<"$out")"; then
+  bad "down: keeps dns_zone_name / alert_emails / github_reviewer_ids"
+else
+  ok_ "down: keeps dns_zone_name / alert_emails / github_reviewer_ids"
+fi
 order=$(grep -oE 'tf\.sh (compute|data|global|bootstrap) [a-z]+ plan' <<<"$out" | awk '{print $2"/"$3}' | tr '\n' ' ')
 eq "down: destroy order" "$order" "compute/test data/test compute/staging data/staging compute/prod data/prod global/global bootstrap/global "
 if grep -q 'gh variable delete AZURE_CLIENT_ID' <<<"$out"; then bad "down: env-scoped variable not deleted as repo var"; else ok_ "down: env-scoped variable not deleted as repo var"; fi

@@ -62,7 +62,7 @@ variable "dns_zone_name" {
 variable "repo" {
   description = "GitHub repository (owner/name) recorded in the repo tag."
   type        = string
-  default     = "LoistCloist/bug-bounty-marketplace"
+  default     = "cse416-fa26-sixseven/bug-bounty-marketplace"
 }
 
 variable "extra_tags" {

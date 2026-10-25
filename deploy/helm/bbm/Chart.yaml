@@ -8,9 +8,9 @@ type: application
 version: 0.2.0
 appVersion: "0.0.0"
 kubeVersion: ">=1.29.0-0"
-home: https://github.com/LoistCloist/bug-bounty-marketplace
+home: https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace
 sources:
-  - https://github.com/LoistCloist/bug-bounty-marketplace
+  - https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace
 keywords:
   - bbm
   - aks

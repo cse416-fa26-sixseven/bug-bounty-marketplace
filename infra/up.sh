@@ -11,14 +11,16 @@
 #   --prod          also bring up prod (same as listing it in --envs)
 #   --skip-github   do not run the generated gh setup script (repo vars + envs)
 #   --yes           no confirmations; accept defaults; keep going when the
-#                   DNS delegation has not propagated yet
+#                   DNS delegation has not propagated yet; reset the old
+#                   tenant's tfvars fields on a subscription mismatch
 #   --dry-run       print mutating commands and file edits instead of running
 #                   them (read-only az/gh/terraform-output queries still run)
 #
 # Log in first:  az login --use-device-code   (add --tenant <id> if needed)
 #
 # Steps (each idempotent; a failed run is resumed by running it again):
-#    1 preflight            tools, az login, subscription, your object id, gh admin
+#    1 preflight            tools, az login, subscription, your object id, github_repo
+#                           (from gh repo view), gh admin, tenant-switch check
 #    2 DNS zone             --zone / bootstrap.tfvars / prompt
 #    3 bootstrap.tfvars     subscription, admin ids, providers, alert email, reviewers
 #    4 quota and versions   BASv2/regional vCPU, PG B1ms, AKS GA minor (warnings)
@@ -133,7 +135,31 @@ owner=$(az role assignment list --assignee "$ME" --scope "/subscriptions/$SUB" -
   --query "[?roleDefinitionName=='Owner'] | length(@)" -o tsv 2>/dev/null || echo "?")
 [[ "$owner" != 0 ]] || warn "no Owner role assignment found for you on the subscription; bootstrap/global applies need Owner"
 
+# Account switch: bootstrap.tfvars still filled in for another subscription
+# (down.sh --all resets it; an old checkout or a skipped teardown does not).
+prev_sub=$(lower "$(tfvars_get_string "$BOOT_VARS" subscription_id)")
+if [[ -n "$prev_sub" && "$prev_sub" != "$PLACEHOLDER_GUID" && "$prev_sub" != "$SUB" ]]; then
+  warn "envs/global/bootstrap.tfvars is filled in for subscription $prev_sub, not $SUB (account switch?)"
+  warn "its object ids, suffix and state account belong to that subscription/tenant; bootstrap would fail with them"
+  if confirm "Reset the per-tenant tfvars fields to placeholders first?"; then
+    reset_tenant_fields
+  else
+    die "per-tenant fields not reset: re-run and answer yes (or pass --yes), or run infra/down.sh --all on $prev_sub first"
+  fi
+fi
+
+# github_repo follows the repo's current owner/name (survives a repo transfer).
 REPO=$(tfvars_get_string "$BOOT_VARS" github_repo)
+if have gh && gh_repo=$(cd "$BBM_REPO_ROOT" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) &&
+  [[ "$gh_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  if [[ "$gh_repo" != "$REPO" ]]; then
+    warn "github_repo in bootstrap.tfvars is $REPO but gh reports $gh_repo (repo transferred?): updating it"
+    tfvars_set "$BOOT_VARS" github_repo "$(hcl_quote "$gh_repo")"
+    REPO=$gh_repo
+  fi
+else
+  info "gh repo view unavailable; using github_repo = $REPO from bootstrap.tfvars"
+fi
 LOCATION=$(tfvars_get_string "$BOOT_VARS" location)
 LOC_ABBR=$(tfvars_get_string "$BOOT_VARS" location_abbr)
 if [[ $SKIP_GH == 0 ]]; then

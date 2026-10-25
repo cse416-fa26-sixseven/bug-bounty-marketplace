@@ -364,6 +364,39 @@ tf_fmt() {
   terraform fmt -list=false "$@" >/dev/null || warn "terraform fmt failed on $*"
 }
 
+# ---- account switch -----------------------------------------------------------
+
+# reset_tenant_fields: put every per-tenant / per-subscription value that
+# infra/up.sh writes back to its committed placeholder, so the next up.sh on
+# another tenant does not carry the old object ids, suffix or state account.
+# Kept (they survive an account switch): dns_zone_name, alert_emails,
+# github_reviewer_ids, github_repo.
+reset_tenant_fields() {
+  local envs="$BBM_TF_ROOT/envs" boot glob loc f empty='[]'
+  boot="$envs/global/bootstrap.tfvars"
+  glob="$envs/global/global.tfvars"
+  loc=$(tfvars_get_string "$boot" location_abbr)
+  info "resetting per-tenant fields in ${envs#"$BBM_REPO_ROOT/"} to placeholders (kept: dns_zone_name, alert_emails, github_reviewer_ids, github_repo)"
+  tfvars_set "$boot" admin_object_ids "$empty"
+  tfvars_set "$boot" power_operator_object_ids "$empty"
+  tfvars_set_if_present "$boot" preregistered_resource_providers "$empty"
+  while IFS= read -r f; do
+    tfvars_set_if_present "$f" subscription_id "$(hcl_quote "$PLACEHOLDER_GUID")"
+    tfvars_set_if_present "$f" suffix "$(hcl_quote "$PLACEHOLDER_SUFFIX")"
+  done < <(find "$envs" -name '*.tfvars' | sort)
+  tfvars_set_if_present "$glob" ephemeral_ci_principal_id null
+  tfvars_set_if_present "$glob" secret_officer_sp_object_ids "$empty"
+  tfvars_set_if_present "$glob" secret_officer_user_object_ids "$empty"
+  while IFS= read -r f; do
+    tfvars_set_if_present "$f" secret_officer_user_object_ids "$empty"
+  done < <(find "$envs" -name 'data.tfvars' | sort)
+  while IFS= read -r f; do
+    tfvars_set_if_present "$f" resource_group_name "$(hcl_quote "rg-bbm-tfstate-$loc")"
+    tfvars_set_if_present "$f" storage_account_name "$(hcl_quote "stbbmtfstate$PLACEHOLDER_SUFFIX")"
+  done < <(find "$envs" -name 'backend*.hcl' | sort)
+  tf_fmt -recursive "$envs"
+}
+
 # ---- terraform --------------------------------------------------------------
 
 tf() { "$TF_SH" "$@"; } # tf <stack> <env> <cmd> [args]
