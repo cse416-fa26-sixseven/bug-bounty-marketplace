@@ -22,7 +22,7 @@ What ends up in Azure:
 | `global`    | ACR `acrbbm<sfx>`, shared Log Analytics, shared Key Vault (no secrets), per-RG budgets                                                                                                                                     |
 | `data`      | per env: VNet, Postgres (not `test`), Key Vault, storage, identities, static ingress IP, DNS records, private zone                                                                                                         |
 | `compute`   | per env: AKS cluster, node pools, workload-identity federated credentials                                                                                                                                                  |
-| platform    | per cluster (Helm, not Terraform): cert-manager and `bbm-platform` (Let's Encrypt issuers, wildcard certificate, managed ingress)                                                                                          |
+| platform    | per cluster (Helm, not Terraform): cert-manager and `bbm-platform` (Let's Encrypt issuers, wildcard certificate, Gateway `bbm` of gatewayClass `approuting-istio`)                                                         |
 
 Environments: `test` (CI-run and PR-preview namespaces), `staging` and `prod`. `up.sh` brings up
 `test` and `staging` by default; add `--prod` for prod.
@@ -274,7 +274,7 @@ If `github_reviewer_ids` was empty, the reviewer-gated Environments are created 
 Add one in **Settings → Environments → `<env>`** (tick **Required reviewers**), or with the CLI:
 
 ```sh
-REPO=LoistCloist/bug-bounty-marketplace
+REPO=cse416-fa26-sixseven/bug-bounty-marketplace
 REVIEWER_ID=$(gh api users/<github-login> --jq .id)
 gh api -X PUT "repos/$REPO/environments/prod" --input - <<EOF
 {
@@ -327,8 +327,8 @@ also covers them.
 - [ ] `az ad app list --display-name gh-bbm- --query "[].displayName" -o tsv` lists `gh-bbm-plan`,
       `gh-bbm-ephemeral`, `gh-bbm-global`, `gh-bbm-test`, `gh-bbm-staging`, `gh-bbm-prod` and
       `gh-bbm-prod-power`.
-- [ ] `gh variable list --repo LoistCloist/bug-bounty-marketplace` shows the six repo variables.
-- [ ] `gh api repos/LoistCloist/bug-bounty-marketplace/environments --jq '.environments[].name'`
+- [ ] `gh variable list --repo cse416-fa26-sixseven/bug-bounty-marketplace` shows the six repo variables.
+- [ ] `gh api repos/cse416-fa26-sixseven/bug-bounty-marketplace/environments --jq '.environments[].name'`
       lists all eight Environments.
 - [ ] Per cluster: `kubectl get certificate -n bbm-platform bbm-wildcard` shows `READY True`.
 - [ ] `az acr repository show -n <acr> --repository mirror/postgres` and
@@ -352,8 +352,11 @@ set), the GitHub variables and Environments (unless `--keep-github`), and bootst
 the bootstrap state back to local first, because that state lives in the account being deleted.
 Finally it purges soft-deleted `kv-bbm-*` vaults so the names can be reused.
 
-It leaves the tfvars and backend files as they are and prints what to revert. Deleted Entra app
-registrations stay in the Entra recycle bin for 30 days.
+With `--all`, after a successful teardown it resets the per-tenant fields in the tfvars and
+backend files (subscription, suffix, object-id lists, state account) to their placeholders and
+prints each change; `dns_zone_name`, `alert_emails`, `github_reviewer_ids` and `github_repo` are
+kept ([switching-accounts.md](switching-accounts.md) section 2). `--envs` alone changes no files.
+Deleted Entra app registrations stay in the Entra recycle bin for 30 days.
 
 For pausing instead of deleting, use **Env power** ([env-lifecycle.md](env-lifecycle.md)).
 
@@ -444,7 +447,7 @@ Use **Portal → Storage account → Containers → tfstate → `<key>` → Vers
 | Challenge error `AuthorizationFailed` on `dnsZones/TXT`           | `id-bbm-<env>-certmgr` lacks DNS Zone Contributor on that zone. Re-apply the env's `data` stack.                                                                                                                                                                                                                                  |
 | Challenge error `AADSTS70021` / no matching federated identity    | The compute stack's federated credential for `system:serviceaccount:cert-manager:cert-manager` is missing (re-apply `compute`), or cert-manager started before its SA annotation. Re-run `install.sh` and `kubectl -n cert-manager rollout restart deploy/cert-manager`.                                                          |
 | Let's Encrypt rate limit (`too many certificates`)                | Repeated reinstalls of the same zone. Use `install.sh <env> --values ... --issuer letsencrypt-staging` while debugging, then re-run without `--issuer`.                                                                                                                                                                           |
-| `AADSTS700213: No matching federated identity record found`       | The workflow's OIDC subject doesn't match. Jobs with `environment: <env>` present `repo:LoistCloist/bug-bounty-marketplace:environment:<env>`; plan jobs present `...:pull_request` or `...:ref:refs/heads/main`. Check the job's `environment:`, its `AZURE_CLIENT_ID`, and `az ad app federated-credential list --id <app-id>`. |
+| `AADSTS700213: No matching federated identity record found`       | The workflow's OIDC subject doesn't match. Jobs with `environment: <env>` present `repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:<env>`; plan jobs present `...:pull_request` or `...:ref:refs/heads/main`. Check the job's `environment:`, its `AZURE_CLIENT_ID`, and `az ad app federated-credential list --id <app-id>`. |
 | `AADSTS700212` (audience)                                         | The `azure/login` audience must be `api://AzureADTokenExchange` (the default).                                                                                                                                                                                                                                                    |
 | 403 `AuthorizationPermissionMismatch` on state blobs              | The identity lacks its tfstate role, the key is outside its allowed prefixes (e.g. `gh-bbm-plan` reading `prod/`), or the assignment hasn't propagated (allow about 10 minutes).                                                                                                                                                  |
 | Plan job can't take the state lock (403 on the lease)             | `gh-bbm-plan` is read-only on state by design. Plan with `-lock=false`.                                                                                                                                                                                                                                                           |

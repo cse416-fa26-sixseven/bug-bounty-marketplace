@@ -69,7 +69,8 @@ Owner, so no CI identity needs rights outside its own resource groups):
 Bootstrap also writes the NS delegation records for the four child zones into the parent zone.
 
 - **Delegation from the parent domain** is out of Terraform. `up.sh` prints the parent zone's four
-  name servers. If `CLOUDFLARE_API_TOKEN` is set (scope: Zone → DNS → Edit on the parent domain),
+  name servers. If `CLOUDFLARE_API_TOKEN` is set (permissions **Zone:Read + DNS:Edit** on the parent
+  zone: Zone:Read to look the zone up by name, DNS:Edit to write the records),
   `up.sh` creates or updates the NS records in Cloudflare through its API; for any other DNS host the
   user adds them by hand. Either way `up.sh` polls until the delegation resolves. The token is only
   an environment variable on the operator's machine; it never enters state or GitHub.
@@ -101,7 +102,9 @@ Hosts:
   (the Terraform path Microsoft documents; same as `az aks update --enable-gateway-api
   --enable-app-routing-istio`). There is no `web_app_routing` block: no managed NGINX and no add-on
   DNS integration (records are ours, section 2).
-- New per-cluster **platform** layer, installed once per cluster by `deploy/platform/install.sh <env>`
+- New per-cluster **platform** layer, installed once per cluster by
+  `deploy/platform/install.sh <env> --values <values-infra.yaml> [--issuer letsencrypt-prod|letsencrypt-staging] [--wait]`
+  (`values-infra.yaml` is the compute stack's `helm_values` output)
   (called by `env-power up`, `deploy.yml`, the ephemeral workflows when the platform is missing, and
   `up.sh`). It is idempotent, waits for the GatewayClass, and with `--wait` waits for the certificate
   to be Ready and the Gateway to be `Programmed`:
@@ -145,8 +148,9 @@ Hosts:
 
 - `gh-bbm-ephemeral` (GitHub Environments `test`, `preview`) no longer runs Terraform. On the test
   cluster it gets: **AKS RBAC Cluster Admin** and **Cluster User** on the test compute RG, **Reader**
-  on the test data RG, **BBM Power Operator** on the test data and compute RGs, `BBM tfstate reader`
-  on `test/` (to read `helm_values`), plus its existing AcrPush. Its ACA-only roles go.
+  on the test data RG, **Reader** on the shared RG (`rg-bbm-shared-eus2`: ACR, shared Log
+  Analytics), **BBM Power Operator** on the test data and compute RGs, `BBM tfstate reader` on
+  `test/` (to read `helm_values`) and on `global.tfstate`, plus its existing AcrPush. Its ACA-only roles go.
 - New `gh-bbm-test` for GitHub Environment **`test-infra`** (`main` only, no reviewer): the same role
   set and state prefix (`test/`) as `gh-bbm-staging`, for `terraform.yml` / `env-power.yml` /
   platform installs on the test env.
@@ -175,19 +179,29 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 
 ### 6. One-command bring-up and teardown
 
-- **`infra/up.sh --subscription <id> [--envs test,staging,prod] [--zone <zone>]`**, run locally after
-  `az login --use-device-code`. It fills `bootstrap.tfvars` (subscription, admin object id,
-  registered providers, zone), applies bootstrap on local state and migrates it to the new state
-  account, writes the bootstrap `suffix` into every tfvars that needs it (no hand editing), runs the
-  generated `gh-setup.sh`, handles DNS delegation (section 2), applies `global`, mirrors the
-  third-party images into ACR, then for each env applies `data`, sets a placeholder `llm-api-key` if
-  missing, applies `compute` and installs the platform. It ends by printing the URLs and the
-  tfvars files to commit. Every step is idempotent, so a failed run is resumed by running it again.
-- **`infra/down.sh --subscription <id> [--envs ...] [--all]`** destroys in reverse (`compute`,
-  `data` per env; with `--all` also `global` and `bootstrap`, pulling bootstrap state back to local
-  first), purges soft-deleted Key Vaults so names are reusable, removes the Cloudflare NS records if
-  the token is set, and with `--all` deletes the GitHub repo variables and environments it created.
-  It asks you to type the subscription name to confirm.
+- **`infra/up.sh --subscription <id> [--zone <zone>] [--envs test,staging] [--prod] [--skip-github]
+  [--yes] [--dry-run]`**, run locally after `az login --use-device-code`. `--envs` defaults to
+  `test,staging`; `--prod` adds prod; `--skip-github` leaves the GitHub setup script for later; `--yes`
+  answers every confirmation (and keeps going when the delegation has not propagated yet);
+  `--dry-run` prints mutating commands and file edits instead of running them. It fills
+  `bootstrap.tfvars` (subscription, admin object id, registered providers, zone, and `github_repo`
+  from `gh repo view`), applies bootstrap on local state and migrates it to the new state account,
+  writes the bootstrap `suffix` into every tfvars that needs it (no hand editing), runs the generated
+  `gh-setup.sh`, handles DNS delegation (section 2), applies `global`, mirrors the third-party images
+  into ACR, then for each env applies `data`, sets a placeholder `llm-api-key` if missing, applies
+  `compute` and installs the platform. It ends by printing the URLs and the tfvars files to commit.
+  Every step is idempotent, so a failed run is resumed by running it again. If `bootstrap.tfvars`
+  already holds a different (non-placeholder) `subscription_id`, it warns and offers to reset the
+  per-tenant fields first (`--yes` resets).
+- **`infra/down.sh --subscription <id> (--envs test,staging,prod | --all) [--keep-github] [--yes]
+  [--dry-run]`** destroys in reverse (`compute`, `data` per env; with `--all` also `global` and
+  `bootstrap`, pulling bootstrap state back to local first), purges soft-deleted Key Vaults so names
+  are reusable, removes the Cloudflare NS records if the token is set, and with `--all` deletes the
+  GitHub repo variables and environments it created (unless `--keep-github`). It asks you to type
+  the subscription name to confirm (`--yes` skips that). After a successful `--all` it resets the
+  per-tenant tfvars fields (`subscription_id`, `suffix`, the admin / power-operator / Key Vault
+  officer object id lists, the global hint block's principal ids, the backend `.hcl` state account)
+  to their placeholders, and keeps `dns_zone_name`, `alert_emails` and `github_reviewer_ids`.
 
 ## Alternatives considered
 
@@ -240,6 +254,11 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 - **Account or domain switch:** `down.sh --all` on the old subscription, `up.sh` on the new one,
   then update the four NS records (automatic with a Cloudflare token). Commit the tfvars `up.sh`
   rewrote.
+- **Region is hardcoded in workflows (known limitation):** `deploy.yml`, `_ephemeral-env.yml`,
+  `env-power.yml`, `infra-janitor.yml` and `contracts-deploy.yml` spell resource group and cluster
+  names with the `eus2` suffix (e.g. `rg-bbm-test-data-eus2`, `aks-bbm-test-eus2`). Moving to
+  another region means changing `location` / `location_abbr` in the tfvars and those names in the
+  workflows (or exporting them as repo variables first). Not refactored now.
 - New delegable role (DNS Zone Contributor) and the test-cluster roles for `gh-bbm-ephemeral` are
   applied by bootstrap, locally, by an Owner.
 - **Gateway API:** the compute stack adds the `Azure/azapi` provider (`~> 2.0`) for the one setting

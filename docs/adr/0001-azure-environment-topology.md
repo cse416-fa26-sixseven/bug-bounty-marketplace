@@ -115,7 +115,9 @@ and data, compute and aca-ephemeral read global.
 ### 4. GitHub to Azure over OIDC
 
 No client secrets anywhere. Each GitHub Environment maps to an app registration with a federated
-credential for `repo:LoistCloist/bug-bounty-marketplace:environment:<env>`:
+credential for `repo:cse416-fa26-sixseven/bug-bounty-marketplace:environment:<env>` (the repo
+was transferred from `LoistCloist/bug-bounty-marketplace`; subjects follow the current
+name, which `infra/up.sh` writes into `github_repo`):
 
 | GitHub Environment  | Protection                                      | App registration    |
 | ------------------- | ----------------------------------------------- | ------------------- |
@@ -229,8 +231,11 @@ test cluster through `_ephemeral-env.yml`, and `infra-janitor.yml` deletes expir
   in the **data** RG so it survives `down`/`up`, and its DNS label gives the stable host
   `bbm-<env>.eastus2.cloudapp.azure.com`.
   _Superseded by ADR 0002 §2–3: the host is `<env>.<zone>` (alias records in the env's Azure DNS
-  zone), TLS is a cert-manager wildcard per env, and the ingress controller moved to the
-  per-cluster `bbm-platform` chart. The cloudapp label stays as a fallback._
+  zone) and TLS is a cert-manager wildcard per env. ADR 0002 §3 also replaces the
+  `NginxIngressController` / `bbm-nginx` class with the app routing Gateway API: Gateway
+  `bbm-platform/bbm` (GatewayClass `approuting-istio`) from the per-cluster `bbm-platform` chart
+  binds the static PIP, and the app chart publishes an HTTPRoute. The cloudapp label stays as a
+  fallback._
 - **Secrets:** the Key Vault Secrets Store CSI add-on with workload identity. SecretProviderClass
   `bbm-kv` syncs Key Vault secrets into the K8s Secret `bbm-secrets`. Pods authenticate as
   user-assigned identities (`id-bbm-<env>-{api,worker,sandbox}`) through federated service accounts.
@@ -298,6 +303,9 @@ family), which costs more and needs quota a new subscription may not have.
 - **Self-managed ingress-nginx via Helm.** It's more configurable, but it's one more component to
   upgrade and patch, and the community ingress-nginx project is in maintenance mode. The app-routing
   add-on is managed and supports a static IP from another RG. Rejected.
+  _ADR 0002 §3 revisits this: the add-on's managed NGINX loses Azure support in November 2026, so
+  ingress moved to the add-on's Gateway API implementation (still managed, still binds the static
+  IP), and self-managed controllers stay rejected._
 - **Kustomize instead of Helm.** It's fine for overlays, but Helm gives hooks (the migration Job,
   ordered SA/SPC creation), `helm test`, `--atomic` rollback, `values.schema.json` validation and
   `ct lint`. Helm was chosen.
@@ -494,7 +502,7 @@ and `infra/lib/` drive bring-up and teardown._
 | ACA environment             | `cae-bbm-<env_name>` (`env_name` = `run-<id>-<attempt>` or `pr-<n>`). _Removed by ADR 0002: namespaces `run-<id>-<attempt>` / `pr-<n>` on the test cluster._ |
 
 Tags on everything: `project=bbm`, `env`, `layer=global|data|compute|ephemeral`,
-`managed_by=terraform`, `repo=LoistCloist/bug-bounty-marketplace`, `cost_center=cse416`. Ephemeral
+`managed_by=terraform`, `repo=cse416-fa26-sixseven/bug-bounty-marketplace`, `cost_center=cse416`. Ephemeral
 resources also get `ephemeral=true` and `expires_on=<RFC3339>`. The data RG additionally carries the
 power tags (`power-state`, `bbm-last-deployed-tag`, `auto-pause`) and Terraform ignores them.
 
@@ -588,10 +596,13 @@ _Superseded by ADR 0002 §5: `ingress.host` is `<env>.<zone>`, and the keys `dns
 2. **Key Vault access.** Key Vault Secrets User on the env vault for the api UAMI (which migrations
    also use) and for the worker UAMI.
 3. **Ingress IP.** The AKS cluster identity `id-bbm-<env>-aks` gets Network Contributor on
-   `rg-bbm-<env>-data-eus2`, so app-routing's load balancer can bind the static PIP.
+   `rg-bbm-<env>-data-eus2`, so the Gateway's load balancer can bind the static PIP.
 4. **Add-ons and pools.**
    - Add-ons: KV CSI with secret rotation, `web_app_routing`, KEDA, OIDC issuer + workload identity,
      Cilium network policy.
+     _Superseded by ADR 0002 §3: no `web_app_routing` block; the Managed Gateway API CRDs and the
+     app routing Gateway API implementation (`approuting-istio`) are enabled with
+     `azapi_update_resource`, since azurerm has no argument for them._
    - The apps pool has the label `bbm.io/pool=apps`.
    - The sandbox pool has the label `bbm.io/pool=sandbox`, the taint
      `bbm.io/sandbox=true:NoSchedule` and the Kata runtime.
@@ -607,8 +618,10 @@ _Superseded by ADR 0002 §5: `ingress.host` is `<env>.<zone>`, and the keys `dns
   - Service accounts: `bbm-api`, `bbm-web`, `bbm-analysis`, `bbm-migrations`.
   - Secret `bbm-secrets`, synced by the SecretProviderClass `bbm-kv`.
   - Ingress class `bbm-nginx`, served by the app-routing `NginxIngressController` `bbm`.
-    _Superseded by ADR 0002 §3: the ingress controller is part of the per-cluster `bbm-platform`
-    chart, and the app ingress uses its default wildcard certificate._
+    _Superseded by ADR 0002 §3: no Ingress or ingress class. The chart's HTTPRoute attaches to
+    Gateway `bbm-platform/bbm` (GatewayClass `approuting-istio`) from the per-cluster
+    `bbm-platform` chart, which terminates TLS with the env wildcard certificate. The release
+    namespace must carry the label `bbm.io/gateway-access=true`._
 - **Runtime environment variables:**
   - api: `PORT`, `DATABASE_URL`, `SOURCE_STORAGE_DIR`, `MIGRATE_ON_BOOT`, `PG_POOL_MAX`,
     `MIGRATIONS_DIR`. The migration entry point is `node dist/migrate-cli.js`.

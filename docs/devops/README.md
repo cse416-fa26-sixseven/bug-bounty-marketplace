@@ -26,7 +26,8 @@ one-command bring-up), which supersedes parts of 0001.
   state model, environments and DNS, static checks.
 - [deploy/helm/README.md](../../deploy/helm/README.md): the `bbm` chart, values layering, secrets.
 - [deploy/helm/bbm-platform/README.md](../../deploy/helm/bbm-platform/README.md): the per-cluster
-  platform chart (cert-manager issuers, wildcard certificate, managed ingress) and
+  platform chart (cert-manager issuers, wildcard certificate, Gateway `bbm` of gatewayClass
+  `approuting-istio`) and
   `deploy/platform/install.sh`.
 - [tests/README.md](../../tests/README.md): which test tiers run in which workflow and environment.
 - Workflows in [`.github/workflows/`](../../.github/workflows/): `ci.yml` (Azure-free, `CI OK`

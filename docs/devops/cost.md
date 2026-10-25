@@ -1,5 +1,19 @@
 # Cost estimates
 
+> **A typical month is ~$60–70, over the $50 subscription budget alert.** With staging and prod
+> down and the test env running on working days for CI, the estimate below is about $60–70, so
+> expect the 100% alert most months. The budgets stay as they are (they only notify). To get under
+> $50:
+>
+> - **Shorter auto-pause window for test.** The nightly 06:00 UTC auto-pause leaves the test
+>   cluster running from the first CI run of the day until the next morning. Pausing test a few
+>   hours after the last run (an extra `env-power.yml` schedule for test only) cuts most of its
+>   ~$35–40 running share.
+> - **`env-power test down` when idle.** With no open PRs for a while, `down` (~$4/month) instead of
+>   `paused` (~$25–28/month). CI fails until `env-power test up`.
+> - **Prod off unless demoing.** Prod running all month is ~$200; keep it `down` (or at least
+>   `paused`) outside demos.
+
 > **Rough estimates only.** Figures are approximate `eastus2` pay-as-you-go list prices in USD
 > (730 hours per month), rounded, before taxes, credits or free grants unless stated. Check them
 > against the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the
@@ -11,24 +25,24 @@ prod) can be paused or torn down without losing data. See [architecture.md](arch
 
 ## Unit prices used
 
-| Item                                    | Approx. price                                                                         | Where it's used                                    |
-| --------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| VM `Standard_B2als_v2` (2 vCPU, 4 GiB)  | ~$0.038/h, ~$27/month                                                                 | every AKS node                                     |
-| Managed OS disk, 64 GB Premium SSD (P6) | ~$10/month per node                                                                   | AKS node OS disks (exist only while nodes exist)   |
-| Standard Load Balancer                  | ~$0.025/h for the first 5 rules, ~$18/month                                           | AKS (managed ingress + outbound)                   |
-| Standard static public IP               | ~$0.005/h, ~$3.65/month each                                                          | `pip-bbm-<env>-ingress` (data RG), AKS outbound IP |
-| PG Flexible `B_Standard_B1ms` compute   | ~$0.017/h, ~$12.50/month                                                              | staging and prod databases                         |
-| PG Flexible storage                     | ~$0.115/GB-month, 32 GB ≈ $3.70/month                                                 | billed even when the server is stopped             |
-| PG backup storage                       | free up to 100% of provisioned storage                                                | 7-day retention, no geo-redundancy                 |
-| ACR Basic                               | ~$0.167/day, ~$5/month (10 GB included)                                               | shared registry                                    |
-| Log Analytics ingestion                 | ~$2.30–2.80/GB (first 5 GB/month free per billing account), 30-day retention included | shared and per-env workspaces                      |
-| Key Vault (Standard)                    | ~$0.03 per 10,000 operations                                                          | shared and per-env vaults                          |
-| Storage (LRS, hot) + queue operations   | cents per month at this scale                                                         | tfstate, `sources`, `analysis-jobs`                |
-| AKS control plane, Free tier            | $0                                                                                    | test and staging clusters                          |
-| AKS control plane, Standard tier        | ~$0.10 per cluster-hour, ~$73/month if it runs all month (verify current pricing)     | prod cluster (`aks_sku_tier = "Standard"`)         |
-| Azure DNS public zone                   | ~$0.50/zone/month (first 25 zones) + ~$0.40 per million queries                       | `<zone>` and four child zones                      |
-| Azure Private DNS zone                  | ~$0.25/zone/month + VNet link and query charges (cents)                               | `<env>.internal.<zone>`, plus the PG private zones |
-| Let's Encrypt certificates              | $0                                                                                    | one wildcard per env via cert-manager              |
+| Item                                    | Approx. price                                                                         | Where it's used                                             |
+| --------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| VM `Standard_B2als_v2` (2 vCPU, 4 GiB)  | ~$0.038/h, ~$27/month                                                                 | every AKS node                                              |
+| Managed OS disk, 64 GB Premium SSD (P6) | ~$10/month per node                                                                   | AKS node OS disks (exist only while nodes exist)            |
+| Standard Load Balancer                  | ~$0.025/h for the first 5 rules, ~$18/month                                           | AKS: Gateway `bbm` (rules for 80, 443 and 15021) + outbound |
+| Standard static public IP               | ~$0.005/h, ~$3.65/month each                                                          | `pip-bbm-<env>-ingress` (data RG), AKS outbound IP          |
+| PG Flexible `B_Standard_B1ms` compute   | ~$0.017/h, ~$12.50/month                                                              | staging and prod databases                                  |
+| PG Flexible storage                     | ~$0.115/GB-month, 32 GB ≈ $3.70/month                                                 | billed even when the server is stopped                      |
+| PG backup storage                       | free up to 100% of provisioned storage                                                | 7-day retention, no geo-redundancy                          |
+| ACR Basic                               | ~$0.167/day, ~$5/month (10 GB included)                                               | shared registry                                             |
+| Log Analytics ingestion                 | ~$2.30–2.80/GB (first 5 GB/month free per billing account), 30-day retention included | shared and per-env workspaces                               |
+| Key Vault (Standard)                    | ~$0.03 per 10,000 operations                                                          | shared and per-env vaults                                   |
+| Storage (LRS, hot) + queue operations   | cents per month at this scale                                                         | tfstate, `sources`, `analysis-jobs`                         |
+| AKS control plane, Free tier            | $0                                                                                    | test and staging clusters                                   |
+| AKS control plane, Standard tier        | ~$0.10 per cluster-hour, ~$73/month if it runs all month (verify current pricing)     | prod cluster (`aks_sku_tier = "Standard"`)                  |
+| Azure DNS public zone                   | ~$0.50/zone/month (first 25 zones) + ~$0.40 per million queries                       | `<zone>` and four child zones                               |
+| Azure Private DNS zone                  | ~$0.25/zone/month + VNet link and query charges (cents)                               | `<env>.internal.<zone>`, plus the PG private zones          |
+| Let's Encrypt certificates              | $0                                                                                    | one wildcard per env via cert-manager                       |
 
 ## Always-on baseline
 
@@ -60,6 +74,10 @@ system node and one `apps` node, with Container Insights on, on the AKS Standard
 | **running** | nodes + OS disks, LB, 2 public IPs, PG compute + storage (not test), Log Analytics, KV, storage, prod control plane | ~$60–70 (~$2.10/day) with 1 node | ~$75–85 (~$2.60/day) | ~$195–225 (~$6.50–7.50/day), more when the autoscaler adds nodes |
 | **paused**  | LB, 2 public IPs, PG storage, KV, storage, idle Log Analytics. Nodes and PG compute stop                            | ~$25–28 (~$0.85/day)             | ~$25–30 (~$0.90/day) | ~$25–30 (~$0.90/day), see the Standard-tier note                 |
 | **down**    | ingress public IP, PG storage, KV, storage. Compute stack (cluster, nodes, LB, outbound IP) destroyed               | ~$4 (~$0.13/day)                 | ~$7–9 (~$0.25/day)   | ~$7–9 (~$0.25/day)                                               |
+
+Every cluster also runs at least 2 Envoy replicas for Gateway `bbm` (the app routing add-on's
+floor; HPA up to 3 on test/staging, 5 on prod). They are small pods on the existing nodes, so they
+add no node cost unless the autoscaler needs another node.
 
 How the running figures break down (staging): node ~$27, OS disk ~$10, LB ~$18, two public IPs
 ~$7, PG B1ms ~$12.50, PG storage ~$3.70, logs and the rest ~$0–5. Test is the same without

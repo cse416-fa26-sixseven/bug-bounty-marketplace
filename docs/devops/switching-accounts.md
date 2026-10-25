@@ -43,16 +43,24 @@ delete the old NS records at the DNS host.
 
 ## 2. Reset values that belong to the old account
 
-`down.sh` leaves the tfvars as they are. `up.sh` overwrites `subscription_id`, `suffix`,
-`dns_zone_name`, the state account in the backend files and the bootstrap hint block. It only
-**adds** to the object-ID lists, so clear the old IDs when the tenant changes, or bootstrap will
-try to grant roles to users that don't exist there:
+After a successful teardown, `down.sh --all` resets the per-tenant fields to their committed
+placeholders and prints each one it changed. Commit the result. `up.sh` only **adds** to the
+object-ID lists, so without this reset bootstrap on a new tenant would try to grant roles to users
+that don't exist there.
 
-| File                           | Set to `[]` (or the new tenant's IDs)           |
-| ------------------------------ | ----------------------------------------------- |
-| `envs/global/bootstrap.tfvars` | `admin_object_ids`, `power_operator_object_ids` |
-| `envs/global/global.tfvars`    | `secret_officer_user_object_ids`                |
-| `envs/<env>/data.tfvars`       | `secret_officer_user_object_ids`                |
+| File                           | Reset                                                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `envs/global/bootstrap.tfvars` | `subscription_id`, `admin_object_ids`, `power_operator_object_ids`, `preregistered_resource_providers`                                |
+| `envs/global/global.tfvars`    | hint block `subscription_id`, `suffix`, `ephemeral_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
+| `envs/<env>/*.tfvars`          | `subscription_id`, `suffix`, and `secret_officer_user_object_ids` in `data.tfvars`                                                    |
+| `envs/**/backend*.hcl`         | `resource_group_name`, `storage_account_name` (`stbbmtfstate0000`)                                                                    |
+
+Kept, because they survive an account switch: `dns_zone_name`, `alert_emails`,
+`github_reviewer_ids` and `github_repo`.
+
+If you skipped step 1 (the old account is gone), `up.sh` notices: when `bootstrap.tfvars` holds a
+non-placeholder `subscription_id` that differs from `--subscription`, it warns and offers to do the
+same reset first (`--yes` resets without asking; with no terminal and no `--yes` it stops).
 
 Also check `alert_emails` in `bootstrap.tfvars` and `global.tfvars`. `up.sh` only asks for it while
 it still contains `example.com`.

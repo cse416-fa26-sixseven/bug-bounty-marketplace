@@ -95,8 +95,10 @@ Both go through the reusable workflow `_ephemeral-env.yml`, in GitHub Environmen
   `bbm.io/expires-on=<RFC3339>`;
 - release `bbm` with `values-test.yaml`, in-cluster Postgres
   (`<acr>/mirror/postgres:16-alpine`, `emptyDir`, a random password per namespace);
-- the env's wildcard certificate, served by the managed ingress in `bbm-platform`, so no
-  per-namespace certificate is issued.
+- the env's wildcard certificate, served by Gateway `bbm` (gatewayClass `approuting-istio`) in
+  `bbm-platform`, so no per-namespace certificate is issued;
+- the namespace label `bbm.io/gateway-access=true`, without which the Gateway does not accept the
+  namespace's HTTPRoute (set it by hand for a manual `helm install`).
 
 **Auto-resume.** Before deploying, `_ephemeral-env.yml` reads the `power-state` tag on
 `rg-bbm-test-data-eus2`:

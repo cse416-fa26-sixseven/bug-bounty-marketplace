@@ -23,7 +23,7 @@ places:
 
 All infrastructure is Terraform (`infra/terraform`), driven end to end by `infra/up.sh` and
 `infra/down.sh`. The cluster workloads are two Helm charts: `deploy/helm/bbm-platform` (once per
-cluster: cert-manager issuers, the wildcard certificate, the managed ingress) and
+cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 `deploy/helm/bbm` (the app). GitHub Actions talks to Azure over OIDC only. The required check
 `CI OK` never needs cloud credentials.
 
@@ -105,7 +105,7 @@ flowchart TB
     subgraph Compute["Per env compute: rg-bbm-ENV-compute-eus2 (stack compute, disposable)"]
         AKS["AKS aks-bbm-ENV-eus2 (Free; prod Standard)<br/>CNI Overlay + Cilium, OIDC issuer, workload identity"]
         POOLS["Node pools: system 1-3, apps 0-3 (prod), sandbox 0-1 (Kata, off)"]
-        ADDONS["Add-ons: app routing, KV Secrets Store CSI, KEDA,<br/>Container Insights (prod only)"]
+        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI, KEDA,<br/>Container Insights (prod only)"]
         FIC["Federated credentials for bbm-api, bbm-analysis,<br/>bbm-migrations, bbm-sandbox-runner, keda-operator, cert-manager"]
         AKS --- POOLS
         AKS --- ADDONS
@@ -114,7 +114,7 @@ flowchart TB
     subgraph Platform["Per cluster platform: namespaces cert-manager + bbm-platform (Helm, deploy/platform/install.sh)"]
         CM["cert-manager<br/>ClusterIssuers letsencrypt-staging / -prod (DNS-01)"]
         CERT["Certificate bbm-wildcard<br/>ENV.ZONE + *.ENV.ZONE"]
-        ING["managed ingress / gateway<br/>bound to the static PIP, serves the wildcard"]
+        ING["Gateway bbm (gatewayClass approuting-istio)<br/>Envoy bound to the static PIP, serves the wildcard"]
         CM --> CERT --> ING
     end
 
@@ -137,9 +137,12 @@ flowchart TB
 
 ## Request path
 
-On AKS the ingress routes `/api` and `/health` straight to the API service and everything else to
-web, on one host per env (or per namespace on the test cluster). TLS terminates at the managed
-ingress with the env's wildcard certificate. Web also proxies `/api/*` server-side to
+On AKS the app chart's HTTPRoute routes `/api` and `/health` straight to the API service and
+everything else to web, on one host per env (or per namespace on the test cluster). TLS terminates
+at Gateway `bbm` (gatewayClass `approuting-istio`, namespace `bbm-platform`) with the env's wildcard
+certificate. The Gateway only admits routes from namespaces labelled `bbm.io/gateway-access=true`
+(`deploy.yml` and the ephemeral workflows set it; add it yourself for a manual
+`helm install`: `kubectl label namespace <ns> bbm.io/gateway-access=true`). Web also proxies `/api/*` server-side to
 `API_INTERNAL_URL`, which is how the browser reaches the API in compose.
 
 ```mermaid
@@ -147,7 +150,7 @@ flowchart LR
     U(["User browser"]) --> DNS["ENV.ZONE<br/>(alias A record in the env zone)"]
     DNS --> PIP["Static public IP<br/>(data RG)"]
     PIP --> LB["Azure Standard LB"]
-    LB --> NGX["managed ingress (bbm-platform)<br/>HTTPS, wildcard certificate"]
+    LB --> NGX["Gateway bbm, Envoy pods (bbm-platform)<br/>gatewayClass approuting-istio<br/>HTTPS, wildcard certificate"]
     NGX -- "/" --> WEB["web pods :3000<br/>HPA"]
     NGX -- "/api, /health" --> API["api pod :3001"]
     WEB -- "/api/* proxy<br/>API_INTERNAL_URL" --> API
@@ -293,8 +296,8 @@ flowchart TB
   prod, 1–3 on test (for concurrent CI and preview namespaces). Prod adds an `apps` pool (1–3
   nodes, label `bbm.io/pool=apps`) and keeps system nodes for critical add-ons only. Test and
   staging run everything on the system pool to save cost.
-- **Ingress.** The managed ingress in `bbm-platform` scales 1–2 replicas on test and staging and
-  2–3 in prod.
+- **Ingress.** The Envoy pods of Gateway `bbm` in `bbm-platform` scale 2–3 replicas on test and
+  staging and 2–5 in prod (HPA; 2 is the add-on's floor).
 - **Spreading.** Pods have topology spread constraints on `kubernetes.io/hostname`
   (`ScheduleAnyway`), so replicas land on different nodes when there are several. Spreading across
   availability zones is not configured yet.
@@ -345,7 +348,7 @@ recreated.
   ResourceQuota, a 600 s deadline and an identity with no Azure roles.
 - The pool and the Job template are off by default. Kata needs a nested-virtualisation size (Dsv5)
   and quota a new subscription may not have.
-- The `bbm` namespace is default-deny for ingress (only the ingress controller, web → api and
+- The `bbm` namespace is default-deny for ingress (only the Gateway's Envoy pods, web → api and
   `helm test` are allowed). With `networkPolicy.restrictEgress`, which is on in staging and prod,
   egress is default-deny too: DNS for everyone, web → api only, api and migrations → Postgres on
   `snet-psql`, and api/analysis → HTTPS 443 (Entra, Storage).
@@ -356,8 +359,6 @@ recreated.
 - **Wire the queue.** The API should enqueue analysis jobs and the worker should consume them.
   Then enable `analysis` and the KEDA ScaledObject in the env values.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
-- **Ingress implementation.** The managed ingress in `bbm-platform` may move to AKS app routing's
-  Gateway API implementation; the app chart and DNS stay the same.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
 - **Automatic staging deploy** from `main` after `integration-azure.yml` passes.
 - **Sandbox pool** once Dsv5 quota is granted.
