@@ -188,6 +188,41 @@ jobs:
           done
           [[ -n "$older" ]] || echo "no older promotion is waiting"
 
+      # After superseding, so older runs are gone before people are pinged.
+      # Optional: skipped when the DISCORD_WEBHOOK_URL secret isn't set, and
+      # a Discord outage only warns, so it never blocks the promotion.
+      - name: Notify Discord (prod approval pending)
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          STAGING_URL: ${{ needs.staging.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ needs.gate.outputs.sha }}
+          TITLE: ${{ github.event.workflow_run.display_title }}
+        run: |
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping"
+            exit 0
+          fi
+          body=$(jq -n --arg tag "$TAG" --arg sha "${SHA::7}" --arg title "${TITLE:0:200}" \
+            --arg staging "${STAGING_URL:--}" --arg run "$RUN_URL" --arg commit "$COMMIT_URL" '{
+              allowed_mentions: {parse: []},
+              embeds: [{
+                title: "Prod deployment waiting for approval",
+                url: $run,
+                color: 16760576,
+                description: "`\($tag)` passed staging. Open the run, click **Review deployments**, tick **prod**, then **Approve and deploy**.",
+                fields: [
+                  {name: "Commit", value: "[`\($sha)`](\($commit)) \($title)"},
+                  {name: "Staging", value: $staging}
+                ]
+              }]
+            }')
+          curl -fsS --retry 3 --max-time 15 -H 'Content-Type: application/json' \
+            -d "$body" "$WEBHOOK" >/dev/null \
+            || echo "::warning::could not post the approval notice to Discord"
+
   prod:
     name: Prod
     needs: [gate, staging, promote]
@@ -217,6 +252,9 @@ jobs:
           STAGING_URL: ${{ needs.staging.outputs.url }}
           STAGING_HEALTH: ${{ needs.staging.outputs.health }}
           PROD: ${{ needs.prod.result }}
+          # 'deployed' once deploy.yml got past its config gate; empty when the
+          # job never ran (approval rejected or timed out: job result 'failure').
+          PROD_DEPLOYED: ${{ needs.prod.outputs.result }}
           PROD_URL: ${{ needs.prod.outputs.url }}
           PROD_HEALTH: ${{ needs.prod.outputs.health }}
         run: |
@@ -235,3 +273,42 @@ jobs:
               echo "Prod was cancelled (a newer green build superseded it, or the approval was rejected/cancelled)."
             fi
           } >>"$GITHUB_STEP_SUMMARY"
+
+      # Closes the loop on the approval notice: only when promote posted one.
+      # always(): still post when this run was cancelled (superseded).
+      - name: Notify Discord (prod result)
+        if: always() && needs.promote.result == 'success'
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          PROD: ${{ needs.prod.result }}
+          # 'deployed' once deploy.yml got past its config gate; empty when the
+          # job never ran (approval rejected or timed out: job result 'failure').
+          PROD_DEPLOYED: ${{ needs.prod.outputs.result }}
+          PROD_URL: ${{ needs.prod.outputs.url }}
+          PROD_HEALTH: ${{ needs.prod.outputs.health }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping"
+            exit 0
+          fi
+          case "$PROD/$PROD_DEPLOYED" in
+            success/deployed)
+              title="Prod deployed"; color=3066993
+              text="\`$TAG\` is live at ${PROD_URL:--} (/health: ${PROD_HEALTH:-n/a})." ;;
+            cancelled/*)
+              title="Prod deployment cancelled"; color=9807270
+              text="\`$TAG\` was superseded by a newer build or cancelled. No approval needed for it anymore." ;;
+            */deployed)
+              title="Prod deployment failed"; color=15158332
+              text="\`$TAG\` failed in prod. Check the run; roll back with **Deploy (AKS)** and the previous tag if needed." ;;
+            *)
+              title="Prod not deployed"; color=9807270
+              text="\`$TAG\` didn't reach prod (job: $PROD): approval rejected or timed out, or the job stopped before deploying. Prod is unchanged." ;;
+          esac
+          body=$(jq -n --arg title "$title" --argjson color "$color" --arg text "$text" --arg run "$RUN_URL" \
+            '{allowed_mentions: {parse: []}, embeds: [{title: $title, url: $run, color: $color, description: $text}]}')
+          curl -fsS --retry 3 --max-time 15 -H 'Content-Type: application/json' \
+            -d "$body" "$WEBHOOK" >/dev/null \
+            || echo "::warning::could not post the prod result to Discord"
