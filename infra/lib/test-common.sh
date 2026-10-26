@@ -346,7 +346,7 @@ eq "allowed: intersection, management group inherited, RG scope ignored" \
   "$(allowed_locations_json 11111111-2222-3333-4444-555555555555)" '["canadacentral","global"]'
 AZ_POLICY_OUT='[]'
 eq "allowed: no assignment → null" "$(allowed_locations_json 11111111-2222-3333-4444-555555555555)" "null"
-# shellcheck disable=SC2317 # stub, called by allowed_locations_json
+# shellcheck disable=SC2317,SC2329 # stub, called by allowed_locations_json
 az() { return 1; }
 check_fails "allowed: az failure is reported" allowed_locations_json 11111111-2222-3333-4444-555555555555
 unset -f az
