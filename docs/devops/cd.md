@@ -67,6 +67,18 @@ The required reviewer comes from bootstrap's `gh_setup_commands` (`github_review
 list was empty, add the reviewer by hand under **Settings → Environments → prod → Required
 reviewers**, or prod deploys without approval.
 
+### Discord notifications
+
+If the repo secret `DISCORD_WEBHOOK_URL` is set (a Discord channel webhook URL), `promote` posts
+"Prod deployment waiting for approval" with the tag, commit, staging URL and a link to the run, and
+`summary` posts the outcome afterwards: deployed, failed, or cancelled (rejected or superseded).
+Without the secret both steps skip; if Discord is unreachable they only warn. A webhook URL isn't a
+cloud credential, so it's the one notification secret kept in GitHub:
+
+```sh
+gh secret set DISCORD_WEBHOOK_URL   # paste the URL at the prompt
+```
+
 An unanswered approval isn't a problem: the next green main build cancels the older CD run while
 it's still waiting (see Concurrency), and GitHub fails a job that has waited 30 days for approval.
 
