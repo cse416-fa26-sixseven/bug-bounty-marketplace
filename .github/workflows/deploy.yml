@@ -166,9 +166,9 @@ jobs:
                 url: $run,
                 color: 3447003,
                 timestamp: $now,
-                description: "Deploying `\($tag)` to prod now (\($wf)).",
+                description: "Prod deploy of `\($tag)` is starting (\($wf)).",
                 fields: ([
-                  {name: "Approved by", value: ($a.user.login // "unknown"), inline: true},
+                  {name: "Approved by", value: ($a.user.login // "no reviewer approval recorded"), inline: true},
                   {name: "Approved at", value: "<t:\($now | fromdateiso8601):f>", inline: true}
                 ] + (if ($a.comment // "") != "" then [{name: "Comment", value: $a.comment[0:1000]}] else [] end))
               }]

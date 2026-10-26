@@ -73,8 +73,8 @@ If the repo secret `DISCORD_WEBHOOK_URL` is set (a Discord channel webhook URL),
 
 1. **Waiting for approval** (`promote`): tag, commit, staging URL and a link to the run.
 2. **Approved** (first step of `deploy.yml`, prod only): who approved, when, and their comment.
-   The job starts the moment the reviewer approves; the approvals API has no timestamp, so the
-   job's start time is used. Manual prod deploys and env-power redeploys post this too.
+   The approvals API has no timestamp, so the job's start time is used (it can lag the approval
+   if the job queues behind another prod deploy). Manual prod deploys and env-power redeploys post this too.
 3. **Outcome** (`summary`): deployed, failed (roll back), cancelled (superseded), rejected (by
    whom, with the comment), or not deployed (approval timed out; prod unchanged).
 
