@@ -175,9 +175,23 @@ jobs:
         if: ${{ !cancelled() && steps.health.outcome == 'success' }}
         run: pnpm --filter @bbm/system-tests run test:integration
 
+      # Browser cached per Playwright version; system libs only via apt if
+      # Chromium can't launch (see tests/e2e/install-browser.sh).
+      - name: Playwright version
+        id: pw
+        if: ${{ !cancelled() && steps.health.outcome == 'success' }}
+        run: echo "version=$(jq -r '.devDependencies["@playwright/test"]' tests/package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        if: ${{ !cancelled() && steps.health.outcome == 'success' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.pw.outputs.version }}
+
       - name: Install Playwright browser
         if: ${{ !cancelled() && steps.health.outcome == 'success' }}
-        run: pnpm --filter @bbm/system-tests exec playwright install --with-deps chromium
+        run: tests/e2e/install-browser.sh
 
       - name: E2E tests (Playwright)
         id: e2e
