@@ -107,6 +107,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # deploy.yml reads the run's approvals (who approved prod) for Discord.
+      actions: read
     uses: ./.github/workflows/deploy.yml
     with:
       env: staging
@@ -230,6 +232,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # deploy.yml reads the run's approvals (who approved prod) for Discord.
+      actions: read
     uses: ./.github/workflows/deploy.yml
     with:
       env: prod
@@ -238,12 +242,17 @@ jobs:
       ref: ${{ needs.gate.outputs.sha }}
       resume_if_paused: true
       smoke: true
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
   summary:
     name: Summary
     needs: [gate, staging, promote, prod]
     if: always() && needs.gate.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      # Who rejected the prod approval, for the Discord result message.
+      actions: read
     steps:
       - name: CD summary
         env:
@@ -288,11 +297,19 @@ jobs:
           PROD_URL: ${{ needs.prod.outputs.url }}
           PROD_HEALTH: ${{ needs.prod.outputs.health }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           if [[ -z "$WEBHOOK" ]]; then
             echo "DISCORD_WEBHOOK_URL not set; skipping"
             exit 0
           fi
+          # Who rejected prod, if anyone ("" when not rejected or the lookup fails).
+          rejected=$(gh api "repos/$REPO/actions/runs/$RUN_ID/approvals" --jq \
+            '[.[] | select(.state == "rejected" and any(.environments[]; .name == "prod"))] | last
+             | if . then "\(.user.login)\(if (.comment // "") != "" then ": " + .comment[0:500] else "" end)" else "" end' \
+            ) || rejected=""
           case "$PROD/$PROD_DEPLOYED" in
             success/deployed)
               title="Prod deployed"; color=3066993
@@ -303,9 +320,14 @@ jobs:
             */deployed)
               title="Prod deployment failed"; color=15158332
               text="\`$TAG\` failed in prod. Check the run; roll back with **Deploy (AKS)** and the previous tag if needed." ;;
-            *)
-              title="Prod not deployed"; color=9807270
-              text="\`$TAG\` didn't reach prod (job: $PROD): approval rejected or timed out, or the job stopped before deploying. Prod is unchanged." ;;
+            */*)
+              if [[ -n "$rejected" ]]; then
+                title="Prod deployment rejected"; color=9807270
+                text="\`$TAG\` was rejected by $rejected. Prod is unchanged."
+              else
+                title="Prod not deployed"; color=9807270
+                text="\`$TAG\` didn't reach prod (job: $PROD): approval timed out, or the job stopped before deploying. Prod is unchanged."
+              fi ;;
           esac
           body=$(jq -n --arg title "$title" --argjson color "$color" --arg text "$text" --arg run "$RUN_URL" \
             '{allowed_mentions: {parse: []}, embeds: [{title: $title, url: $run, color: $color, description: $text}]}')
