@@ -72,7 +72,7 @@ export function setup() {
   const res = http.post(`${BASE_URL}/api/contracts`, {
     file: http.file(SAMPLE_SOL, "Sample.sol", "text/plain"),
     developerAddress: "0x000000000000000000000000000000000000dEaD",
-    bountyAmount: "0.01",
+    bountyAmount: "10000000000000000", // 0.01 ETH in wei
     currency: "ETH",
     deadline: new Date(Date.now() + 7 * 86400000).toISOString(),
   });
