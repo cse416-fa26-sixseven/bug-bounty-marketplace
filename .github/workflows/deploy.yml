@@ -368,6 +368,17 @@ jobs:
           done
           exit "$bad"
 
+      # The GitHub OIDC client assertion azure/login used is valid ~5 min.
+      # A resume or terraform step above can take longer, and kubelogin
+      # needs a fresh token for the AKS AAD server app, so az must present
+      # the assertion again: log in anew right before cluster access.
+      - name: Azure re-login (OIDC, fresh assertion)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Cluster credentials
         if: steps.gate.outputs.go == 'true'
         run: |
