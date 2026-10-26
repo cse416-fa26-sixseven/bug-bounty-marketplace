@@ -71,7 +71,8 @@ reviewers**, or prod deploys without approval.
 
 If the repo secret `DISCORD_WEBHOOK_URL` is set (a Discord channel webhook URL), `promote` posts
 "Prod deployment waiting for approval" with the tag, commit, staging URL and a link to the run, and
-`summary` posts the outcome afterwards: deployed, failed, or cancelled (rejected or superseded).
+`summary` posts the outcome afterwards: deployed, failed (roll back), cancelled (superseded), or
+not deployed (approval rejected or timed out; prod unchanged).
 Without the secret both steps skip; if Discord is unreachable they only warn. A webhook URL isn't a
 cloud credential, so it's the one notification secret kept in GitHub:
 
