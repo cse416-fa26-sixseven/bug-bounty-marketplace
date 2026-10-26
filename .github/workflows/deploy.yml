@@ -487,18 +487,46 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           URL: ${{ steps.ingress.outputs.url }}
           SMOKE: ${{ inputs.smoke }}
+        # Best-effort bookkeeping: the deploy has already passed helm test,
+        # /health and smoke, so a transient Azure API error here (e.g. a
+        # connection reset) must not fail the env or block prod. Both calls
+        # are idempotent, so retry with exponential backoff (2s, 4s, 8s);
+        # if they still fail, warn and leave the previous tag in place.
         run: |
           set -euo pipefail
-          rg_id=$(az group show -n "$DATA_RG" --query id -o tsv)
-          az tag update --resource-id "$rg_id" --operation merge -o none \
-            --tags "bbm-last-deployed-tag=$TAG" "deployed-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Runs as an `until` condition, where set -e is off: return codes
+          # are checked explicitly.
+          record_tags() {
+            local rg_id
+            rg_id=$(az group show -n "$DATA_RG" --query id -o tsv) || return 1
+            az tag update --resource-id "$rg_id" --operation merge -o none \
+              --tags "bbm-last-deployed-tag=$TAG" "deployed-at=$deployed_at"
+          }
+          attempt=1 delay=2
+          until record_tags; do
+            if (( attempt >= 4 )); then
+              recorded=false
+              break
+            fi
+            echo "::notice::Recording the deployed tag failed (attempt $attempt/4); retrying in ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1)) delay=$((delay * 2))
+          done
+          if [[ "${recorded:-true}" == true ]]; then
+            tag_line="\`bbm-last-deployed-tag\` on \`$DATA_RG\` = \`$TAG\`"
+          else
+            echo "::warning title=Deployed tag not recorded::$TAG is live on $ENV_NAME, but tagging $DATA_RG failed after 4 attempts. Until it is set, env-power up / redeploys use the previous tag and the ACR purge guard does not protect $TAG. Re-run this job, or: az tag update --resource-id \$(az group show -n $DATA_RG --query id -o tsv) --operation merge --tags bbm-last-deployed-tag=$TAG"
+            tag_line="\`bbm-last-deployed-tag\` on \`$DATA_RG\`: **not recorded** (Azure API error after 4 attempts; see the warning)"
+          fi
+          revision=$(helm history bbm -n bbm -o json | jq -r '.[-1].revision') || revision=unknown
           {
             echo "### Deployed \`$TAG\` to \`$ENV_NAME\`"
             echo
             echo "- URL: $URL"
-            echo "- Release: \`helm history bbm -n bbm\` (revision $(helm history bbm -n bbm -o json | jq -r '.[-1].revision'))"
+            echo "- Release: \`helm history bbm -n bbm\` (revision $revision)"
             echo "- \`/health\` through the ingress: ok"
             echo "- \`helm test\`: passed"
             echo "- Smoke: $([[ "$SMOKE" == true ]] && echo passed || echo skipped)"
-            echo "- \`bbm-last-deployed-tag\` on \`$DATA_RG\` = \`$TAG\`"
+            echo "- $tag_line"
           } >>"$GITHUB_STEP_SUMMARY"

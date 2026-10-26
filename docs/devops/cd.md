@@ -49,7 +49,10 @@ flowchart LR
   `deployed` for exactly that tag.
 - Post-deploy checks, in both envs: `helm upgrade --atomic --wait`, `helm test`, the `/health`
   check through the ingress, the smoke suite (create+read on staging, read-only on prod), then the
-  `bbm-last-deployed-tag` / `deployed-at` tags on the data RG.
+  `bbm-last-deployed-tag` / `deployed-at` tags on the data RG. Writing those tags is best-effort:
+  it retries transient Azure API errors (2s, 4s, 8s backoff), and if it still fails the deploy
+  stays green with a **Deployed tag not recorded** warning. The tag then still names the previous
+  release, so re-run the job or set it by hand before an env-power `up` or the weekly ACR purge.
 - CI's integration tests run the **arm64** images on the test cluster, while staging and prod run
   **amd64**, so an amd64-only regression first shows up in the staging smoke checks.
 
