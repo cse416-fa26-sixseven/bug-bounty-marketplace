@@ -134,8 +134,9 @@ The CI commands are:
 BBM_API_URL=... BBM_WEB_URL=... BBM_SKIP_ANALYSIS=1 [BBM_SMOKE_WRITE=1] \
   pnpm --filter @bbm/system-tests run test:smoke
 
-# e2e
-pnpm --filter @bbm/system-tests exec playwright install --with-deps chromium
+# e2e (CI caches ~/.cache/ms-playwright per Playwright version; the script
+# only falls back to apt for system libs if Chromium can't launch)
+tests/e2e/install-browser.sh
 CI=true BBM_WEB_URL=... pnpm --filter @bbm/system-tests run e2e
 # upload tests/e2e/playwright-report/ as an artifact (if: always())
 
