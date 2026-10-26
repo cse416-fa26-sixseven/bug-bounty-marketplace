@@ -826,6 +826,8 @@ jobs:
   # package with a high/critical advisory. It only looks at the PR's own
   # lockfile/manifest diff, so a new advisory against something already
   # on main never turns unrelated PRs red - deps-audit reports those.
+  # The dependency graph doesn't read uv.lock, so Python changes in
+  # workers/analysis are only covered by deps-audit's pip-audit.
   # ---------------------------------------------------------------------
   deps-review:
     name: Dependency review
@@ -852,6 +854,8 @@ jobs:
   deps-audit:
     name: Dependency audit (report only)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -890,7 +894,7 @@ jobs:
 
           warn=""
           { uv export --project workers/analysis --frozen --no-emit-project \
-              --format requirements-txt -o "$RUNNER_TEMP/analysis-req.txt" \
+              --format requirements-txt -o "$RUNNER_TEMP/analysis-req.txt" >/dev/null \
             && uvx pip-audit@2.10.1 -r "$RUNNER_TEMP/analysis-req.txt" \
               --disable-pip --progress-spinner off; } > "$RUNNER_TEMP/py.txt" 2>&1 \
             || warn="Advisories (or audit error) in workers/analysis/uv.lock - see the job summary."
