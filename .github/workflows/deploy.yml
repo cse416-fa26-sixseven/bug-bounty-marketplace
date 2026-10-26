@@ -516,7 +516,7 @@ jobs:
           if [[ "${recorded:-true}" == true ]]; then
             tag_line="\`bbm-last-deployed-tag\` on \`$DATA_RG\` = \`$TAG\`"
           else
-            echo "::warning title=Deployed tag not recorded::$TAG is live on $ENV_NAME, but tagging $DATA_RG failed after 4 attempts. Until it is set, env-power up / redeploys use the previous tag and the ACR purge guard does not protect $TAG. Re-run this job, or: az tag update --resource-id \$(az group show -n $DATA_RG --query id -o tsv) --operation merge --tags bbm-last-deployed-tag=$TAG"
+            echo "::warning title=Deployed tag not recorded::$TAG is live on $ENV_NAME, but tagging $DATA_RG failed after 4 attempts. Until it is set, env-power up / redeploys use the previous tag and the ACR purge guard does not protect $TAG. Fix: az tag update --resource-id \$(az group show -n $DATA_RG --query id -o tsv) --operation merge --tags bbm-last-deployed-tag=$TAG deployed-at=$deployed_at (or re-run this job, which repeats the whole deploy)"
             tag_line="\`bbm-last-deployed-tag\` on \`$DATA_RG\`: **not recorded** (Azure API error after 4 attempts; see the warning)"
           fi
           revision=$(helm history bbm -n bbm -o json | jq -r '.[-1].revision') || revision=unknown
