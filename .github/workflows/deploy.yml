@@ -63,6 +63,10 @@ on:
       health:
         description: Outcome of the /health check through the ingress (success | failure | skipped).
         value: ${{ jobs.deploy.outputs.health }}
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        description: Discord channel webhook; when set, a prod run posts who approved it.
+        required: false
   workflow_dispatch:
     inputs:
       env:
@@ -86,6 +90,8 @@ on:
 permissions:
   id-token: write
   contents: read
+  # The run's approvals API (who approved prod) for the Discord notice.
+  actions: read
 
 jobs:
   deploy:
@@ -128,6 +134,49 @@ jobs:
       BBM_REGION_ABBR: ${{ vars.AZURE_LOCATION_ABBR }}
       BBM_LOCATION: ${{ vars.AZURE_LOCATION }}
     steps:
+      # Prod only. The job starts as soon as a reviewer approves the `prod`
+      # Environment, so this posts who approved and when (the approvals API
+      # has no timestamp; the job's start time is the approval moment).
+      # Optional: skipped without the secret; never fails the deploy.
+      - name: Notify Discord (prod approved)
+        if: inputs.env == 'prod'
+        continue-on-error: true
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TAG: ${{ inputs.image_tag }}
+          WORKFLOW: ${{ github.workflow }}
+        run: |
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping"
+            exit 0
+          fi
+          approval=$(gh api "repos/$REPO/actions/runs/$RUN_ID/approvals" --jq \
+            '[.[] | select(.state == "approved" and any(.environments[]; .name == "prod"))] | last // {}' \
+            ) || approval='{}'
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          body=$(jq -n --argjson a "$approval" --arg tag "${TAG:-the last deployed tag}" \
+            --arg run "$RUN_URL" --arg now "$now" --arg wf "$WORKFLOW" '{
+              allowed_mentions: {parse: []},
+              embeds: [{
+                title: "Prod deployment approved",
+                url: $run,
+                color: 3447003,
+                timestamp: $now,
+                description: "Prod deploy of `\($tag)` is starting (\($wf)).",
+                fields: ([
+                  {name: "Approved by", value: ($a.user.login // "no reviewer approval recorded"), inline: true},
+                  {name: "Approved at", value: "<t:\($now | fromdateiso8601):f>", inline: true}
+                ] + (if ($a.comment // "") != "" then [{name: "Comment", value: $a.comment[0:1000]}] else [] end))
+              }]
+            }')
+          curl -fsS --retry 3 --max-time 15 -H 'Content-Type: application/json' \
+            -d "$body" "$WEBHOOK" >/dev/null \
+            || echo "::warning::could not post the approval to Discord"
+
       - name: Check inputs and configuration
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}

@@ -405,11 +405,15 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      # deploy.yml reads the run's approvals (who approved prod) for Discord.
+      actions: read
     uses: ./.github/workflows/deploy.yml
     with:
       env: ${{ inputs.env }}
       image_tag: ''
       smoke: true
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
   # ---------------------------------------------------------------------
   # Scheduled: nightly auto-pause (+ Sunday retry). Pause only. prod runs as prod-power (no reviewer, power-only).
