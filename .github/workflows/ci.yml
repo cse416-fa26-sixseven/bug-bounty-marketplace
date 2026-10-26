@@ -821,6 +821,83 @@ jobs:
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3 -color
 
   # ---------------------------------------------------------------------
+  # Dependency security (GitHub Advisory DB, the same data Dependabot
+  # uses). Dependency Review blocks a PR that adds or upgrades to a
+  # package with a high/critical advisory. It only looks at the PR's own
+  # lockfile/manifest diff, so a new advisory against something already
+  # on main never turns unrelated PRs red - deps-audit reports those.
+  # ---------------------------------------------------------------------
+  deps-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # Default is runtime only; vite/vitest are dev deps and were the
+          # last alerts Dependabot couldn't fix, so check those too.
+          fail-on-scopes: runtime, development, unknown
+
+  # Report-only audit of the full lockfiles (npm via pnpm, Python via uv),
+  # so advisories already on main - including ones Dependabot can't fix on
+  # its own - show up on every PR. Warns and writes the job summary; never
+  # fails, and is not part of CI OK.
+  deps-audit:
+    name: Dependency audit (report only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      # pnpm audit only reads the lockfile and queries the registry; no
+      # install (or install cache) needed.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Audit lockfiles
+        run: |
+          set -uo pipefail
+          report() { # <title> <file> <warning>
+            {
+              echo "### $1"
+              echo '```'
+              tail -c 60000 "$2"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [[ -n "$3" ]]; then echo "::warning title=$1::$3"; fi
+          }
+          echo "## Dependency audit (report only)" >> "$GITHUB_STEP_SUMMARY"
+
+          warn=""
+          pnpm audit --audit-level high > "$RUNNER_TEMP/npm.txt" 2>&1 \
+            || warn="High/critical advisories (or audit error) in pnpm-lock.yaml - see the job summary."
+          report "npm (pnpm-lock.yaml)" "$RUNNER_TEMP/npm.txt" "$warn"
+
+          warn=""
+          { uv export --project workers/analysis --frozen --no-emit-project \
+              --format requirements-txt -o "$RUNNER_TEMP/analysis-req.txt" \
+            && uvx pip-audit@2.10.1 -r "$RUNNER_TEMP/analysis-req.txt" \
+              --disable-pip --progress-spinner off; } > "$RUNNER_TEMP/py.txt" 2>&1 \
+            || warn="Advisories (or audit error) in workers/analysis/uv.lock - see the job summary."
+          report "Python (workers/analysis/uv.lock)" "$RUNNER_TEMP/py.txt" "$warn"
+          exit 0
+
+  # ---------------------------------------------------------------------
   # Single required status check for branch protection: succeeds as
   # long as every needed job either succeeded or was skipped (because
   # its path filter didn't match), and fails if any of them actually
@@ -841,6 +918,7 @@ jobs:
       - terraform-static
       - helm
       - workflows
+      - deps-review
     runs-on: ubuntu-latest
     steps:
       - name: Check required job results
@@ -861,6 +939,7 @@ jobs:
             [terraform-static]="${{ needs.terraform-static.result }}"
             [helm]="${{ needs.helm.result }}"
             [workflows]="${{ needs.workflows.result }}"
+            [deps-review]="${{ needs.deps-review.result }}"
           )
           failed=0
           for job in "${!results[@]}"; do
