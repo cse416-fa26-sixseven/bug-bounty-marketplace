@@ -13,12 +13,12 @@
   },
   "dependencies": {
     "@bbm/shared": "workspace:^",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/node": "^22.10.5",
     "typescript": "^5.9.3",
-    "vitest": "^3.0.5"
+    "vitest": "^5.0.5"
   }
 }

@@ -14,11 +14,11 @@
   "dependencies": {
     "@bbm/shared": "workspace:*",
     "@tanstack/react-query": "^5.104.0",
-    "next": "^16.3.8",
+    "next": "^16.4.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "viem": "^2",
-    "zod": "^4.6.5",
+    "zod": "^4.6.6",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
@@ -37,7 +37,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.0",
-    "vitest": "^3.0.5"
+    "vitest": "^5.0.5"
   },
   "msw": {
     "workerDirectory": [
