@@ -7,6 +7,7 @@ ingress:
   host: test.bbm.example.com
   publicIpName: pip-bbm-test-ingress
   publicIpResourceGroup: rg-bbm-test-data-ncus
+  trustedProxyCidr: 192.168.0.0/16
 networkPolicy:
   postgresCidr: ""
 dns:

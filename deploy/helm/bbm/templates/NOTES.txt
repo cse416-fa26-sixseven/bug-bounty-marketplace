@@ -29,6 +29,10 @@ HTTPRoute {{ include "bbm.fullname" . }} on Gateway {{ .Values.ingress.gateway.n
   TLS terminates at the Gateway (bbm-platform wildcard bbm-platform/bbm-wildcard-tls); HTTP redirects to HTTPS.
   The route attaches only if namespace {{ .Release.Namespace }} has label bbm.io/gateway-access=true:
     kubectl -n {{ .Release.Namespace }} get httproute {{ include "bbm.fullname" . }} -o jsonpath='{.status.parents[0].conditions}'
+{{- if and .Values.api.rateLimit.enabled (not .Values.ingress.trustedProxyCidr) }}
+  WARNING: api rate limiting is OFF: ingress.trustedProxyCidr is empty, so the api could not tell
+  clients apart behind the Gateway. Apply the compute stack and redeploy so values-infra.yaml has it.
+{{- end }}
 {{- else }}
 
 No HTTPRoute. Reach the app with:
