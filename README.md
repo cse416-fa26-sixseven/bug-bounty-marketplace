@@ -45,7 +45,7 @@ Finding statuses: `Flagged → Submitted → Verified → Disputed/Rejected → 
 git clone --recurse-submodules <repo>    # forge-std is a submodule under contracts/lib
 cd bug-bounty-marketplace
 
-nvm use                      # Node 20 (see .nvmrc)
+nvm use                      # Node 22 (see .nvmrc)
 corepack enable              # or: npm install -g pnpm@9
 pnpm install
 

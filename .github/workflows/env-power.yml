@@ -182,7 +182,7 @@ jobs:
         if: inputs.action == 'resume' && inputs.env != 'test'
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: 'pnpm'
 
       # Read-only smoke on both envs: a resume changes no code.
