@@ -13,11 +13,11 @@
 # Uploaded sources are written to /data/sources (SOURCE_STORAGE_DIR); mount a
 # volume there to keep them across container restarts.
 
-ARG NODE_VERSION=20.17.0
+ARG NODE_VERSION=22.23.4
 ARG PNPM_VERSION=9.15.9
 
 # ---------------------------------------------------------------------------
-# base: Node + pnpm. Corepack bundled with Node 20.17 fails signature checks
+# base: Node + pnpm. Corepack bundled with older Node fails signature checks
 # ("Cannot find matching keyid"), so pnpm is installed with npm instead.
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS base
