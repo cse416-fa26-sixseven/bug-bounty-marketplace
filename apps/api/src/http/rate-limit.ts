@@ -18,7 +18,9 @@ export interface RateLimitConfig {
 
 export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
   enabled: true,
-  max: 600,
+  // A flood guard only: one browser tab polls 60-90 req/min, and a campus
+  // NAT can put many users behind one IP. The costly routes have their own.
+  max: 3000,
   uploadMax: 20,
   authMax: 60,
 };

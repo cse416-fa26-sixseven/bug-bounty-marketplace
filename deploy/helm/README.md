@@ -52,7 +52,7 @@ Expected keys (see `docs/adr/0001-azure-environment-topology.md`):
 global:   { image: { registry: <acr>.azurecr.io } }
 azure:    { tenantId, keyVaultName, apiClientId, workerClientId, migrationsClientId,
             sandboxClientId, storageAccountName, storageBlobEndpoint, queueName }
-ingress:  { host, publicIpName, publicIpResourceGroup }
+ingress:  { host, publicIpName, publicIpResourceGroup, trustedProxyCidr }
 networkPolicy: { postgresCidr }
 dns:      { zone, envZones, internalZone }                          # ADR 0002, bbm-platform only
 platform: { subscriptionId, dnsResourceGroup, certManagerClientId } # ADR 0002, bbm-platform only

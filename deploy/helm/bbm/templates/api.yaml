@@ -75,8 +75,13 @@ spec:
               value: {{ $v.pgPoolMax | quote }}
             - name: SOURCE_STORAGE_DIR
               value: {{ $v.sourceStorage.path | quote }}
+            {{- /* Behind the Gateway without its pod CIDR the api would see
+            only the Envoy pods' IPs, so every user would share one limit:
+            leave limiting off until values-infra carries the CIDR. */}}
+            {{- $behindGateway := .Values.ingress.enabled }}
+            {{- $limit := and $v.rateLimit.enabled (or (not $behindGateway) (not (empty .Values.ingress.trustedProxyCidr))) }}
             - name: RATE_LIMIT_ENABLED
-              value: {{ $v.rateLimit.enabled | quote }}
+              value: {{ $limit | toString | quote }}
             {{- if and .Values.ingress.enabled .Values.ingress.trustedProxyCidr }}
             - name: TRUST_PROXY
               value: {{ .Values.ingress.trustedProxyCidr | quote }}

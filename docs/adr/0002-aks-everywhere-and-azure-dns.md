@@ -240,12 +240,20 @@ ingress:
 The Gateway's Envoy pods run in the pod CIDR and append the client IP to
 `X-Forwarded-For`. The app chart passes this CIDR to the api as `TRUST_PROXY`,
 so the api keys its per-client limits on that IP. The key is optional
-(`requireInfraValues` does not check it): without it the api treats the
-Gateway pods as the clients and logs a warning.
+(`requireInfraValues` does not check it, because `deploy.yml` reads outputs
+without applying): while it is missing the chart turns rate limiting off
+rather than let every client share the Gateway pods' limit.
+
+Known limit: if the Gateway's LoadBalancer Service uses
+`externalTrafficPolicy: Cluster`, traffic that lands on a node without an
+Envoy pod is SNATed to that node's IP (outside the pod CIDR, so never
+trusted). Those clients then share one limit per node. It cannot be used to
+dodge a limit, only to use up a shared one. Check with
+`kubectl -n bbm-platform get svc bbm-approuting-istio -o jsonpath='{.spec.externalTrafficPolicy}'`.
 
 `bbm-platform` consumes `dns.*`, `platform.*` and `ingress.publicIpName` /
 `ingress.publicIpResourceGroup` (bound by the Gateway). The app chart uses `ingress.host` as its
-HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) changed no keys.
+HTTPRoute hostname and `ingress.trustedProxyCidr` for the api, and ignores the other keys. The Gateway API move (section 3) changed no keys.
 
 ### 6. One-command bring-up and teardown
 

@@ -39,7 +39,7 @@ or local disk via `SOURCE_STORAGE_DIR`). For a local Postgres, run
 | `SOURCE_STORAGE_DIR`        | unset                                    | Unset: uploaded `.sol` and `.t.sol` bytes are held in memory. Set: written under this directory (shared with the worker).        |
 | `CLAIM_WINDOW_SECONDS`      | `600`                                    | How long an auditor's exclusive claim on a contract lasts.                                                                       |
 | `RATE_LIMIT_ENABLED`        | `true`                                   | Per-client-IP rate limits. `false` turns them off (the compose stack and ephemeral test namespaces do).                          |
-| `RATE_LIMIT_MAX`            | `600`                                    | Requests per minute to any route without its own limit. `/health` is never limited.                                              |
+| `RATE_LIMIT_MAX`            | `3000`                                   | Requests per minute to any route without its own limit. `/health` is never limited.                                              |
 | `RATE_LIMIT_UPLOAD_MAX`     | `20`                                     | Requests per 10 minutes to each of `POST /api/contracts` and `POST /api/auditor/poc`.                                            |
 | `RATE_LIMIT_AUTH_MAX`       | `60`                                     | Requests per minute to each of `POST /api/auth/nonce` and `POST /api/auth/login`.                                                |
 | `TRUST_PROXY`               | unset                                    | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is believed. Helm sets the AKS pod CIDR (the Gateway's pods).            |

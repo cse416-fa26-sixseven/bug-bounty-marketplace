@@ -62,9 +62,20 @@ describe("rate limiting", () => {
     expect(await statuses(app, 5, chain)).not.toContain(429);
   });
 
+  it("counts each upload route separately", async () => {
+    const app = buildApp({ rateLimit: LIMITS });
+    const poc: InjectOptions = { ...upload, url: "/api/auditor/poc" };
+    expect(await statuses(app, 3, upload)).toEqual([400, 400, 429]);
+    const pocStatuses = await statuses(app, 3, poc);
+    expect(pocStatuses.slice(0, 2)).not.toContain(429);
+    expect(pocStatuses[2]).toBe(429);
+  });
+
   it("gives sign-in routes their own limit", async () => {
     const app = buildApp({ rateLimit: LIMITS, sessionSecret: SESSION_SECRET });
     expect(await statuses(app, 4, nonce)).toEqual([200, 200, 200, 429]);
+    const login: InjectOptions = { method: "POST", url: "/api/auth/login", payload: {} };
+    expect(await statuses(app, 4, login)).toEqual([400, 400, 400, 429]);
   });
 
   it("counts each client IP separately", async () => {
