@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { server } from "@/mocks/server";
@@ -32,6 +32,10 @@ function renderHeader() {
   );
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("Header banner", () => {
   it("says the demo is simulated without a chain", async () => {
     renderHeader();
@@ -43,5 +47,44 @@ describe("Header banner", () => {
     renderHeader();
     expect(await screen.findByText(/Local test chain/)).toBeInTheDocument();
     expect(screen.getByText(/Transactions are real on a local Anvil network; no real funds\./)).toBeInTheDocument();
+  });
+
+  describe("against the real API (staging/prod)", () => {
+    it("shows no banner without a chain", async () => {
+      vi.stubEnv("NEXT_PUBLIC_API_MOCKING", "disabled");
+      const chainFetched = vi.fn();
+      server.use(
+        http.get("*/api/chain", () => {
+          chainFetched();
+          return HttpResponse.json({ configured: false });
+        }),
+      );
+      renderHeader();
+      await waitFor(() => expect(chainFetched).toHaveBeenCalled());
+      expect(screen.queryByText(/Demo environment/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/are simulated/i)).not.toBeInTheDocument();
+    });
+
+    it("shows no banner on Sepolia", async () => {
+      vi.stubEnv("NEXT_PUBLIC_API_MOCKING", "disabled");
+      const chainFetched = vi.fn();
+      server.use(
+        http.get("*/api/chain", () => {
+          chainFetched();
+          return HttpResponse.json({ ...CHAIN, chainId: 11155111, rpcUrl: undefined });
+        }),
+      );
+      renderHeader();
+      await waitFor(() => expect(chainFetched).toHaveBeenCalled());
+      expect(screen.queryByText(/Demo environment/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Local test chain/)).not.toBeInTheDocument();
+    });
+
+    it("still shows the local chain banner on anvil", async () => {
+      vi.stubEnv("NEXT_PUBLIC_API_MOCKING", "disabled");
+      server.use(http.get("*/api/chain", () => HttpResponse.json(CHAIN)));
+      renderHeader();
+      expect(await screen.findByText(/Local test chain/)).toBeInTheDocument();
+    });
   });
 });
