@@ -1,0 +1,85 @@
+# Weekly version-update PRs (#57). Security updates are separate and stay on
+# in the repo settings. Minor and patch bumps are grouped into one PR per
+# ecosystem; majors come one PR each so they can be reviewed on their own.
+# CI (`CI OK`) gates every PR as usual.
+#
+# Not covered here, on purpose:
+# - Foundry (contracts/Dockerfile, workers/sandbox, ci.yml): .gas-snapshot
+#   depends on the exact version, so bump it by hand with `forge snapshot`.
+# - Node in apps/{api,web}/Dockerfile: the base image comes from an ARG,
+#   which Dependabot cannot read. Bump it together with .nvmrc.
+# - Tool versions in workflow `with:` inputs (terraform, tflint, helm,
+#   kubeconform): Dependabot only updates the actions themselves.
+version: 2
+
+updates:
+  # pnpm workspace: apps/*, packages/*, tests (one root lockfile).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Tracks the Node major in .nvmrc.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: uv
+    directory: /workers/analysis
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      uv-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directories:
+      - /workers/analysis
+      - /workers/sandbox
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+    ignore:
+      # pyproject.toml pins Python to 3.12.
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: ghcr.io/foundry-rs/foundry
+
+  - package-ecosystem: terraform
+    directories:
+      - /infra/terraform/stacks/*
+      - /infra/terraform/modules/*
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      terraform-providers:
+        update-types: [minor, patch]
