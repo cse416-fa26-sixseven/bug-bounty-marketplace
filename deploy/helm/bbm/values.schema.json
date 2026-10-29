@@ -470,6 +470,16 @@
         "migrationsDir": {
           "type": "string"
         },
+        "rateLimit": {
+          "type": "object",
+          "description": "Per-client-IP request limits in the api (RATE_LIMIT_*). Tune the numbers with extraEnv RATE_LIMIT_MAX / RATE_LIMIT_UPLOAD_MAX / RATE_LIMIT_AUTH_MAX.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
         "sourceStorage": {
           "type": "object",
           "properties": {
@@ -825,6 +835,11 @@
         "publicIpResourceGroup": {
           "type": "string",
           "description": "Ignored by this chart; consumed by bbm-platform."
+        },
+        "trustedProxyCidr": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-fA-F:.]+/[0-9]{1,3}(,[0-9a-fA-F:.]+/[0-9]{1,3})*$",
+          "description": "CIDR(s) the Gateway's Envoy pods run in (values-infra.yaml: the AKS overlay pod CIDR). Sets the api's TRUST_PROXY so rate limits key on the client IP from X-Forwarded-For."
         }
       },
       "required": [

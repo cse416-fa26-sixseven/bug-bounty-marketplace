@@ -181,6 +181,12 @@ api:
   pgPoolMax: 5
   # -- MIGRATIONS_DIR override; empty = image default (dist/migrations).
   migrationsDir: ""
+  rateLimit:
+    # -- RATE_LIMIT_ENABLED: per-client-IP limits (600 req/min overall, 20
+    # uploads per 10 min per upload route, 60 sign-in calls/min). Tune with
+    # extraEnv RATE_LIMIT_MAX / RATE_LIMIT_UPLOAD_MAX / RATE_LIMIT_AUTH_MAX.
+    # Counters are per pod. See ingress.trustedProxyCidr.
+    enabled: true
   # -- SOURCE_STORAGE_DIR, backed by an emptyDir.
   sourceStorage:
     path: /data/sources
@@ -330,6 +336,12 @@ ingress:
   publicIpName: ""
   # -- Ignored by this chart (see publicIpName).
   publicIpResourceGroup: ""
+  # -- CIDR(s) the Gateway's Envoy pods run in: the AKS overlay pod CIDR
+  # (values-infra). Becomes the api's TRUST_PROXY, so it believes the client
+  # IP the Gateway appends to X-Forwarded-For and rate-limits per client.
+  # Empty = the api trusts no proxy and every client shares the Gateway pods'
+  # limits. Only rendered when ingress.enabled.
+  trustedProxyCidr: ""
 
 postgres:
   inCluster:

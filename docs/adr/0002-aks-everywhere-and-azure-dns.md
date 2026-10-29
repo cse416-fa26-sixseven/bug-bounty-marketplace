@@ -230,6 +230,19 @@ platform:
   certManagerClientId: ... # id-bbm-<env>-certmgr client id
 ```
 
+Added later for API rate limiting:
+
+```yaml
+ingress:
+  trustedProxyCidr: 192.168.0.0/16  # the AKS overlay pod CIDR (modules/aks pod_cidr)
+```
+
+The Gateway's Envoy pods run in the pod CIDR and append the client IP to
+`X-Forwarded-For`. The app chart passes this CIDR to the api as `TRUST_PROXY`,
+so the api keys its per-client limits on that IP. The key is optional
+(`requireInfraValues` does not check it): without it the api treats the
+Gateway pods as the clients and logs a warning.
+
 `bbm-platform` consumes `dns.*`, `platform.*` and `ingress.publicIpName` /
 `ingress.publicIpResourceGroup` (bound by the Gateway). The app chart uses `ingress.host` as its
 HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) changed no keys.
