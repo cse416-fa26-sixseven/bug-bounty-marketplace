@@ -36,7 +36,7 @@ Environments: `test` (CI-run and PR-preview namespaces), `staging` and `prod`. `
 | GitHub CLI | 2.40+, logged in as repo admin | `gh auth status`           |
 | kubectl    | recent                         | `kubectl version --client` |
 | kubelogin  | recent                         | `kubelogin --version`      |
-| Helm       | 3.x (CI pins v3.16.2)          | `helm version`             |
+| Helm       | 3.x (CI pins v3.16.4)          | `helm version`             |
 
 Also `jq`, `curl`, `awk` and `bash`. `dig` or `nslookup` is optional (without them the DNS checks
 use DNS-over-HTTPS through `curl`).

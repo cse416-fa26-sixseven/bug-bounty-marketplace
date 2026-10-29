@@ -10,6 +10,10 @@
 #   which Dependabot cannot read. Bump it together with .nvmrc.
 # - Tool versions in workflow `with:` inputs (terraform, tflint, helm,
 #   kubeconform): Dependabot only updates the actions themselves.
+# - docker-compose.yml images (postgres) and the forge-std submodule.
+# - Terraform provider majors (see below).
+#
+# Azure previews (preview.yml) skip Dependabot PRs.
 version: 2
 
 updates:
@@ -23,6 +27,9 @@ updates:
     commit-message:
       prefix: chore(deps)
     groups:
+      # Its own PR: a Playwright bump changes the browser (and its CI cache).
+      playwright:
+        patterns: ["@playwright/*", "playwright", "playwright-core"]
       npm-minor-and-patch:
         update-types: [minor, patch]
     ignore:
@@ -83,3 +90,8 @@ updates:
     groups:
       terraform-providers:
         update-types: [minor, patch]
+    ignore:
+      # Majors (azurerm 5, azapi 3) need the `< N` caps in every
+      # versions.tf raised together; do those by hand.
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
