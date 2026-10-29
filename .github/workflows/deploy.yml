@@ -345,7 +345,7 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         uses: azure/setup-helm@v4
         with:
-          version: v3.16.2
+          version: v3.16.4
 
       - name: Setup kubelogin
         if: steps.gate.outputs.go == 'true'
