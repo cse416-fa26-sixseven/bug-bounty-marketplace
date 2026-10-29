@@ -25,11 +25,18 @@ const CHAIN = {
 
 function renderHeader() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  render(
     <QueryClientProvider client={client}>
       <Header />
     </QueryClientProvider>,
   );
+  return client;
+}
+
+/** Waits until the Header has the /api/chain answer, so "no banner" checks
+ * run against the rendered chain info, not the loading state. */
+async function chainLoaded(client: QueryClient) {
+  await waitFor(() => expect(client.getQueryData(["chain"])).toBeDefined());
 }
 
 afterEach(() => {
@@ -52,30 +59,16 @@ describe("Header banner", () => {
   describe("against the real API (staging/prod)", () => {
     it("shows no banner without a chain", async () => {
       vi.stubEnv("NEXT_PUBLIC_API_MOCKING", "disabled");
-      const chainFetched = vi.fn();
-      server.use(
-        http.get("*/api/chain", () => {
-          chainFetched();
-          return HttpResponse.json({ configured: false });
-        }),
-      );
-      renderHeader();
-      await waitFor(() => expect(chainFetched).toHaveBeenCalled());
+      server.use(http.get("*/api/chain", () => HttpResponse.json({ configured: false })));
+      await chainLoaded(renderHeader());
       expect(screen.queryByText(/Demo environment/)).not.toBeInTheDocument();
       expect(screen.queryByText(/are simulated/i)).not.toBeInTheDocument();
     });
 
     it("shows no banner on Sepolia", async () => {
       vi.stubEnv("NEXT_PUBLIC_API_MOCKING", "disabled");
-      const chainFetched = vi.fn();
-      server.use(
-        http.get("*/api/chain", () => {
-          chainFetched();
-          return HttpResponse.json({ ...CHAIN, chainId: 11155111, rpcUrl: undefined });
-        }),
-      );
-      renderHeader();
-      await waitFor(() => expect(chainFetched).toHaveBeenCalled());
+      server.use(http.get("*/api/chain", () => HttpResponse.json({ ...CHAIN, chainId: 11155111, rpcUrl: undefined })));
+      await chainLoaded(renderHeader());
       expect(screen.queryByText(/Demo environment/)).not.toBeInTheDocument();
       expect(screen.queryByText(/Local test chain/)).not.toBeInTheDocument();
     });
