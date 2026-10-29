@@ -38,6 +38,17 @@ or local disk via `SOURCE_STORAGE_DIR`). For a local Postgres, run
 | `MIGRATIONS_DIR`            | `migrations/` next to the running module | Directory of `*.sql` migrations. Resolves to `src/db/migrations` under `dev` and `dist/migrations` in the build.                 |
 | `SOURCE_STORAGE_DIR`        | unset                                    | Unset: uploaded `.sol` and `.t.sol` bytes are held in memory. Set: written under this directory (shared with the worker).        |
 | `CLAIM_WINDOW_SECONDS`      | `600`                                    | How long an auditor's exclusive claim on a contract lasts.                                                                       |
+| `RATE_LIMIT_ENABLED`        | `true`                                   | Per-client-IP rate limits. `false` turns them off (the compose stack and ephemeral test namespaces do).                          |
+| `RATE_LIMIT_MAX`            | `600`                                    | Requests per minute to any route without its own limit. `/health` is never limited.                                              |
+| `RATE_LIMIT_UPLOAD_MAX`     | `20`                                     | Requests per 10 minutes to each of `POST /api/contracts` and `POST /api/auditor/poc`.                                            |
+| `RATE_LIMIT_AUTH_MAX`       | `60`                                     | Requests per minute to each of `POST /api/auth/nonce` and `POST /api/auth/login`.                                                |
+| `TRUST_PROXY`               | unset                                    | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is believed. Helm sets the AKS pod CIDR (the Gateway's pods).            |
+
+Over a limit the API answers `429` with `Retry-After` and
+`{ "statusCode": 429, "error": "Too many requests; try again in N seconds" }`.
+Counters are kept per process, so with several replicas a client can get up
+to `replicas ×` each limit. Without `TRUST_PROXY` the client is the socket
+peer, so behind a proxy every client shares one limit (the API warns at boot).
 
 Migrations are applied in filename order while holding a Postgres advisory
 lock, so several replicas booting at once apply them one at a time. If a run

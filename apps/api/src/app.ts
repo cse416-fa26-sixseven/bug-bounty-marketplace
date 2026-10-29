@@ -23,6 +23,7 @@ import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-reposit
 import type { PipelineRepository } from "./pipeline/repository.js";
 import { registerPipelineRoutes } from "./pipeline/routes.js";
 import { NotConfiguredVerdictSource, type PocVerdictSource } from "./pipeline/verdict-source.js";
+import { registerRateLimit, type RateLimitConfig } from "./http/rate-limit.js";
 
 export interface AppOptions {
   /** Defaults to an in-memory repository. `index.ts` wires Postgres when
@@ -68,12 +69,30 @@ export interface AppOptions {
   /** Guarded finding status writes (the chain action store). Defaults to an
    * in-memory store over the same data as the default repositories. */
   findingStatus?: FindingStatusReader & FindingStatusWriter;
+  /** Per-client-IP request limits. Omit for none (tests); `index.ts` passes
+   * loadRateLimitConfig(), which is on by default. */
+  rateLimit?: RateLimitConfig;
+  /** Fastify `trustProxy`: which proxies' X-Forwarded-For to believe when
+   * working out the client IP (TRUST_PROXY, see parseTrustProxy). Default
+   * false: the client is the socket peer. */
+  trustProxy?: false | string[];
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, trustProxy: options.trustProxy ?? false });
 
-  app.get("/health", async () => {
+  if (options.rateLimit) registerRateLimit(app, options.rateLimit);
+  void app.register(multipart, { limits: CONTRACT_MULTIPART_LIMITS });
+  // Routes are declared in a plugin so they are added after the rate limiter
+  // has loaded; routes declared directly on `app` here would skip it.
+  void app.register(async (api) => registerRoutes(api, options));
+
+  return app;
+}
+
+function registerRoutes(app: FastifyInstance, options: AppOptions): void {
+  // Probes must never be throttled.
+  app.get("/health", { config: { rateLimit: false } }, async () => {
     return { status: "ok" };
   });
 
@@ -83,7 +102,6 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const storage = options.storage ?? new MemorySourceStorage();
   const config = options.config ?? loadPipelineConfig();
 
-  void app.register(multipart, { limits: CONTRACT_MULTIPART_LIMITS });
   registerChainRoutes(app, { config: options.chainConfig ?? null });
   const auth = options.sessionSecret ? new Auth(options.sessionSecret, options.now ?? config.now) : null;
   if (auth) registerAuthRoutes(app, auth);
@@ -124,6 +142,4 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     chainActions: options.chainActions,
     identity,
   });
-
-  return app;
 }
