@@ -6,6 +6,8 @@ import { http, HttpResponse } from "msw";
 import { server } from "@/mocks/server";
 import { useRoleStore } from "@/lib/role/store";
 import { ANVIL_ACCOUNTS } from "@/lib/chain/accounts";
+import { parseSiweMessage } from "viem/siwe";
+import { siweMessage } from "@/test/siwe";
 import { ChainSession } from "../chain-session";
 
 const CHAIN = {
@@ -29,10 +31,11 @@ describe("ChainSession", () => {
       http.get("*/api/chain", () => HttpResponse.json(CHAIN)),
       http.post("*/api/auth/nonce", async ({ request }) => {
         const { address } = (await request.json()) as { address: string };
-        return HttpResponse.json({ nonce: "n", message: `BountyGuard sign-in\nAddress: ${address}\nNonce: n` });
+        return HttpResponse.json({ nonce: "abcdef0123456789", message: siweMessage(address) });
       }),
       http.post("*/api/auth/login", async ({ request }) => {
-        const { address } = (await request.json()) as { address: string };
+        const { message } = (await request.json()) as { message: string };
+        const address = parseSiweMessage(message).address!;
         logins.push(address);
         return HttpResponse.json({ address });
       }),

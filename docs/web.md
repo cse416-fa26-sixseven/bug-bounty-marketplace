@@ -19,6 +19,20 @@ Next.js frontend. API calls go to `/api/*`, which `src/proxy.ts` forwards to
 - Without mocking, only `/api/contracts` exists on the real API today, so
   most pages need the mocks.
 
+## Sign-in
+
+Against a real chain the API wants Sign-In with Ethereum (see
+[api.md](api.md#sign-in-sign-in-with-ethereum)). `src/lib/api/auth.ts`
+(`signIn`, `ensureSignedIn`) takes any `MessageSigner`
+(`{ address, signMessage({ message }) }`), so an anvil `PrivateKeyAccount`
+and an injected wallet account both work. Before it asks the signer, it
+checks that the API's message is SIWE, for that address and for the page's
+own domain (`window.location.host`). The anvil keys sign without a prompt, so
+this check is the only one they get. Sign-ins run one at a time, because the
+session is one cookie. Leave `AUTH_ORIGIN` unset on the API for
+`pnpm --filter @bbm/web dev` (the messages then name `localhost:3000`, which
+the browser's `Origin` header gives), or set it to the URL you browse.
+
 ## Scripts
 
 ```sh

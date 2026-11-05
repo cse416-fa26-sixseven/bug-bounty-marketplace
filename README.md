@@ -143,7 +143,8 @@ Run the web app in live chain mode against it. `NEXT_PUBLIC_LIVE_CHAIN`
 sends the chain description, sign-in and every lifecycle route (funding,
 cancel, reclaim, profile, disputes, rulings) to the real API. Each role signs
 its transactions in the browser with its anvil account (developer, auditor,
-arbiter) and signs in to the API with a signed message when you switch roles.
+arbiter) and signs in to the API with Sign-In with Ethereum (EIP-4361) when
+you switch roles.
 Without `NEXT_PUBLIC_LIVE_CHAIN` the chain stays mocked, so the app never
 signs anything.
 
