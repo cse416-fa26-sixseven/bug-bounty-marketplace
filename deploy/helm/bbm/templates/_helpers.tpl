@@ -302,7 +302,10 @@ session-secret.
 {{- range $k := list "auditorStaking" "bountyEscrow" "disputeResolution" }}
 {{- if not (regexMatch "^0x[0-9a-fA-F]{40}$" (index $c.addresses $k | toString)) }}{{ fail (printf "chain.enabled needs chain.addresses.%s (a 0x address)" $k) }}{{ end -}}
 {{- end -}}
-{{- if not (and $.Values.ingress.enabled $.Values.ingress.host) }}{{ fail "chain.enabled needs ingress.enabled and ingress.host (Sign-In with Ethereum binds to https://<host>)" }}{{ end -}}
+{{- if not $.Values.ingress.enabled }}{{ fail "chain.enabled needs ingress.enabled (Sign-In with Ethereum binds to https://<ingress.host>)" }}{{ end -}}
+{{- /* The host comes from values-infra.yaml, so it is enforced only on a real
+deploy (global.requireInfraValues), like the other infra values. */}}
+{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "ingress.host (chain.enabled binds sign-in to https://<host>)" "value" $.Values.ingress.host) }}
 {{- if eq $.Values.secrets.provider "plain" }}
 {{- if not (regexMatch "^0x[0-9a-fA-F]{64}$" ($.Values.secrets.plain.operatorPrivateKey | toString)) }}{{ fail "chain.enabled with secrets.provider=plain needs secrets.plain.operatorPrivateKey (0x + 64 hex)" }}{{ end -}}
 {{- if lt (len ($.Values.secrets.plain.sessionSecret | toString)) 16 }}{{ fail "chain.enabled with secrets.provider=plain needs secrets.plain.sessionSecret (16+ characters)" }}{{ end -}}
