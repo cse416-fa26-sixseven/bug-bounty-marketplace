@@ -5,13 +5,14 @@ import {
   listQueue,
   markFalsePositive,
   postStake,
+  reportFinding,
   submitPoc,
 } from "../db/auditors";
 import { errorResponse } from "./util";
 
 /**
- * Auditor-flow routes: queue, claim, stake, PoC submission, false-positive
- * flagging, own profile. Owns no routes outside this area.
+ * Auditor-flow routes: queue, claim, stake, PoC submission, auditor-reported
+ * findings, false-positive flagging, own profile. Owns no routes outside this area.
  */
 export const auditorHandlers = [
   http.get("*/api/auditor/queue", ({ request }) => {
@@ -86,6 +87,30 @@ export const auditorHandlers = [
     try {
       const poc = submitPoc(findingId, auditorId, file.name);
       return HttpResponse.json(poc, { status: 201 });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.post("*/api/auditor/findings", async ({ request }) => {
+    const form = await request.formData();
+    const file = form.get("file");
+    const field = (name: string) => String(form.get(name) ?? "");
+    const auditorId = field("auditorId");
+    const input = {
+      contractId: field("contractId"),
+      title: field("title"),
+      severity: field("severity"),
+      description: field("description"),
+    };
+    if (!(file instanceof File) || !auditorId || Object.values(input).some((v) => !v)) {
+      return HttpResponse.json(
+        { error: "contractId, auditorId, title, severity, description and file are required" },
+        { status: 400 },
+      );
+    }
+    try {
+      return HttpResponse.json(reportFinding(input, auditorId, file.name), { status: 201 });
     } catch (err) {
       return errorResponse(err);
     }

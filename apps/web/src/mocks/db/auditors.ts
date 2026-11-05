@@ -1,4 +1,15 @@
-import { compareWei, PositiveWeiSchema, type AuditorProfile, type Contract, type Finding, type PoCSubmission, type Wei } from "@bbm/shared";
+import {
+  AUDITOR_FINDING_DETECTOR,
+  AuditorFindingFieldsSchema,
+  compareWei,
+  PositiveWeiSchema,
+  type AuditorFindingReport,
+  type AuditorProfile,
+  type Contract,
+  type Finding,
+  type PoCSubmission,
+  type Wei,
+} from "@bbm/shared";
 import { ethToWei } from "../../lib/money";
 import { MOCK_ADDRESSES } from "../../lib/addresses";
 import { db } from "./store";
@@ -166,6 +177,84 @@ export function submitPoc(
   scheduleOnce(`sandbox:${pocId}`, SANDBOX_DELAY_MS, () => resolveSandbox(pocId, findingId));
 
   return poc;
+}
+
+/** The contract's claim: db.claims for claims made at runtime, else the
+ * claim fields seeded onto its findings. */
+function activeClaimFor(contractId: string): { auditorId: string; expiresAt: string } | null {
+  const claim =
+    db.claims[contractId] ??
+    db.findings
+      .filter((f) => f.contractId === contractId && f.claimedByAuditorId && f.claimExpiresAt)
+      .map((f) => ({ auditorId: f.claimedByAuditorId!, expiresAt: f.claimExpiresAt! }))[0];
+  if (!claim || new Date(claim.expiresAt).getTime() <= Date.now()) return null;
+  return claim;
+}
+
+export interface ReportFindingInput {
+  contractId: string;
+  title: string;
+  severity: string;
+  description: string;
+}
+
+/** POST /api/auditor/findings: the claiming auditor reports a finding Slither
+ * missed, with its PoC. Same checks as submitPoc; the finding starts
+ * Submitted and the sandbox resolves it like any other PoC. */
+export function reportFinding(
+  input: ReportFindingInput,
+  auditorId: string,
+  testFilename: string,
+): AuditorFindingReport {
+  const parsed = AuditorFindingFieldsSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new MockApiError(400, parsed.error.issues.map((i) => i.message).join("; "));
+  }
+  const report = parsed.data;
+  const contract = findContractById(report.contractId);
+  if (!contract) throw new MockApiError(404, `Contract ${report.contractId} not found`);
+  const claim = activeClaimFor(contract.id);
+  if (!claim || claim.auditorId !== auditorId)
+    throw new MockApiError(403, "You do not hold an active claim on this contract");
+  if (compareWei(findAuditorById(auditorId)?.stake ?? "0", ethToWei("10000")) < 0)
+    throw new MockApiError(400, "Post the required demo stake before submitting a PoC");
+  if (contract.status !== "Claimed" || new Date(contract.deadline).getTime() <= Date.now())
+    throw new MockApiError(400, "This bounty is no longer accepting submissions");
+
+  const findingId = nextId("finding");
+  const at = timestamp();
+  const finding: Finding = {
+    id: findingId,
+    contractId: contract.id,
+    severity: report.severity,
+    slitherDetector: AUDITOR_FINDING_DETECTOR,
+    rawOutputReference: `mock://auditor-reports/${findingId}.json`,
+    llmExplanation: report.description,
+    status: "Submitted",
+    statusHistory: [{ status: "Submitted", changedAt: at }],
+    claimedByAuditorId: claim.auditorId,
+    claimExpiresAt: claim.expiresAt,
+    isFalsePositive: false,
+    challengeWindowExpiresAt: null,
+    source: "auditor",
+    title: report.title,
+    reportedByAuditorId: auditorId,
+  };
+  db.findings.push(finding);
+
+  const pocId = nextId("poc");
+  const poc: PoCSubmission = {
+    id: pocId,
+    findingId,
+    auditorId,
+    testFileReference: `mock://pocs/${pocId}/${testFilename}`,
+    submittedAt: at,
+    sandboxStatus: "Pending",
+    sandboxLog: null,
+  };
+  db.pocSubmissions.push(poc);
+  scheduleOnce(`sandbox:${pocId}`, SANDBOX_DELAY_MS, () => resolveSandbox(pocId, findingId));
+  return { finding, poc };
 }
 
 export function markFalsePositive(findingId: string, _auditorId: string): Finding {

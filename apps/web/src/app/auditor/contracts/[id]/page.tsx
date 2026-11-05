@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, auditorApi } from "@/lib/api";
@@ -8,6 +8,7 @@ import { useAuditorId, useRequiredStakeWei } from "@/lib/chain/use-chain";
 import { ClaimCountdown } from "../../_components/ClaimCountdown";
 import { REQUIRED_STAKE_WEI, StakeGate, isStakeMet } from "../../_components/StakeGate";
 import { FindingCard } from "../../_components/FindingCard";
+import { ReportFindingForm } from "../../_components/ReportFindingForm";
 
 /** True while a finding is still awaiting an auditor action or sandbox
  * result - used to decide whether to keep polling. */
@@ -22,6 +23,12 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const queryClient = useQueryClient();
   const auditorId = useAuditorId();
   const requiredStakeWei = useRequiredStakeWei(REQUIRED_STAKE_WEI);
+  // Ticks so the report form hides once the claim lapses.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const contractQuery = useQuery({
     queryKey: ["contract", contractId],
@@ -78,6 +85,14 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   // itself; every finding on a given claimed contract shares the same
   // value, so the first one is representative.
   const claimExpiresAt = findings.find((f) => f.claimExpiresAt)?.claimExpiresAt ?? null;
+  const ownsClaim =
+    contract.status === "Claimed" &&
+    findings.some(
+      (f) =>
+        f.claimedByAuditorId === auditorId &&
+        !!f.claimExpiresAt &&
+        new Date(f.claimExpiresAt).getTime() > now,
+    );
 
   return (
     <div className="flex flex-col gap-6">
@@ -100,6 +115,14 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
       </div>
 
       <StakeGate profile={profile} auditorId={auditorId} onStaked={refetchProfile} />
+
+      {ownsClaim && stakeMet && (
+        <ReportFindingForm
+          contractId={contractId}
+          auditorId={auditorId}
+          onReported={refetchFindings}
+        />
+      )}
 
       <section>
         <h2 className="text-xl font-semibold text-white">Findings</h2>

@@ -80,6 +80,53 @@ describe("FindingCard", () => {
     });
   });
 
+  it("labels an AI finding's explanation as AI output", () => {
+    renderCard({
+      id: "f_ai",
+      contractId: "contract_test",
+      severity: "High" as const,
+      slitherDetector: "reentrancy-eth",
+      rawOutputReference: "/api/findings/f_ai/raw",
+      llmExplanation: "Funds can be drained.",
+      status: "Flagged" as const,
+      statusHistory: [],
+      claimedByAuditorId: null,
+      claimExpiresAt: null,
+      isFalsePositive: false,
+      challengeWindowExpiresAt: null,
+      source: "slither" as const,
+      title: null,
+      reportedByAuditorId: null,
+    });
+    expect(screen.getByText("Slither + AI")).toBeInTheDocument();
+    expect(screen.getByText(/AI explanation/)).toBeInTheDocument();
+  });
+
+  it("labels an auditor-reported finding and shows no AI label or Slither output", () => {
+    renderCard({
+      id: "f_aud",
+      contractId: "contract_test",
+      severity: "Critical" as const,
+      slitherDetector: "auditor-reported",
+      rawOutputReference: "/api/findings/f_aud/raw",
+      llmExplanation: "Anyone can call sweep() and take the balance.",
+      status: "Submitted" as const,
+      statusHistory: [],
+      claimedByAuditorId: "auditor_1",
+      claimExpiresAt: null,
+      isFalsePositive: false,
+      challengeWindowExpiresAt: null,
+      source: "auditor" as const,
+      title: "Unprotected sweep()",
+      reportedByAuditorId: "auditor_1",
+    });
+    expect(screen.getByText("Auditor-reported")).toBeInTheDocument();
+    expect(screen.getByText("Unprotected sweep()")).toBeInTheDocument();
+    expect(screen.getByText(/reported by auditor_1/)).toBeInTheDocument();
+    expect(screen.queryByText(/AI explanation/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/raw Slither output/i)).not.toBeInTheDocument();
+  });
+
   it("links to the raw Slither output when the API serves it", () => {
     renderCard({
       id: "f1",

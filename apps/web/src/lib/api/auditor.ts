@@ -1,11 +1,14 @@
 import { z } from "zod";
 import {
+  AuditorFindingReportSchema,
   AuditorProfileSchema,
   BountySchema,
   ContractSchema,
   FindingSchema,
   PoCSubmissionSchema,
+  type AuditorFindingReport,
   type AuditorProfile,
+  type FindingSeverity,
   type Contract,
   type Finding,
   type PoCSubmission,
@@ -66,6 +69,29 @@ export function submitPoc(input: SubmitPocInput): Promise<PoCSubmission> {
   form.set("auditorId", input.auditorId);
   form.set("file", input.file);
   return postForm("/api/auditor/poc", form, PoCSubmissionSchema);
+}
+
+export interface ReportFindingInput {
+  contractId: string;
+  auditorId: string;
+  title: string;
+  severity: FindingSeverity;
+  description: string;
+  file: File;
+}
+
+/** POST /api/auditor/findings - reports a finding Slither missed, with the
+ * Foundry PoC that proves it. Needs the active claim and the stake, like
+ * submitPoc; the finding starts Submitted and the sandbox decides it. */
+export function reportFinding(input: ReportFindingInput): Promise<AuditorFindingReport> {
+  const form = new FormData();
+  form.set("contractId", input.contractId);
+  form.set("auditorId", input.auditorId);
+  form.set("title", input.title);
+  form.set("severity", input.severity);
+  form.set("description", input.description);
+  form.set("file", input.file);
+  return postForm("/api/auditor/findings", form, AuditorFindingReportSchema);
 }
 
 /** POST /api/findings/:id/false-positive - auditor judges the AI finding
