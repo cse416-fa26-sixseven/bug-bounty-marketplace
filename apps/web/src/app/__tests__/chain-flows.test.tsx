@@ -22,6 +22,7 @@ const chain = {
   deleteBounty: vi.fn(),
   refund: vi.fn(),
   withdrawPayout: vi.fn(),
+  withdrawStake: vi.fn(),
 } satisfies Record<keyof ChainCalls, ReturnType<typeof vi.fn>>;
 
 vi.mock("@/lib/chain/use-chain", () => ({
