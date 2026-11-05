@@ -280,6 +280,8 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
   function passedOutcome(bounty: OnchainBounty, finding: Hex): "record" | "settled" | "deferred" {
     const verified = bounty.verifiedFinding.toLowerCase();
     if (verified === finding.toLowerCase()) return "record";
+    // None (not funded on-chain) is not settled: it may still be funded, and
+    // the claim queue lists funded contracts only. It goes on as before.
     if (bounty.state === BOUNTY_STATE_PAID || bounty.state === BOUNTY_STATE_CLOSED) return "settled";
     if (verified !== ZERO_FINDING) return "deferred";
     return "record";

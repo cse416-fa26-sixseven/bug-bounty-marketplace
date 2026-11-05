@@ -276,6 +276,11 @@ export class PgPipelineRepository implements PipelineRepository {
         WHERE p.sandbox_status IN ('Passed', 'Failed')
           AND p.verdict_applied_at IS NULL
           AND f.status = 'Submitted'
+          AND (p.sandbox_status = 'Failed' OR NOT EXISTS (
+                SELECT 1 FROM findings o
+                 WHERE o.contract_id = f.contract_id
+                   AND o.id <> f.id
+                   AND o.status IN ('Verified', 'Disputed')))
         ORDER BY p.submitted_at, p.id
         LIMIT $1`,
       [limit],

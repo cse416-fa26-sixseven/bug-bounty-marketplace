@@ -164,13 +164,23 @@ export class MemoryPipelineRepository implements PipelineRepository {
   }
 
   async listUnappliedVerdicts(limit: number): Promise<UnappliedVerdict[]> {
+    const findings = [...this.store.findings.values()];
+    /** Another finding on the contract holds the bounty's verification. */
+    const blocked = (findingId: string, contractId: string) =>
+      findings.some(
+        (other) =>
+          other.contractId === contractId &&
+          other.id !== findingId &&
+          (other.status === "Verified" || other.status === "Disputed"),
+      );
     return [...this.store.pocs.values()]
-      .filter(
-        (poc) =>
-          (poc.sandboxStatus === "Passed" || poc.sandboxStatus === "Failed") &&
-          !this.store.verdictsApplied.has(poc.id) &&
-          this.store.findings.get(poc.findingId)?.status === "Submitted",
-      )
+      .filter((poc) => {
+        if (poc.sandboxStatus !== "Passed" && poc.sandboxStatus !== "Failed") return false;
+        if (this.store.verdictsApplied.has(poc.id)) return false;
+        const finding = this.store.findings.get(poc.findingId);
+        if (finding?.status !== "Submitted") return false;
+        return poc.sandboxStatus === "Failed" || !blocked(finding.id, finding.contractId);
+      })
       .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt) || a.id.localeCompare(b.id))
       .slice(0, limit)
       .map((poc) => ({

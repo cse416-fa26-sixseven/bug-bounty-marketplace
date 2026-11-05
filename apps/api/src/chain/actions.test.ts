@@ -67,6 +67,7 @@ function statefulBounty(ports: ReturnType<typeof fakePorts>) {
   let paid = false;
   let closed = false;
   ports.bountyEscrow.recordSubmission.mockImplementation(async () => {
+    if (paid || closed) throw new Error("BountyNotOpen()");
     submissions += 1n;
     return HASH;
   });
@@ -265,6 +266,26 @@ describe("applyVerdict with Passed on a bounty that verified another finding", (
     expect(ports.bountyEscrow.recordSubmission).not.toHaveBeenCalled();
     expect(ports.bountyEscrow.recordVerification).not.toHaveBeenCalled();
     // The Failed branch's release: nothing else of the auditor's is pending.
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("rejects the finding after PayoutCredited released the lock, unlocking once in total", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const first = seedFinding(contractId, "Submitted");
+    const second = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await actions.applyVerdict(first, "Passed");
+    await ports.bountyEscrow.payout(onchainId(contractId), onchainId(first), AUDITOR);
+    // The indexer applies PayoutCredited: Paid, then the lock is released.
+    store.findings.get(first)!.status = "Paid";
+    await expect(actions.applyDisputeResolved(first)).resolves.toBe(true);
+
+    await expect(actions.applyVerdict(second, "Passed")).resolves.toBe("Rejected");
+    expect(store.findings.get(second)?.status).toBe("Rejected");
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
     expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
   });
