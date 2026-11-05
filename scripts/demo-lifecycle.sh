@@ -4,7 +4,11 @@
 #      paid after the challenge window -> the auditor withdraws;
 #   2. dispute: a second bounty -> Verified -> the developer disputes -> the
 #      arbiter rules against the auditor -> Rejected, stake slashed by half;
-#      the auditor then withdraws what is left.
+#      the auditor then withdraws what is left;
+#   3. lapse: a third bounty -> Verified -> disputed -> the arbiter never rules
+#      -> anvil's clock jumps past the ruling window -> the keeper lapses the
+#      dispute -> Verified -> Paid. The jump is permanent: every later run (and
+#      any other demo on the same stack) sees anvil's clock 3 days further ahead.
 # Users sign their own transactions with anvil's dev accounts (cast, inside the
 # contracts image) and sign in to the API with a signed SIWE message. Prints
 # LIFECYCLE OK. Can run again on the same stack (it tops the stake back up).
