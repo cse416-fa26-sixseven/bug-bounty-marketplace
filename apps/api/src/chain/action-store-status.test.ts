@@ -249,7 +249,15 @@ for (const [name, make, skip] of [
       await h.seed(finding);
       await h.seedPoc(finding.id, pocAuditor ? pocAuditor(auditor) : auditor);
       await h.claimLocked(contractId, auditor, EXPIRES);
-      return { contractId, auditor };
+      return { contractId, auditor, findingId: finding.id };
+    }
+
+    /** Another finding on the contract in `status`, with a PoC by `auditor`. */
+    async function addFinding(contractId: string, auditor: string, status: FindingStatus) {
+      const finding = makeFinding(contractId, { status, statusHistory: [{ status, changedAt: AT }] });
+      await h.seed(finding);
+      await h.seedPoc(finding.id, auditor);
+      return finding.id;
     }
 
     async function listed(contractId: string) {
@@ -288,6 +296,28 @@ for (const [name, make, skip] of [
       // Verdict and dispute paths unlock by auditor, not by expiry.
       const { contractId, auditor } = await lockedWith("Submitted");
       await expect(h.store.takeClaimUnlock(contractId, { auditorId: auditor })).resolves.toBe(auditor);
+    });
+
+    it.each(["Submitted", "Verified", "Disputed"] as const)(
+      "settling one finding keeps the lock while the auditor's other finding on the contract is %s",
+      async (other) => {
+        // A Failed verdict or a lost dispute on one finding must not free the
+        // stake another finding's verification or payout still needs.
+        const { contractId, auditor, findingId } = await lockedWith("Submitted");
+        await addFinding(contractId, auditor, other);
+        await expect(
+          h.store.takeClaimUnlock(contractId, { auditorId: auditor, settling: findingId }),
+        ).resolves.toBeNull();
+      },
+    );
+
+    it("settling the auditor's only pending finding releases the lock", async () => {
+      const { contractId, auditor, findingId } = await lockedWith("Submitted");
+      await addFinding(contractId, auditor, "Rejected");
+      await addFinding(contractId, newAuditor(), "Verified"); // someone else's
+      await expect(
+        h.store.takeClaimUnlock(contractId, { auditorId: auditor, settling: findingId }),
+      ).resolves.toBe(auditor);
     });
 
     it("a cancelled or refunded bounty releases the lock of a finding still awaiting its verdict", async () => {

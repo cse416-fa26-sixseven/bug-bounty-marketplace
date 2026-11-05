@@ -66,7 +66,9 @@ export interface ChainActions {
    * (PayoutCredited) or a dispute went against the auditor (Rejected). Unlocks
    * the claim lock once. Does nothing while the finding is Submitted, Verified
    * or Disputed (a dispute the auditor won returns it to Verified, awaiting
-   * payout), since the payout still needs the stake. Returns true if this
+   * payout), since the payout still needs the stake. After a Rejected one, also
+   * keeps the lock while the auditor has another pending finding on the
+   * contract; after a payout, releases it regardless. Returns true if this
    * call released a lock. */
   applyDisputeResolved(findingId: string): Promise<boolean>;
   /** Pays every Verified finding whose challenge window has closed. A failed
@@ -208,7 +210,7 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
    */
   async function unlock(
     contractId: string,
-    options: { auditorId?: string; expiredBy?: Date },
+    options: { auditorId?: string; expiredBy?: Date; settling?: string },
   ): Promise<boolean> {
     if (!lockEnabled) return false;
     return serialize(contractId, async () => {
@@ -379,7 +381,9 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
           await store.markVerificationRecorded(findingId, now());
         }
       } else {
-        await unlock(ref.contractId, { auditorId: ref.auditorId });
+        // Kept while another finding of the auditor's on this contract is
+        // pending: its verification or payout still needs the stake.
+        await unlock(ref.contractId, { auditorId: ref.auditorId, settling: findingId });
       }
 
       return applyFindingTransition(store, findingId, target, now().toISOString());
@@ -391,7 +395,13 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
       // A won dispute returns the finding to Verified: its payout still needs
       // the stake, so the lock stays until PayoutCredited.
       if (PENDING_FINDING_STATUSES.has(ref.status)) return false;
-      return unlock(ref.contractId, { auditorId: ref.auditorId ?? undefined });
+      // Paid: the bounty is closed, so no other finding on it can be verified
+      // or paid, and the lock goes. Rejected (a lost dispute): kept while
+      // another finding of the auditor's on this contract is pending.
+      return unlock(ref.contractId, {
+        auditorId: ref.auditorId ?? undefined,
+        ...(ref.status === "Paid" ? {} : { settling: findingId }),
+      });
     },
 
     async runPayoutsOnce(at) {

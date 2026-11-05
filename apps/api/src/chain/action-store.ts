@@ -67,11 +67,14 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
    * no lock to take: never locked, already unlocking or released, held by
    * someone else (when `auditorId` is given), or, when `expiredBy` is given,
    * not yet expired or still backing a pending finding (see
-   * listExpiredLockedClaims).
+   * listExpiredLockedClaims). When `settling` (a finding id) is given, also
+   * null while the auditor has another Submitted, Verified or Disputed
+   * finding on the contract: a Failed verdict or lost dispute on one finding
+   * must not free the stake another one still needs.
    */
   takeClaimUnlock(
     contractId: string,
-    options: { auditorId?: string; expiredBy?: Date },
+    options: { auditorId?: string; expiredBy?: Date; settling?: string },
   ): Promise<string | null>;
   /** Claims in "unlocking": an unlock was intended but is not yet confirmed.
    * Filtered to one contract when `contractId` is given. */

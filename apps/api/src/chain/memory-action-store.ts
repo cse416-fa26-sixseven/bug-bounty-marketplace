@@ -123,7 +123,7 @@ export class MemoryChainActionStore implements ChainActionStore {
 
   async takeClaimUnlock(
     contractId: string,
-    options: { auditorId?: string; expiredBy?: Date },
+    options: { auditorId?: string; expiredBy?: Date; settling?: string },
   ): Promise<string | null> {
     const stored = this.store.contracts.get(contractId);
     if (!stored || stored.claimLock !== "locked" || !stored.claimedByAuditorId) return null;
@@ -132,7 +132,12 @@ export class MemoryChainActionStore implements ChainActionStore {
       if (!stored.claimExpiresAt || stored.claimExpiresAt.getTime() > options.expiredBy.getTime()) {
         return null;
       }
-      if (this.holdsPendingFinding(contractId, stored.claimedByAuditorId)) return null;
+    }
+    if (
+      (options.expiredBy !== undefined || options.settling !== undefined) &&
+      this.holdsPendingFinding(contractId, stored.claimedByAuditorId, options.settling)
+    ) {
+      return null;
     }
     stored.claimLock = "unlocking";
     return stored.claimedByAuditorId;
@@ -178,11 +183,12 @@ export class MemoryChainActionStore implements ChainActionStore {
     return out;
   }
 
-  /** Same rule as the Postgres HOLDS_PENDING_FINDING. */
-  private holdsPendingFinding(contractId: string, auditorId: string): boolean {
+  /** Same rule as the Postgres holdsPendingFinding. `except` is left out. */
+  private holdsPendingFinding(contractId: string, auditorId: string, except?: string): boolean {
     const auditor = auditorId.toLowerCase();
     for (const poc of this.store.pocs.values()) {
       if (poc.auditorId.toLowerCase() !== auditor) continue;
+      if (poc.findingId === except) continue;
       const finding = this.store.findings.get(poc.findingId);
       if (finding?.contractId !== contractId) continue;
       if (PENDING_FINDING_STATUSES.has(finding.status)) return true;
