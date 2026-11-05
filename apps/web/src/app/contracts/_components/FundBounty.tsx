@@ -4,8 +4,10 @@ import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AnalysisStatus, Contract } from "@bbm/shared";
 import { developerApi } from "@/lib/api";
+import { BOUNTY_STATE } from "@/lib/chain/calls";
 import { useChainCalls } from "@/lib/chain/use-chain";
 import { weiToEth } from "@/lib/money";
+import { bountyOwnership, useIsContractDeveloper, useOnchainBounty } from "./onchain-bounty";
 
 /** `datetime-local` value for a date, in local time. */
 function toLocalInput(date: Date): string {
@@ -17,13 +19,15 @@ function toLocalInput(date: Date): string {
 
 /**
  * Locks the bounty in BountyEscrow once the analysis is done, with the amount
- * and deadline entered at upload (or a new deadline if that one has passed),
- * then lets the API confirm it and list the contract for auditors. Only
- * shown with a chain: in mock mode the bounty is simulated.
+ * and deadline entered at upload (or a later deadline if that one has
+ * passed), then lets the API confirm it and list the contract for auditors.
+ * Shown only to the contract's developer, on a chain, while the contract is
+ * Open: in mock mode the bounty is simulated.
  *
- * A bounty already funded on-chain is confirmed with the API again on load,
- * so a confirmation that failed earlier is not left behind. Both steps are
- * idempotent.
+ * A bounty the developer already funded on-chain is confirmed with the API
+ * again once the analysis is done, so a confirmation that failed earlier is
+ * not left behind; both steps are idempotent. A bounty another wallet funded
+ * under this contract's id is not the developer's: they are told to cancel.
  */
 export function FundBounty({
   contract,
@@ -33,6 +37,7 @@ export function FundBounty({
   analysis: AnalysisStatus | undefined;
 }) {
   const chain = useChainCalls();
+  const isDeveloper = useIsContractDeveloper(contract);
   const queryClient = useQueryClient();
   // Read once: whether the stored deadline has passed only matters when the
   // page opens; the submit handler re-checks against the current time.
@@ -40,20 +45,23 @@ export function FundBounty({
   const [newDeadline, setNewDeadline] = useState("");
   const [inputError, setInputError] = useState<string | null>(null);
 
+  const visible = chain !== null && isDeveloper && contract.status === "Open";
+  const analysed = analysis?.status === "Done";
+
   const bountyQuery = useQuery({
     queryKey: ["bounty", contract.id],
     queryFn: () => developerApi.getBounty(contract.id),
-    enabled: chain !== null,
+    enabled: visible,
   });
-  const fundedQuery = useQuery({
-    queryKey: ["onchain-funded", contract.id],
-    queryFn: () => chain!.isFunded(contract.id),
-    enabled: chain !== null,
-  });
+  const onchainQuery = useOnchainBounty(contract.id);
+  const ownership = onchainQuery.data ? bountyOwnership(onchainQuery.data, contract) : undefined;
+  const fundedByUs = ownership === "ours" && onchainQuery.data?.state === BOUNTY_STATE.Open;
+  // Keyed on the analysis status: the API refuses until it is Done, so a
+  // confirmation tried earlier is tried again once it is.
   const confirmQuery = useQuery({
-    queryKey: ["confirm-funded", contract.id],
+    queryKey: ["confirm-funded", contract.id, analysis?.status],
     queryFn: () => developerApi.markFunded(contract.id),
-    enabled: chain !== null && fundedQuery.data === true && contract.status !== "Expired",
+    enabled: visible && analysed && fundedByUs,
     retry: false,
     staleTime: Infinity,
   });
@@ -66,30 +74,49 @@ export function FundBounty({
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["contract", contract.id] });
-      void queryClient.invalidateQueries({ queryKey: ["onchain-funded", contract.id] });
+      void queryClient.invalidateQueries({ queryKey: ["onchain-bounty", contract.id] });
       void queryClient.invalidateQueries({ queryKey: ["bounty", contract.id] });
     },
   });
 
-  if (!chain || contract.status === "Expired" || analysis?.status === "Failed") return null;
+  if (!visible || analysis?.status === "Failed" || !onchainQuery.data) return null;
 
-  if (fundedQuery.data === true && !fundMutation.isError) {
+  if (ownership === "foreign") {
+    return (
+      <p role="alert" className="mt-6 text-sm text-amber-300">
+        Another wallet has funded a bounty under this contract&apos;s id, so it can&apos;t be
+        funded here. Cancel this contract and submit the file again.
+      </p>
+    );
+  }
+
+  if (fundedByUs) {
     return (
       <div className="mt-6">
         <p role="status" className="text-sm text-emerald-300">
-          Bounty funded on-chain. Auditors can claim this contract.
+          Bounty funded on-chain.{" "}
+          {analysed ? "Auditors can claim this contract." : "Auditors can claim it once the analysis is done."}
         </p>
         {confirmQuery.isError && (
           <p className="mt-1 text-sm text-red-400">
-            Funded on-chain, but the API could not confirm it: {confirmQuery.error.message}
+            Funded on-chain, but the API could not confirm it: {confirmQuery.error.message}{" "}
+            <button
+              type="button"
+              onClick={() => void confirmQuery.refetch()}
+              className="font-medium text-emerald-300 underline"
+            >
+              Try again
+            </button>
           </p>
         )}
       </div>
     );
   }
 
+  // Ours but no longer open (paid or closed): nothing to fund.
+  if (ownership !== "none") return null;
+
   const bounty = bountyQuery.data;
-  const analysed = analysis?.status === "Done";
   const deadlinePassed = bounty ? new Date(bounty.deadline).getTime() <= openedAt : false;
   const error =
     inputError ?? (fundMutation.error instanceof Error ? fundMutation.error.message : null);
