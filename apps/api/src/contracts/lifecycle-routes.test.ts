@@ -262,4 +262,32 @@ describe("review fixes", () => {
     });
     expect(other.statusCode).toBe(403);
   });
+
+  it("auditor finding reports need a session and cannot name another auditor", async () => {
+    const { app } = setup();
+    const form = multipartBody(
+      {
+        contractId: "contract_x",
+        auditorId: DEVELOPER.address,
+        title: "Unprotected sweep()",
+        severity: "High",
+        description: "Anyone can sweep the balance.",
+      },
+      { name: "PoC.t.sol", content: Buffer.from("contract T {}") },
+    );
+    const none = await app.inject({
+      method: "POST",
+      url: "/api/auditor/findings",
+      headers: form.headers,
+      payload: form.payload,
+    });
+    expect(none.statusCode).toBe(401);
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/auditor/findings",
+      headers: { ...form.headers, cookie: await signIn(app, AUDITOR) },
+      payload: form.payload,
+    });
+    expect(other.statusCode).toBe(403);
+  });
 });

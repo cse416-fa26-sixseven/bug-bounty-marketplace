@@ -32,6 +32,7 @@ const MINUTE_MS = 60_000;
 export const LIMITED_ROUTES: Readonly<Record<string, "upload" | "auth">> = {
   "POST /api/contracts": "upload",
   "POST /api/auditor/poc": "upload",
+  "POST /api/auditor/findings": "upload",
   "POST /api/auth/nonce": "auth",
   "POST /api/auth/login": "auth",
 };
