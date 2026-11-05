@@ -820,8 +820,9 @@ public_ns() {
       fi
       grep -q 'communications error\|timed out\|no servers' <<<"$out" && out=""
     elif have nslookup; then
-      [[ "$r" == system ]] && r=""
-      out=$(nslookup -type=NS "$z" $r 2>/dev/null | awk '/nameserver = / { print $NF }') || out=""
+      local srv=()
+      [[ "$r" == system ]] || srv=("$r")
+      out=$(nslookup -type=NS "$z" ${srv[@]+"${srv[@]}"} 2>/dev/null | awk '/nameserver = / { print $NF }') || out=""
     fi
     if [[ -n "$out" ]]; then
       printf '%s\n' "$out" | norm_ns
