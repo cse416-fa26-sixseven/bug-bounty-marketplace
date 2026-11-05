@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { Finding } from "@bbm/shared";
 import { auditorApi, ApiError } from "@/lib/api";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isOnChain, useChainInfo } from "@/lib/chain/config";
 
 const SEVERITY_STYLES: Record<Finding["severity"], string> = {
   Critical: "bg-red-500/20 text-red-400",
@@ -39,7 +39,7 @@ export function FindingCard({
   stakeMet: boolean;
   onChanged: () => void;
 }) {
-  const onChain = isLocalChain(useChainInfo());
+  const onChain = isOnChain(useChainInfo());
   const [file, setFile] = useState<File | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

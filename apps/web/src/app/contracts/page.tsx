@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { developerApi } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isOnChain, useChainInfo } from "@/lib/chain/config";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/StatusBadge";
 export default function ContractsPage() {
   const wallet = useWallet();
-  const onChain = isLocalChain(useChainInfo());
+  const onChain = isOnChain(useChainInfo());
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const query = useQuery({

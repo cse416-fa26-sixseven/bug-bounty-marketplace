@@ -9,7 +9,7 @@ import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
 import { ethToWei } from "@/lib/money";
 import { useChainCalls } from "@/lib/chain/use-chain";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isOnChain, useChainInfo } from "@/lib/chain/config";
 
 function validateFile(file: File | null): string | null {
   if (!file) return "Choose a .sol file to submit.";
@@ -28,7 +28,7 @@ export default function SubmitPage() {
   const wallet = useWallet();
   const chain = useChainCalls();
   const chainInfo = useChainInfo();
-  const windowSeconds = isLocalChain(chainInfo) ? chainInfo.challengeWindowSeconds : null;
+  const windowSeconds = isOnChain(chainInfo) ? chainInfo.challengeWindowSeconds : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);

@@ -5,11 +5,11 @@ import { developerApi, auditorApi, arbiterApi } from "@/lib/api";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useRoleStore } from "@/lib/role/store";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isOnChain, useChainInfo } from "@/lib/chain/config";
 
 export default function HomePage() {
   const setRole = useRoleStore((s) => s.setRole);
-  const onChain = isLocalChain(useChainInfo());
+  const onChain = isOnChain(useChainInfo());
   const contracts = useQuery({
     queryKey: ["overview-contracts"],
     queryFn: () => developerApi.listContracts(),

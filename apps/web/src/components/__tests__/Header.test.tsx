@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { server } from "@/mocks/server";
@@ -54,6 +54,17 @@ describe("Header banner", () => {
     renderHeader();
     expect(await screen.findByText(/Local test chain/)).toBeInTheDocument();
     expect(screen.getByText(/Transactions are real on a local Anvil network; no real funds\./)).toBeInTheDocument();
+  });
+
+  it("on Sepolia, names the testnet and asks for the user's wallet", async () => {
+    const { rpcUrl: _rpcUrl, ...rest } = CHAIN;
+    server.use(http.get("*/api/chain", () => HttpResponse.json({ ...rest, chainId: 11155111 })));
+    renderHeader();
+    expect(await screen.findByText("Sepolia testnet")).toBeInTheDocument();
+    expect(screen.getByText(/signed in your own wallet/)).toBeInTheDocument();
+    // No window.ethereum in this test: connecting explains what is missing.
+    fireEvent.click(screen.getByRole("button", { name: "Connect wallet" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/No browser wallet found/);
   });
 
   describe("against the real API (staging/prod)", () => {
