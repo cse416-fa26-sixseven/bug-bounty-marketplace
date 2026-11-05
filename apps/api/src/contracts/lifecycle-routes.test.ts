@@ -350,6 +350,73 @@ describe("review fixes", () => {
     expect(chainActions.releaseExpiredLocks).not.toHaveBeenCalled();
   });
 
+  it("still releases the claim lock when cancelling over another wallet's bounty", async () => {
+    const chainActions = {
+      chainConfigured: true,
+      releaseClaimLock: vi.fn(async () => true),
+      releaseExpiredLocks: vi.fn(async () => 0),
+      lockClaim: vi.fn(async () => undefined),
+    };
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1, AUDITOR.address);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(200);
+    expect(chainActions.releaseClaimLock).toHaveBeenCalledWith(id);
+  });
+
+  it("counts the developer's bounty as theirs whatever the address case", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1, DEVELOPER.address.toLowerCase() as Address);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "bounty not deleted on-chain" });
+  });
+
+  it("cancels, but never reclaims, over another wallet's paid or closed bounty", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    for (const state of [2, 3]) {
+      const id = (await upload(dev)).json().id as string;
+      fundOnChain(id, state, AUDITOR.address);
+      const reclaim = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/reclaim`,
+        headers: { cookie: dev },
+      });
+      expect(reclaim.statusCode).toBe(409);
+      const cancel = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/cancel`,
+        headers: { cookie: dev },
+      });
+      expect(cancel.statusCode).toBe(200);
+    }
+  });
+
+  it("confirms funding again for a Claimed contract already funded", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id);
+    const funded = () =>
+      app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    expect((await funded()).statusCode).toBe(200);
+    const claim = await app.inject({
+      method: "POST",
+      url: "/api/auditor/claim",
+      headers: { cookie: await signIn(app, AUDITOR) },
+      payload: { contractId: id },
+    });
+    expect(claim.json().status).toBe("Claimed");
+    const again = await funded();
+    expect(again.statusCode).toBe(200);
+    expect(again.json().status).toBe("Claimed");
+  });
+
   it("keeps the contract when the claim lock cannot be released", async () => {
     const chainActions = {
       chainConfigured: true,

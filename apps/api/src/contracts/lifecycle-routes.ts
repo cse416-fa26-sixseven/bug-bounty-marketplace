@@ -113,7 +113,10 @@ export function registerContractLifecycleRoutes(
         onchain.state !== BOUNTY_STATE_NONE &&
         getAddress(onchain.developer) === getAddress(contract.developerAddress);
       const neverFunded = action === "cancel" && !ours && !(await contracts.isFunded(contract.id));
-      if (onchain.state !== BOUNTY_STATE_CLOSED && !neverFunded) {
+      // Otherwise the developer's own bounty must be closed on-chain: another
+      // wallet's closed bounty says nothing about this developer's funds.
+      const closedOurs = ours && onchain.state === BOUNTY_STATE_CLOSED;
+      if (!closedOurs && !neverFunded) {
         return reply.code(409).send({
           error:
             action === "cancel" ? "bounty not deleted on-chain" : "bounty not refunded on-chain",
