@@ -62,7 +62,7 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 | PR preview    | namespace `pr-<n>` on `aks-bbm-test-<abbr>`; mocked web, **no analysis or sandbox**                                            | PR opened → PR closed; TTL 168 h, re-stamped on every push    | in-cluster Postgres (`emptyDir`), discarded                                                           | `preview.yml` on PR events (same-repo, not docs-only)                                |
 | AKS test      | `aks-bbm-test-<abbr>` (Free tier) + data stack (no Postgres server)                                                            | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                                                       | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
 | AKS staging   | `aks-bbm-staging-<abbr>` (Free tier) + data stack; analysis + sandbox on, uploads in Blob                                      | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob (`sources` container), Queue, Key Vault: persistent across power states      | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
-| AKS prod      | `aks-bbm-prod-<abbr>` (Standard tier) + data stack; analysis + sandbox on                                                      | long-lived, `running` / `paused` / `down`                     | same as staging                                                                                       | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
+| AKS prod      | `aks-bbm-prod-<abbr>` (Standard tier) + data stack; analysis + sandbox on, uploads in Blob                                                   | long-lived, `running` / `paused` / `down`                     | same as staging                                                                                       | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
 
 All three AKS environments, the shared resources and tfstate run in one region, chosen at
 bring-up (ADR 0003 §4); `<abbr>` is its code from `modules/naming`. Every cluster runs on x86
@@ -168,7 +168,7 @@ flowchart LR
     NGX -- "/api, /health" --> API["api pod :3001"]
     WEB -- "/api/* proxy<br/>API_INTERNAL_URL" --> API
     API -- "private VNet, PG_POOL_MAX" --> PG[("PG Flexible Server<br/>snet-psql")]
-    API -- "writes uploads, workload identity<br/>(staging; prod/test: PVC bbm-sources)" --> BLOB[("Blob container sources")]
+    API -- "writes uploads, workload identity<br/>(staging, prod; test: PVC bbm-sources)" --> BLOB[("Blob container sources")]
     API -- "jobs table (analysis, sandbox)" --> PG
     PG -- "worker polls jobs" --> AN["analysis pod :8000<br/>Slither + LLM, PoC runner"]
     BLOB -- "reads, workload identity" --> AN
@@ -181,8 +181,8 @@ Dashed edges are designed and provisioned (queue, ScaledObject template) but not
 application code: the worker polls the Postgres `jobs` table and KEDA stays off. Solid edges run
 on staging, prod and in CI-run namespaces (`analysis.enabled` and `sandbox.enabled` are `true`
 there; PR previews turn both off). Uploaded sources go to the Blob `sources` container on staging
-(`api.sourceStorage.blob`); prod and the test cluster still use the interim Azure Files share
-(`api.sourceStorage.persistentVolumeClaim`, ADR 0004 §4) until staging has proven the adapter. In
+and prod (`api.sourceStorage.blob`); the test cluster still uses the interim Azure Files share
+(`api.sourceStorage.persistentVolumeClaim`, ADR 0004 §4) because it has no workload identity. In
 test-cluster namespaces the api talks to the in-cluster Postgres pod instead of PG Flexible Server.
 
 ## Identity
@@ -354,19 +354,21 @@ flowchart TB
 
 **Uploaded sources and API replicas**
 
-On staging the API writes uploaded sources and PoCs to the env storage account's `sources`
-container as the api identity (Storage Blob Data Contributor on the container) and the worker
-reads them as the worker identity (Storage Blob Data Reader), both through workload identity
-(`SOURCE_STORAGE_BLOB_CONTAINER_URL`; the account has shared keys disabled). The API is then
-stateless apart from in-memory sign-in nonces, so `api.hpa.maxReplicas` may be raised there.
+On staging and prod the API writes uploaded sources and PoCs to the env storage account's
+`sources` container as the api identity (Storage Blob Data Contributor on the container) and the
+worker reads them as the worker identity (Storage Blob Data Reader), both through workload
+identity (`SOURCE_STORAGE_BLOB_CONTAINER_URL`; the account has shared keys disabled). Uploads no
+longer tie the API to one pod, but wallet sign-in nonces are still kept in memory, so a second
+replica would fail logins whose nonce and login land on different pods: both envs stay at
+`api.hpa.maxReplicas: 1` (`maxSurge: 0`, so a short gap during each API deploy) until nonces move
+to Postgres.
 
-On prod and the test cluster the API still writes to `SOURCE_STORAGE_DIR` on an Azure Files
+On the test cluster the API still writes to `SOURCE_STORAGE_DIR` on an Azure Files
 `ReadWriteMany` claim (`bbm-sources`, 5 Gi) that the analysis pod mounts read-only (ADR 0004 §4),
 an interim arrangement that is not validated for concurrent writers; in compose and kind an
-`emptyDir`. There the API runs one replica (`api.hpa.maxReplicas: 1`, `maxSurge: 0`, so a short
-gap during each API deploy). Switching an env to Blob (`api.sourceStorage.blob.enabled`, claim
-off) deletes its share and the sources on it: PoCs for contracts uploaded before the switch can
-no longer be re-run.
+`emptyDir`. Switching an env to Blob (`api.sourceStorage.blob.enabled`, claim off) deletes its
+share and the sources on it: PoCs for contracts uploaded before the switch can no longer be
+re-run.
 
 **Load testing**
 
@@ -435,11 +437,13 @@ silently downgraded to runc.
 
 ## Known gaps and next steps
 
-- **Blob storage on prod and the test cluster.** Staging stores uploads in the Blob container;
-  once it has proven the adapter, set `api.sourceStorage.blob.enabled: true` (claim off) in
-  `values-prod.yaml` and `values-test.yaml`, drop the Azure Files share, and raise the prod api
-  HPA max. The test cluster has no workload identity (`values-test.yaml`), so it needs one first,
-  or stays on the share.
+- **Blob storage on the test cluster.** Staging and prod store uploads in the Blob container;
+  CI-run namespaces still use the Azure Files share because the test cluster has no workload
+  identity (`values-test.yaml`). Give it one (or keep the share, which is discarded with each
+  namespace anyway).
+- **Sign-in nonces in Postgres.** The api keeps SIWE nonces in memory, the last thing pinning
+  staging and prod to one api replica now that uploads are in Blob storage. Move them to a table
+  (or a short-lived row keyed by address), then raise `api.hpa` on prod (2–5, PDB on).
 - **Worker scaling.** The chart's KEDA ScaledObject scales on the Azure Storage queue
   `analysis-jobs`, which nothing writes to: jobs flow through the Postgres `jobs` table. Keep
   `analysis.keda.enabled` and `keda_enabled` (compute.tfvars) off, or scale on the `jobs` table

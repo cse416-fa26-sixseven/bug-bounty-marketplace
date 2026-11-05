@@ -15,7 +15,7 @@ cluster (`values-test.yaml`). It contains:
   per-release `sandbox` namespace where auditors' PoCs run as Kata-isolated
   Jobs, and shared upload storage for api and analysis: the env Blob
   container (`api.sourceStorage.blob`, staging) or a ReadWriteMany
-  `sources` claim (`api.sourceStorage.persistentVolumeClaim`, prod/test).
+  `sources` claim (`api.sourceStorage.persistentVolumeClaim`, test).
   Off in `values.yaml`, on in every env file (see "Analysis and the PoC
   sandbox").
 - Off by default: KEDA scaling of the worker and a throwaway in-cluster
@@ -76,19 +76,21 @@ SecretProviderClass or HTTPRoute.
 |---|---|---|
 | `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot, analysis/sandbox/sources claim off (emptyDir uploads) |
 | `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api 1 replica, analysis + sandbox, uploads in the Blob `sources` container |
-| `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1, analysis + sandbox + sources claim |
+| `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1, analysis + sandbox, uploads in the Blob `sources` container |
 | `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown, analysis + sandbox (`<ns>-sandbox`) + sources claim |
 | `values-ci.yaml` | `ct install`, kind smoke tests | plain Secret with dummy `DATABASE_URL`, everything optional off |
 
 > **Uploaded sources and API replicas.** With `api.sourceStorage.blob.enabled`
-> (staging) uploads are block blobs in the env storage account's container
+> (staging, prod) uploads are block blobs in the env storage account's container
 > (`azure.storageBlobEndpoint` from values-infra + `azure.storageContainerName`,
 > default `sources`): the api writes and the analysis worker reads through
-> `SOURCE_STORAGE_BLOB_CONTAINER_URL` with their workload identities, no
-> volume is mounted, and the api may run several replicas. Otherwise they
-> are written to `SOURCE_STORAGE_DIR=/data/sources`: a per-pod `emptyDir` by
-> default, or the shared `bbm-sources` claim when
-> `api.sourceStorage.persistentVolumeClaim` is enabled (prod, test). The
+> `SOURCE_STORAGE_BLOB_CONTAINER_URL` with their workload identities and no
+> volume is mounted. Uploads then allow several api replicas, but the api's
+> in-memory sign-in nonces do not yet, so staging and prod still pin the api
+> to `min 1 / max 1`. Otherwise uploads are written to
+> `SOURCE_STORAGE_DIR=/data/sources`: a per-pod `emptyDir` by default, or
+> the shared `bbm-sources` claim when
+> `api.sourceStorage.persistentVolumeClaim` is enabled (test). The
 > claim is an interim way to hand uploads to the analysis worker, not a
 > multi-replica design, so there the api stays at exactly one replica
 > (`min 1 / max 1`). While at most one replica can run, the Deployment uses
