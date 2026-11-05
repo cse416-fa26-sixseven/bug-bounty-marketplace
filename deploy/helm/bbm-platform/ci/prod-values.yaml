@@ -11,6 +11,7 @@
   "host": "prod.bbm.example.com"
   "publicIpName": "pip-bbm-prod-ingress"
   "publicIpResourceGroup": "rg-bbm-prod-data-ncus"
+  "trustedProxyCidr": "192.168.0.0/16"
 "networkPolicy":
   "postgresCidr": "10.30.2.0/24"
 "dns":
