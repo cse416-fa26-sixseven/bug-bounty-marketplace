@@ -6,11 +6,11 @@ name: Contracts deploy
 #
 #   broadcast=false (default)  dry run: simulates against live Sepolia state, sends nothing
 #   broadcast=true             sends the transactions, then stores the
-#                              deployments file in the env Key Vault as
+#                              deployments file in the env's chain vault as
 #                              `chain-deployment`, which the API mounts
 #
-# Secrets come from the environment's Key Vault (kv-bbm-<env>-<sfx>), never
-# from GitHub secrets: `operator-private-key` (the operator is the deployer,
+# Secrets come from the environment's api-only chain vault
+# (kv-bbm-<stg|prd>c-<sfx>), never from GitHub secrets: `operator-private-key` (the operator is the deployer,
 # because bindDisputeResolution is onlyOperator) and `chain-rpc-url`. Both are
 # masked. The key reaches forge only through DEPLOYER_PRIVATE_KEY (never a
 # command-line argument); the RPC URL must be passed as --rpc-url.
@@ -140,10 +140,26 @@ jobs:
 
           # A second deployment orphans the API's state on the first one
           # (funded bounties, stakes), so it needs an explicit opt-in.
-          existing=$(read_secret chain-deployment 2>/dev/null || true)
+          # Fail closed: only a missing secret means "no deployment yet". Any
+          # other error (403, throttling, network) stops the run rather than
+          # letting a broadcast overwrite a deployment it couldn't see.
+          # up.sh's placeholder-set-me isn't JSON, so it counts as none.
+          kv_err="$RUNNER_TEMP/chain-deployment.err"
+          if ! existing=$(read_secret chain-deployment 2>"$kv_err"); then
+            if grep -q SecretNotFound "$kv_err"; then
+              existing=""
+            else
+              echo "::error::Could not read chain-deployment from $kv: $(head -c 300 "$kv_err")"
+              exit 1
+            fi
+          fi
           if jq -e '.bountyEscrow | strings' >/dev/null 2>&1 <<<"$existing" && [[ "$REPLACE_EXISTING" != true ]]; then
-            echo "::error::$ENV_NAME already has a deployment (escrow $(jq -r .bountyEscrow <<<"$existing")). Re-run with replace_existing to deploy new contracts."
-            exit 1
+            msg="$ENV_NAME already has a deployment (escrow $(jq -r .bountyEscrow <<<"$existing")). Re-run with replace_existing to deploy new contracts."
+            if [[ "$BROADCAST" == true ]]; then
+              echo "::error::$msg"
+              exit 1
+            fi
+            echo "::warning::$msg This dry run continues; a broadcast would stop here."
           fi
 
           export ETH_RPC_URL="$rpc" DEPLOYER_PRIVATE_KEY="$key" REQUIRE_DISTINCT_ARBITER=true
