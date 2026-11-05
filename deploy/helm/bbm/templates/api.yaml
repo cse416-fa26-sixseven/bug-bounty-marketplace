@@ -107,7 +107,7 @@ spec:
                   name: {{ .Values.secrets.name }}
                   key: database-url
             {{- if $chain.enabled }}
-            # On-chain mode (ADR 0004). The deployments JSON (addresses,
+            # On-chain mode (ADR 0005). The deployments JSON (addresses,
             # arbiter, challenge window, deployBlock) is read as a file.
             - name: CHAIN_ID
               value: {{ $chain.chainId | quote }}

@@ -68,7 +68,7 @@ locals {
     postgres_server         = "psql-${local.p}-${local.e}-${local.loc}"
     postgres_database       = local.p
     key_vault               = "kv-${local.p}-${local.env_short}-${local.sfx}"
-    chain_key_vault         = "kv-${local.p}-${local.env_short}c-${local.sfx}" # api-only chain secrets (ADR 0004)
+    chain_key_vault         = "kv-${local.p}-${local.env_short}c-${local.sfx}" # api-only chain secrets (ADR 0005)
     storage_account         = "st${local.p}${local.env_short}${local.sfx}"
     storage_container       = "sources"
     storage_queue           = "analysis-jobs"

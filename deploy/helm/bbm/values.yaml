@@ -70,11 +70,11 @@ azure:
   storageBlobEndpoint: ""
   # -- Storage queue consumed by the analysis worker.
   queueName: analysis-jobs
-  # -- Chain Key Vault (kv-bbm-<env>c-<sfx>, ADR 0004): operator key, RPC URL,
+  # -- Chain Key Vault (kv-bbm-<env>c-<sfx>, ADR 0005): operator key, RPC URL,
   # deployment, session secret. Only the api identity can read it.
   chainKeyVaultName: ""
 
-# On-chain mode for the API (ADR 0004): wallet sign-in, the indexer, verdicts
+# On-chain mode for the API (ADR 0005): wallet sign-in, the indexer, verdicts
 # and payouts on the escrow contracts. Off by default (kind/CI have no chain).
 chain:
   # -- Run the API against a chain. Needs Secret chain.secretName with keys

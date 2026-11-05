@@ -75,7 +75,7 @@ sandbox:
   # namespace bbm-sandbox (<release namespace>-sandbox).
   enabled: true
 
-# On-chain mode on Sepolia (ADR 0004): this env's own contracts and operator
+# On-chain mode on Sepolia (ADR 0005): this env's own contracts and operator
 # key. SecretProviderClass bbm-kv-chain syncs the chain vault
 # (azure.chainKeyVaultName, from values-infra.yaml). Off until the chain vault
 # holds operator-private-key, chain-rpc-url and chain-deployment (Contracts

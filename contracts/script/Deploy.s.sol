@@ -54,7 +54,7 @@ contract Deploy is Script {
     function run() external returns (Deployment memory d) {
         Config memory cfg = readConfig();
         // Public networks (the Sepolia deploy workflow) need a separate
-        // arbiter: one key must not both verify and rule (ADR 0004).
+        // arbiter: one key must not both verify and rule (ADR 0005).
         if (vm.envOr("REQUIRE_DISTINCT_ARBITER", false)) {
             require(cfg.arbiter != cfg.operator, "Deploy: ARBITER must differ from OPERATOR");
         }

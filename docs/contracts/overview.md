@@ -26,6 +26,9 @@ auditor staking and dispute resolution. For installing Foundry, fetching
 - **Arbiter** – the admin who rules on disputes.
 - **Developer / auditor** – end users who fund bounties and stake.
 
+What the operator key can and cannot do, where it is stored, and how a
+compromise is contained: [ADR 0005](../adr/0005-operator-key-trust-model.md).
+
 ## Wiring order
 
 The contracts reference each other, so they are deployed in this order:
@@ -52,7 +55,7 @@ come from environment variables, all optional:
 | `CHALLENGE_WINDOW`         | `259200` (3 days) | Seconds after verification before a finding can be paid.                                                                           |
 | `REFUND_DELAY`             | `10800` (3 hours) | Seconds after the deadline before the developer can refund.                                                                        |
 | `WRITE_DEPLOYMENTS`        | `true`            | Write `deployments/<chainid>.json` on a `--broadcast` run. Dry runs and tests never write.                                         |
-| `REQUIRE_DISTINCT_ARBITER` | `false`           | Revert unless `ARBITER` differs from `OPERATOR`. The Sepolia deploy workflow sets it (ADR 0004).                                   |
+| `REQUIRE_DISTINCT_ARBITER` | `false`           | Revert unless `ARBITER` differs from `OPERATOR`. The Sepolia deploy workflow sets it (ADR 0005).                                   |
 
 After a broadcast, `deployments/<chainid>.json` looks like:
 
@@ -138,7 +141,7 @@ chain integration tests read `31337.json`.
 - `contracts-deploy.yml` (manual dispatch) deploys to **Sepolia** for one
   environment, `staging` or `prod`, in that GitHub Environment (prod needs a
   reviewer). Each environment has its own contracts and operator key
-  ([ADR 0004](../adr/0004-operator-key-trust-model.md)). Inputs: `env`,
+  ([ADR 0005](../adr/0005-operator-key-trust-model.md)). Inputs: `env`,
   `arbiter` (required; must differ from the operator), `broadcast` and
   `replace_existing` (refuses to overwrite an existing deployment without
   it). `broadcast=false` (the default) simulates against live Sepolia state

@@ -364,7 +364,7 @@ Repeat for `infra-global`. For `contracts-sepolia`, which isn't branch-restricte
 ## 12. Chain secrets and contracts (staging, prod)
 
 Each of staging and prod has its own Sepolia contracts and its own **operator key**
-([ADR 0004](../adr/0004-operator-key-trust-model.md)). They live in the env's **chain vault**
+([ADR 0005](../adr/0005-operator-key-trust-model.md)). They live in the env's **chain vault**
 (`kv-bbm-<stg|prd>c-<sfx>`), which only the `api` identity can read. Terraform creates the vault
 and `session-secret`; `up.sh` seeds `placeholder-set-me` for the other three so the CSI mount
 never hangs. Chain mode stays **off** (`chain.enabled: false` in `values-<env>.yaml`) until they

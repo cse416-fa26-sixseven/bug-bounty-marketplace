@@ -21,7 +21,7 @@ line (it lands in shell history and `ps`): export it from a file or a vault.
 **From CI (preferred), for a deployed env.** `contracts-deploy.yml` (manual
 dispatch, inputs `env` = `staging` or `prod`, `arbiter`, `broadcast`,
 `replace_existing`) deploys that env's own contracts
-([ADR 0004](../adr/0004-operator-key-trust-model.md)). It reads `chain-rpc-url`
+([ADR 0005](../adr/0005-operator-key-trust-model.md)). It reads `chain-rpc-url`
 and `operator-private-key` over OIDC from the env's api-only chain vault,
 refuses an arbiter equal to the operator, and after a broadcast stores the
 deployments file there as `chain-deployment`, which the API mounts. Set the

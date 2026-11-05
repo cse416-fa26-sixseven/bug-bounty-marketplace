@@ -56,7 +56,7 @@ Expected keys (see `docs/adr/0001-azure-environment-topology.md`):
 global:   { image: { registry: <acr>.azurecr.io } }
 azure:    { tenantId, keyVaultName, chainKeyVaultName, apiClientId, workerClientId,
             migrationsClientId, sandboxClientId, storageAccountName, storageBlobEndpoint,
-            queueName }                                             # chainKeyVaultName: ADR 0004
+            queueName }                                             # chainKeyVaultName: ADR 0005
 ingress:  { host, publicIpName, publicIpResourceGroup, trustedProxyCidr }
 networkPolicy: { postgresCidr }
 dns:      { zone, envZones, internalZone }                          # ADR 0002, bbm-platform only
@@ -119,7 +119,7 @@ ServiceAccount of the pods that mount it:
 
 ## On-chain mode (`chain.enabled`)
 
-ADR 0004. Off everywhere until the env's chain vault is filled (staging and prod flip it on in their values file; the test env has no chain). The
+ADR 0005. Off everywhere until the env's chain vault is filled (staging and prod flip it on in their values file; the test env has no chain). The
 api reads `operator-private-key`, `chain-rpc-url` and `session-secret` from
 Secret `chain.secretName`, and the deployments JSON (addresses, arbiter,
 challenge window, `deployBlock`) as the file

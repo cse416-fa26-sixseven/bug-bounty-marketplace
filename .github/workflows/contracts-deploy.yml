@@ -1,7 +1,7 @@
 name: Contracts deploy
 
 # Deploys AuditorStaking, BountyEscrow and DisputeResolution
-# (contracts/script/Deploy.s.sol) to Sepolia for one environment (ADR 0004):
+# (contracts/script/Deploy.s.sol) to Sepolia for one environment (ADR 0005):
 # staging and prod each have their own contracts and their own operator key.
 #
 #   broadcast=false (default)  dry run: simulates against live Sepolia state, sends nothing
@@ -112,7 +112,7 @@ jobs:
         run: |
           set -euo pipefail
           # The data RG holds the env vault (kv-bbm-<env>-<sfx>) and the
-          # api-only chain vault (kv-bbm-<env>c-<sfx>, ADR 0004); use the latter.
+          # api-only chain vault (kv-bbm-<env>c-<sfx>, ADR 0005); use the latter.
           case "$ENV_NAME" in staging) short=stg ;; prod) short=prd ;; *) short="$ENV_NAME" ;; esac
           kv=$(az keyvault list -g "$DATA_RG" --query "[?starts_with(name, 'kv-bbm-${short}c-')].name | [0]" -o tsv)
           [[ -n "$kv" ]] || { echo "::error::No chain Key Vault (kv-bbm-${short}c-*) in $DATA_RG (apply the data stack)."; exit 1; }
