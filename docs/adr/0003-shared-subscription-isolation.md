@@ -94,6 +94,15 @@
   (and Total Regional vCPUs) in the one region, which also covers the upgrade surge node, plus
   PostgreSQL Flexible `Standard_B1ms` for staging and prod. `up.sh` checks it per region as
   before (node vCPUs × max count).
+- **Exception: PostgreSQL region access (bring-up, 2026-11).** The subscription turned out to be
+  "restricted from provisioning" PostgreSQL Flexible Server in several US regions, including the
+  chosen home region, although its SKU list looked normal (create failed with "The value of the
+  'Version' should be in: []"). Test runs Postgres in-cluster, so only **staging and prod moved
+  to a second region** with `--env-location staging=<region2> --env-location prod=<region2>`;
+  tfstate, shared and test stay in the home region. This is the per-env region mechanism of ADR
+  0002 §8, unchanged. `up.sh` step 4 now fails early on such a restriction. To return to one
+  region, ask Azure support for PostgreSQL region access, destroy staging/prod's data and compute
+  stacks, and re-run `up.sh --env-location all=<home>`.
 
 ## Alternatives considered
 
