@@ -373,9 +373,14 @@ recreated.
 ## Known gaps and next steps
 
 - **Blob storage adapter** for uploads. This removes the API single-replica limit (see above).
-- **Wire the queue.** The API should enqueue analysis jobs and the worker should consume them.
-  Then set `keda_enabled = true` in the env's `compute.tfvars` (the add-on is off to save ~0.4 CPU
-  on the small pool) and enable `analysis` and the KEDA ScaledObject in the env values.
+- **Run the analysis worker on AKS.** Jobs already flow through Postgres (the API inserts
+  `queued` rows; the worker claims them with `FOR UPDATE SKIP LOCKED`), and the LLM settings are
+  in the env values. What's missing: the worker can't read uploaded sources, because the API keeps
+  them in its own pod's `emptyDir` (`SOURCE_STORAGE_DIR`). Once sources are in Blob storage (the
+  adapter above), give the worker `DATABASE_URL` and the storage settings and set
+  `analysis.enabled`. The KEDA ScaledObject scales on the Azure Storage queue, which nothing
+  writes to yet; keep `analysis.keda.enabled` and `keda_enabled` off until it does, or scale on
+  the job table instead.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
 - **Sandbox pool** once Dsv5 quota is granted.

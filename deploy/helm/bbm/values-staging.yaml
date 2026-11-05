@@ -63,6 +63,15 @@ networkPolicy:
   # postgresCidr: from values-infra.yaml
 
 analysis:
+  # Off until sources are shared with the API (Blob storage adapter, see
+  # docs/devops/architecture.md "Known gaps"); the LLM settings are ready.
   enabled: false
+  # LLM for finding explanations (OpenAI-compatible). The key comes from Key
+  # Vault (llm-api-key); without it the worker falls back to Slither's text.
+  extraEnv:
+    - name: LLM_ENDPOINT
+      value: https://hi-6654-resource.services.ai.azure.com/openai/v1
+    - name: LLM_MODEL
+      value: grok-4.6
 sandbox:
   enabled: false
