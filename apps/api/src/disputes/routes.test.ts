@@ -54,6 +54,7 @@ function setup() {
   const auditorStaking = {
     stakeOf: vi.fn(async () => 10n ** 17n),
     reputation: vi.fn(async () => 3n),
+    activeSubmissions: vi.fn(async () => 1n),
   };
   const chainActions = { applyDisputeResolved: vi.fn(async () => true) };
   const disputes = new MemoryDisputeRepository();
@@ -111,7 +112,7 @@ function setup() {
 }
 
 describe("auditor profile", () => {
-  it("reads stake, reputation and pending payout from the chain for the signed-in auditor", async () => {
+  it("reads stake, reputation, active locks and pending payout from the chain for the signed-in auditor", async () => {
     const { app } = setup();
     const res = await app.inject({
       method: "GET",
@@ -125,6 +126,7 @@ describe("auditor profile", () => {
       stake: "100000000000000000",
       reputation: 3,
       pendingPayout: "7",
+      activeSubmissions: 1,
       claimedContractIds: [],
     });
   });

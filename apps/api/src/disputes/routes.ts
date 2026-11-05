@@ -26,7 +26,7 @@ export interface FindingLifecycleDeps {
   bountyEscrow: Pick<BountyEscrowPort, "readBounty"> &
     Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
   disputeResolution: Pick<DisputeResolutionPort, "getDispute">;
-  auditorStaking: Pick<AuditorStakingPort, "stakeOf" | "reputation">;
+  auditorStaking: Pick<AuditorStakingPort, "stakeOf" | "reputation" | "activeSubmissions">;
   /** Releases the auditor's claim lock once a dispute resolves. */
   chainActions?: Pick<ChainActions, "applyDisputeResolved">;
   arbiter: Address;
@@ -60,9 +60,10 @@ export function registerFindingLifecycleRoutes(
   app.get("/api/auditor/profile", async (request, reply) => {
     const address = auth.requireSession(request, reply);
     if (!address) return reply;
-    const [stake, reputation, pending, claimed] = await Promise.all([
+    const [stake, reputation, active, pending, claimed] = await Promise.all([
       auditorStaking.stakeOf(address),
       auditorStaking.reputation(address),
+      auditorStaking.activeSubmissions(address),
       bountyEscrow.pendingPayouts?.(address),
       contracts.listClaimedContractIds(address, now()),
     ]);
@@ -72,6 +73,7 @@ export function registerFindingLifecycleRoutes(
       stake: stake.toString(),
       reputation: Number(reputation),
       claimedContractIds: claimed,
+      activeSubmissions: Number(active),
       ...(pending !== undefined ? { pendingPayout: pending.toString() } : {}),
     };
     return profile;
