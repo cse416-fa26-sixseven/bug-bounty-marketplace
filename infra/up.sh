@@ -538,7 +538,15 @@ for e in "${ENVS[@]}"; do
   # "The value of the 'Version' should be in: []").
   pg_reason=$(jq -r '[.[].reason // empty] | first // empty' <<<"$pg_skus" 2>/dev/null || true)
   if [[ -n "$pg_reason" ]]; then
-    die "PostgreSQL Flexible Server cannot be created in $r for this subscription: $pg_reason Move env $e with --env-location $e=<region> (check: az postgres flexible-server list-skus -l <region> --query '[].reason'), or ask Azure support for region access."
+    # Every selected env with PostgreSQL in this region has to move.
+    pg_envs="" pg_flags=""
+    for x in "${ENVS[@]}"; do
+      [[ "$(envval ENV_LOC "$x")" == "$r" ]] || continue
+      xf="$ENVS_DIR/$x/data.tfvars"
+      tfvars_has "$xf" postgres_enabled && [[ "$(tfvars_get "$xf" postgres_enabled)" == false ]] && continue
+      pg_envs+=" $x" pg_flags+=" --env-location $x=<region>"
+    done
+    die "PostgreSQL Flexible Server cannot be created in $r for this subscription: $pg_reason Move env(s)$pg_envs with$pg_flags (check: az postgres flexible-server list-skus -l <region> --query '[].reason'), or ask Azure support for region access."
   fi
   if jq -e '[.[].supportedServerEditions[]? | select(.name == "Burstable") | .supportedServerSkus[]?.name] | index("Standard_B1ms")' >/dev/null <<<"$pg_skus"; then
     ok "PostgreSQL Flexible Standard_B1ms is offered in $r"

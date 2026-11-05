@@ -813,16 +813,19 @@ public_ns() {
   for r in ${BBM_DNS_RESOLVERS:-1.1.1.1 8.8.8.8} system; do
     out=""
     if have dig; then
+      # dig exits non-zero when no server answers; on a partial success (first
+      # server times out, the next answers) it exits 0 and prints ";;" error
+      # lines next to the records, so keep only the non-comment lines.
       if [[ "$r" == system ]]; then
         out=$(dig +short +time=3 +tries=1 NS "$z" 2>/dev/null) || out=""
       else
         out=$(dig +short +time=3 +tries=1 NS "$z" "@$r" 2>/dev/null) || out=""
       fi
-      grep -q 'communications error\|timed out\|no servers' <<<"$out" && out=""
+      out=$(printf '%s\n' "$out" | grep -v '^;' || true)
     elif have nslookup; then
       local srv=()
       [[ "$r" == system ]] || srv=("$r")
-      out=$(nslookup -type=NS "$z" ${srv[@]+"${srv[@]}"} 2>/dev/null | awk '/nameserver = / { print $NF }') || out=""
+      out=$(nslookup -timeout=3 -retry=1 -type=NS "$z" ${srv[@]+"${srv[@]}"} 2>/dev/null | awk '/nameserver = / { print $NF }') || out=""
     fi
     if [[ -n "$out" ]]; then
       printf '%s\n' "$out" | norm_ns

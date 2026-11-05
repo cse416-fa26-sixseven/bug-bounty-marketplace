@@ -213,6 +213,16 @@ ns_out=$(
 )
 eq "public_ns falls back to the next resolver" "$ns_out" "$(printf 'ns1-09.azure-dns.com.\nns2-09.azure-dns.net.\n' | norm_ns)"
 ns_out=$(
+  dig() { printf ';; communications error to 192.0.2.1#53: timed out\nns1-02.azure-dns.com.\n'; }
+  public_ns bbm.example.com
+)
+eq "public_ns keeps records from a partial dig success" "$ns_out" "$(echo 'ns1-02.azure-dns.com.' | norm_ns)"
+ns_out=$(
+  dig() { case "$*" in *@9.9.9.9*) echo 'ns1-03.azure-dns.com.' ;; *) return 9 ;; esac; }
+  BBM_DNS_RESOLVERS=9.9.9.9 public_ns bbm.example.com
+)
+eq "public_ns honours BBM_DNS_RESOLVERS" "$ns_out" "$(echo 'ns1-03.azure-dns.com.' | norm_ns)"
+ns_out=$(
   dig() { case "$*" in *@*) return 9 ;; *) echo 'ns1-01.azure-dns.com.' ;; esac; }
   public_ns bbm.example.com
 )
@@ -834,6 +844,7 @@ else
 fi
 out=$(cat "$T/out")
 has "up: PostgreSQL restriction explained" 'PostgreSQL Flexible Server cannot be created in'
+has "up: PostgreSQL restriction names every env in the region" 'Move env(s) staging with --env-location staging=<region>'
 check_fails "up: bad env name" run_script up.sh --subscription "$SUB" --envs dev --dry-run
 check "up: --help" run_script up.sh --help
 if grep -qi 'one-command' "$T/out"; then ok_ "up: --help prints usage"; else bad "up: --help prints usage"; fi
