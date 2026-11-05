@@ -217,7 +217,9 @@ volumes) is owned by Helm.
 `analysis.jobLeaseSeconds`, `sandbox.enabled`, `sandbox.namespace` (`""` =
 `<release namespace>-sandbox`), `sandbox.jobTemplate`, `sandbox.quota`,
 `api.sourceStorage.{path,sizeLimit,persistentVolumeClaim.{enabled,existingClaim,storageClassName,accessModes,size}}`.
-Staging, prod and `values-test.yaml` turn analysis, the sandbox and the claim on; `values-ci.yaml`
+Staging, prod and `values-test.yaml` turn analysis, the sandbox and the claim on (amended
+2026-11-05: staging and prod moved to Blob storage, `api.sourceStorage.blob`; the claim remains on
+the test cluster); `values-ci.yaml`
 and Compose do not.
 
 ### Terraform

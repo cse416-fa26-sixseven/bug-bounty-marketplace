@@ -279,7 +279,9 @@ test cluster through `_ephemeral-env.yml`, and `infra-janitor.yml` deletes expir
 - **Known cap: API is limited to 1 replica.** Uploaded sources are written to local disk
   (`SOURCE_STORAGE_DIR`). Until a Blob storage adapter replaces that (the `sources` container and the
   `storageBlobEndpoint` value already exist for it), more than one API replica would split uploads
-  across pods. `web` scales freely.
+  across pods. `web` scales freely. _Amended 2026-11-05: staging and prod store uploads in the
+  Blob container (`api.sourceStorage.blob`); the cap remains for in-memory sign-in nonces and the
+  unlocked keeper loops (architecture.md "Known gaps")._
 - **Load testing:** the k6 baseline (`tests/load/api-baseline.js`, p95 < 500 ms, errors < 1%) runs
   against the pipeline-test env when `integration-azure.yml` is dispatched with `load`. (Since
   ADR 0002 that env is a namespace on the test cluster.)

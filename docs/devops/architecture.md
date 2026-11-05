@@ -35,7 +35,7 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 | Component        | Source             | Image                | Port | Health       | Notes                                                                                                                                                                                               |
 | ---------------- | ------------------ | -------------------- | ---- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | web              | `apps/web`         | `bbm/web`            | 3000 | `/healthz`   | Next.js. Proxies `/api/*` to `API_INTERNAL_URL`. A `-mocked` variant is built with MSW enabled.                                                                                                     |
-| api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to the env Blob container on staging (`SOURCE_STORAGE_BLOB_CONTAINER_URL`, workload identity), else to `SOURCE_STORAGE_DIR`.                       |
+| api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to the env Blob container on staging and prod (`SOURCE_STORAGE_BLOB_CONTAINER_URL`, workload identity), else to `SOURCE_STORAGE_DIR`.                       |
 | analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI + worker loop). Slither + LLM explanations for uploaded contracts; runs auditors' PoCs through the sandbox (`SANDBOX_BACKEND`: `docker` in compose, `kubernetes` on AKS).           |
 | sandbox          | `workers/sandbox`  | `bbm/sandbox`        | n/a  | n/a          | Offline Foundry image (pinned solc versions, forge-std) a PoC runs in. Not a service: compose runs it as a throwaway container, AKS as a Kata Job in `<ns>-sandbox` (ADR 0004). `linux/amd64` only. |
 | anvil            | `contracts`        | `bbm/contracts`      | 8545 | JSON-RPC     | Local chain for compose and CI only.                                                                                                                                                                |
@@ -358,9 +358,11 @@ On staging and prod the API writes uploaded sources and PoCs to the env storage 
 `sources` container as the api identity (Storage Blob Data Contributor on the container) and the
 worker reads them as the worker identity (Storage Blob Data Reader), both through workload
 identity (`SOURCE_STORAGE_BLOB_CONTAINER_URL`; the account has shared keys disabled). Uploads no
-longer tie the API to one pod, but wallet sign-in nonces are still kept in memory, so a second
-replica would fail logins whose nonce and login land on different pods: both envs stay at
-`api.hpa.maxReplicas: 1` (`maxSurge: 0`, so a short gap during each API deploy) until nonces move
+longer tie the API to one pod, but two things still do: wallet sign-in nonces are kept in memory,
+so a second replica would fail logins whose nonce and login land on different pods, and the
+verdict and payout keeper loops have no leader lock (unlike the event indexer), so two replicas
+would race duplicate chain transactions from the same operator key. Both envs stay at
+`api.hpa.maxReplicas: 1` (`maxSurge: 0`, so a short gap during each API deploy) until those move
 to Postgres.
 
 On the test cluster the API still writes to `SOURCE_STORAGE_DIR` on an Azure Files
@@ -426,7 +428,7 @@ sequenceDiagram
 | RBAC             | Role in that namespace for `bbm-analysis` only: Jobs create/get/list/watch/delete, Pods get/list/watch, pods/log get, Secrets create/get/delete.                                                                                                                   |
 | Job pod          | `runtimeClassName: kata-vm-isolation`, no SA token, uid 10001, read-only root, no capabilities, `RuntimeDefault` seccomp, 1 CPU / 1 GiB / 1 GiB ephemeral, `/tmp` emptyDir, `/in` = Secret `poc-<id>`, `activeDeadlineSeconds: 600`, `timeout -s KILL 120` inside. |
 | Project transfer | The tarball travels in a Secret (sources are capped at 100 KB each by the API), never through a shared volume into the VM.                                                                                                                                         |
-| Sources          | The worker reads them (not the Job): from the Blob `sources` container on staging, from the Azure Files claim `bbm-sources` elsewhere.                                                                                                                             |
+| Sources          | The worker reads them (not the Job): from the Blob `sources` container on staging and prod, from the Azure Files claim `bbm-sources` on the test cluster.                                                                                                                             |
 | Image            | `<acr>/bbm/sandbox:sha-<7>` (`SANDBOX_IMAGE`, from `analysis.sandbox.image.repository`), built by `_build-push.yml`, checked by `deploy.yml`.                                                                                                                      |
 | Spike            | `infra/terraform/scripts/kata-spike.sh <env> <tag>` proves the pod runs in a VM (guest kernel differs from the node's) before PoCs are trusted to the pool.                                                                                                        |
 | Tests            | `tests/integration/pipeline.test.ts` (`BBM_PIPELINE=1`, T18) in `integration-azure.yml` and locally against the compose sandbox overlay.                                                                                                                           |
@@ -441,9 +443,11 @@ silently downgraded to runc.
   CI-run namespaces still use the Azure Files share because the test cluster has no workload
   identity (`values-test.yaml`). Give it one (or keep the share, which is discarded with each
   namespace anyway).
-- **Sign-in nonces in Postgres.** The api keeps SIWE nonces in memory, the last thing pinning
-  staging and prod to one api replica now that uploads are in Blob storage. Move them to a table
-  (or a short-lived row keyed by address), then raise `api.hpa` on prod (2–5, PDB on).
+- **More than one api replica.** Uploads no longer pin the api, but two things still do now
+  that uploads are in Blob storage: SIWE nonces live in memory (move them to a table, or a
+  short-lived row keyed by address), and the verdict and payout keeper loops run unlocked (give
+  them a Postgres advisory lock like the event indexer's `PgIndexerLock`). Rate-limit counters are
+  per pod but only loosen the limit. Then raise `api.hpa` on prod (2–5, PDB on).
 - **Worker scaling.** The chart's KEDA ScaledObject scales on the Azure Storage queue
   `analysis-jobs`, which nothing writes to: jobs flow through the Postgres `jobs` table. Keep
   `analysis.keda.enabled` and `keda_enabled` (compute.tfvars) off, or scale on the `jobs` table

@@ -105,7 +105,7 @@ Full details are in [env-lifecycle.md](env-lifecycle.md). Cost estimates are in 
 
 ## Known gaps (not blockers for tomorrow)
 
-- API is pinned to 1 replica until uploads move from local disk to Blob storage.
+- API is pinned to 1 replica: sign-in nonces are in memory and the keeper loops have no leader lock (architecture.md "Known gaps").
 - The analysis queue is not wired, and `/analyze` returns 501.
 - Ingress is plain HTTP (no TLS yet).
 - Nothing deploys to staging automatically after `integration-azure` passes; it's manual.

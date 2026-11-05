@@ -14,7 +14,7 @@ cluster (`values-test.yaml`). It contains:
 - The `analysis` worker (Slither + LLM, and the PoC runner) with its
   per-release `sandbox` namespace where auditors' PoCs run as Kata-isolated
   Jobs, and shared upload storage for api and analysis: the env Blob
-  container (`api.sourceStorage.blob`, staging) or a ReadWriteMany
+  container (`api.sourceStorage.blob`, staging and prod) or a ReadWriteMany
   `sources` claim (`api.sourceStorage.persistentVolumeClaim`, test).
   Off in `values.yaml`, on in every env file (see "Analysis and the PoC
   sandbox").
@@ -86,8 +86,8 @@ SecretProviderClass or HTTPRoute.
 > default `sources`): the api writes and the analysis worker reads through
 > `SOURCE_STORAGE_BLOB_CONTAINER_URL` with their workload identities and no
 > volume is mounted. Uploads then allow several api replicas, but the api's
-> in-memory sign-in nonces do not yet, so staging and prod still pin the api
-> to `min 1 / max 1`. Otherwise uploads are written to
+> in-memory sign-in nonces and its unlocked verdict/payout keeper loops do
+> not yet, so staging and prod still pin the api to `min 1 / max 1`. Otherwise uploads are written to
 > `SOURCE_STORAGE_DIR=/data/sources`: a per-pod `emptyDir` by default, or
 > the shared `bbm-sources` claim when
 > `api.sourceStorage.persistentVolumeClaim` is enabled (test). The
@@ -144,7 +144,7 @@ worker keeps Slither's own explanations.
 
 | key | default | meaning |
 |---|---|---|
-| `enabled` | `false` (`true` in every env file) | mount one ReadWriteMany claim in the api (rw) and analysis (ro) pods at `api.sourceStorage.path` instead of the api's per-pod emptyDir |
+| `enabled` | `false` (`true` in `values-test.yaml` only) | mount one ReadWriteMany claim in the api (rw) and analysis (ro) pods at `api.sourceStorage.path` instead of the api's per-pod emptyDir |
 | `existingClaim` | `""` | use a pre-created claim; empty renders `PersistentVolumeClaim bbm-sources` |
 | `storageClassName` | `azurefile-csi` | Azure Files (SMB), dynamically provisioned: a test namespace gets its own share and loses it with the namespace |
 | `accessModes` / `size` | `[ReadWriteMany]` / `5Gi` | |
