@@ -170,6 +170,9 @@ export async function restoreInjected(info: ConfiguredChainInfo): Promise<void> 
   const [first] = await provider.request({ method: "eth_accounts" });
   const chainId = Number(await provider.request({ method: "eth_chainId" }));
   const session = first ? await sessionAddress() : null;
+  // A Connect click while this was waiting wins: keep what it set.
+  const current = useInjectedStore.getState();
+  if (current.connecting || current.address) return;
   const address = first && session && session.toLowerCase() === first.toLowerCase() ? getAddress(first) : null;
   useInjectedStore.setState({ address, chainId, error: chainId === info.chainId ? null : wrongNetwork(info.chainId) });
 }

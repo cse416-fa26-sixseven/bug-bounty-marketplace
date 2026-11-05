@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
-import { verifyMessage, type Address, type Hex } from "viem";
+import { encodeFunctionData, verifyMessage, type Abi, type Address, type Hex } from "viem";
 import { parseSiweMessage } from "viem/siwe";
-import type { ChainInfo } from "@bbm/shared";
+import { auditorStakingAbi, type ChainInfo } from "@bbm/shared";
 import { server } from "@/mocks/server";
 import { chainCalls } from "@/lib/chain/calls";
 import { fakeEthereum, installEthereum } from "@/test/fake-ethereum";
@@ -160,12 +160,30 @@ describe("restoreInjected", () => {
   });
 
   it("leaves the wallet disconnected when the session is someone else's", async () => {
-    const fake = wallet({ chainId: 1 });
+    const fake = wallet({ chainId: SEPOLIA.chainId });
     fake.state.authorized = true;
     const auth = fakeAuth();
     auth.session = SEPOLIA.arbiter;
     await restoreInjected(SEPOLIA);
-    expect(useInjectedStore.getState()).toMatchObject({ address: null, error: wrongNetwork(SEPOLIA.chainId) });
+    expect(useInjectedStore.getState()).toMatchObject({ address: null, error: null });
+  });
+
+  it("reports a wallet on the wrong network", async () => {
+    const fake = wallet({ chainId: 1 });
+    fake.state.authorized = true;
+    fakeAuth().session = fake.account.address;
+    await restoreInjected(SEPOLIA);
+    expect(useInjectedStore.getState()).toMatchObject({ chainId: 1, error: wrongNetwork(SEPOLIA.chainId) });
+  });
+
+  it("does not undo a connection made while it was waiting", async () => {
+    const fake = wallet({ chainId: SEPOLIA.chainId });
+    fake.state.authorized = true;
+    fakeAuth();
+    const restoring = restoreInjected(SEPOLIA);
+    useInjectedStore.setState({ address: fake.account.address });
+    await restoring;
+    expect(useInjectedStore.getState().address).toBe(fake.account.address);
   });
 });
 
@@ -213,6 +231,25 @@ describe("injectedTxClient", () => {
     expect(onSent).toHaveBeenCalledWith(hash);
     // Already signed in as this account: no second signature prompt.
     expect(fake.state.calls.filter((c) => c.method === "personal_sign")).toHaveLength(1);
+  });
+
+  it("withdraws stake through the wallet", async () => {
+    const fake = wallet({ chainId: SEPOLIA.chainId });
+    fakeAuth();
+    const address = await connectInjected(SEPOLIA);
+    const calls = chainCalls(SEPOLIA, injectedTxClient(SEPOLIA, address, fake.provider), {
+      beforeSend: () => prepareInjectedSend(SEPOLIA, address, fake.provider),
+    });
+
+    await calls.withdrawStake("50000000000000000");
+
+    const tx = fake.state.sent[0] as { to: string; data: string; value?: string };
+    expect(tx.to.toLowerCase()).toBe(SEPOLIA.addresses.auditorStaking.toLowerCase());
+    // AuditorStaking.withdraw(uint256), no ETH attached.
+    expect(tx.data).toBe(
+      encodeFunctionData({ abi: auditorStakingAbi as Abi, functionName: "withdraw", args: [50000000000000000n] }),
+    );
+    expect(BigInt(tx.value ?? "0x0")).toBe(0n);
   });
 
   it("explains a rejected transaction and a missing connection", async () => {
