@@ -91,6 +91,10 @@ spec:
             - name: SOURCE_STORAGE_DIR
               value: {{ .Values.api.sourceStorage.path | quote }}
             {{- end }}
+            {{- /* Chain mode: the worker records the PoC result and the api
+            applies the verdict on-chain. */}}
+            - name: CHAIN_ENABLED
+              value: {{ .Values.chain.enabled | toString | quote }}
             - name: JOB_LEASE_SECONDS
               value: {{ $v.jobLeaseSeconds | quote }}
             - name: SANDBOX_ENABLED

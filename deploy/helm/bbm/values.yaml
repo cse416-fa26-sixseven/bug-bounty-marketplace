@@ -100,6 +100,11 @@ secrets:
     databaseUrl: ""
     # -- LLM API key for provider=plain.
     llmApiKey: ""
+    # -- With chain.enabled, provider=plain: the operator's 0x-prefixed private
+    # key (OPERATOR_PRIVATE_KEY) and the session cookie HMAC secret
+    # (SESSION_SECRET, 16+ characters).
+    operatorPrivateKey: ""
+    sessionSecret: ""
   csi:
     # -- Name of the main SecretProviderClass.
     secretProviderClassName: bbm-kv
@@ -110,6 +115,47 @@ secrets:
     objects:
       databaseUrl: database-url
       llmApiKey: llm-api-key
+      # -- With chain.enabled: Key Vault secrets set out of band
+      # (az keyvault secret set, never terraform), synced as the
+      # operator-private-key and session-secret keys of secrets.name.
+      operatorPrivateKey: chain-operator-key
+      sessionSecret: session-secret
+
+chain:
+  # -- Run the api in chain mode: Sign-In with Ethereum, the on-chain bounty
+  # lifecycle (funding, stake, disputes, rulings, payouts), the event indexer
+  # and the payout keeper; the analysis worker leaves verdicts to the api.
+  # Off: the api serves the pipeline routes only. Needs the operator key and
+  # session secret in secrets.name (see secrets.*.operatorPrivateKey /
+  # sessionSecret) and ingress.host (sign-in binds to https://<host>).
+  enabled: false
+  # -- Chain id the contracts are deployed on (11155111 = Sepolia).
+  chainId: 11155111
+  # -- JSON-RPC URL the api uses. Must be keyless: it is a plain value. Also
+  # published to browsers as publicRpcUrl unless that is set.
+  rpcUrl: ""
+  # -- RPC URL GET /api/chain publishes to browsers ("" = rpcUrl).
+  publicRpcUrl: ""
+  # -- Deployed contract addresses (contracts/deployments/<chainId>.json).
+  addresses:
+    auditorStaking: ""
+    bountyEscrow: ""
+    disputeResolution: ""
+  # -- Arbiter address ("" = the operator).
+  arbiter: ""
+  # -- The deployment's challenge window in seconds.
+  challengeWindowSeconds: 600
+  # -- Block the event indexer starts from (the deployment's deployBlock).
+  indexerStartBlock: 0
+  # -- Blocks the indexer stays behind the head (load-balanced public RPCs
+  # lag; 3 on Sepolia).
+  indexerConfirmations: 3
+  # -- How often the indexer polls, in milliseconds.
+  indexerPollMs: 15000
+  # -- How often the payout keeper runs, in seconds.
+  payoutKeeperIntervalSeconds: 30
+  # -- Lock an auditor's stake while they hold a claim with open findings.
+  claimLockEnabled: true
 
 serviceAccounts:
   # -- Extra annotations for every ServiceAccount created by the chart.

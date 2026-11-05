@@ -157,9 +157,35 @@ After each transaction a notice links it on Sepolia Etherscan.
 
 ## Deployed environments
 
-The bbm Helm chart sets `AUTH_ORIGIN=https://<ingress.host>` and
-`COOKIE_SECURE=true` for the api. It doesn't wire chain mode yet (`CHAIN_*`,
-`OPERATOR_PRIVATE_KEY`, `SESSION_SECRET`). When it does, follow the existing
-convention: the RPC URL and operator key stay in Key Vault (set out of band
-with `az keyvault secret set`, never in Terraform state or GitHub secrets)
-and reach the pod through the CSI SecretProviderClass, like `llm-api-key`.
+The bbm Helm chart runs the api in chain mode with `chain.enabled: true`
+(`values.yaml` documents every `chain.*` value). Prod turns it on in
+`values-prod.yaml` with the deployment above; test and staging stay off,
+because the operator key signs verdicts and payouts and two APIs sharing it
+would race each other's nonces.
+
+With `chain.enabled` the chart:
+
+- sets the api's `CHAIN_*`, contract addresses, `ARBITER_ADDRESS`,
+  `CHALLENGE_WINDOW_SECONDS`, `INDEXER_*`, `PAYOUT_KEEPER_INTERVAL_SECONDS` and
+  `CLAIM_LOCK_ENABLED`, plus `AUTH_ORIGIN=https://<ingress.host>` and
+  `COOKIE_SECURE=true` (it fails to render without `ingress.host`);
+- reads `OPERATOR_PRIVATE_KEY` and `SESSION_SECRET` from the `bbm-secrets` keys
+  `operator-private-key` and `session-secret`, which the CSI driver syncs from
+  the env's Key Vault secrets `chain-operator-key` and `session-secret`;
+- sets `CHAIN_ENABLED=true` on the analysis worker, so the api applies
+  sandbox verdicts on-chain.
+
+`chain.rpcUrl` is a plain value, so it must be keyless (publicnode). Set the two
+secrets out of band before deploying, never in Terraform or GitHub:
+
+```sh
+umask 077
+tr -d '\n' < sepolia-deployer.key > op           # the operator = the deployer
+openssl rand -hex 32 | tr -d '\n' > ss
+az keyvault secret set --vault-name <env vault> --name chain-operator-key --file op --encoding utf-8
+az keyvault secret set --vault-name <env vault> --name session-secret --file ss --encoding utf-8
+rm op ss
+```
+
+Stop any other API using the same operator key (for example a local Sepolia
+stack) while prod runs.

@@ -288,3 +288,16 @@ set, else the chart-rendered <fullname>-sources.
 {{- define "bbm.sourcesClaim" -}}
 {{- if .Values.api.sourceStorage.persistentVolumeClaim.enabled }}true{{ end -}}
 {{- end -}}
+
+{{/*
+chain.enabled needs a keyless RPC URL, the three contract addresses and the
+public host the sign-in messages are bound to (AUTH_ORIGIN).
+*/}}
+{{- define "bbm.validateChain" -}}
+{{- $c := .Values.chain -}}
+{{- if not $c.rpcUrl }}{{ fail "chain.enabled needs chain.rpcUrl" }}{{ end -}}
+{{- range $k := list "auditorStaking" "bountyEscrow" "disputeResolution" }}
+{{- if not (regexMatch "^0x[0-9a-fA-F]{40}$" (index $c.addresses $k | toString)) }}{{ fail (printf "chain.enabled needs chain.addresses.%s (a 0x address)" $k) }}{{ end -}}
+{{- end -}}
+{{- if not (and $.Values.ingress.enabled $.Values.ingress.host) }}{{ fail "chain.enabled needs ingress.enabled and ingress.host (Sign-In with Ethereum binds to https://<host>)" }}{{ end -}}
+{{- end -}}

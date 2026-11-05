@@ -105,6 +105,49 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name }}
                   key: database-url
+            {{- with .Values.chain }}
+            {{- if .enabled }}
+            {{- include "bbm.validateChain" $ }}
+            - name: CHAIN_RPC_URL
+              value: {{ .rpcUrl | quote }}
+            - name: PUBLIC_CHAIN_RPC_URL
+              value: {{ .publicRpcUrl | default .rpcUrl | quote }}
+            - name: CHAIN_ID
+              value: {{ .chainId | quote }}
+            - name: AUDITOR_STAKING_ADDRESS
+              value: {{ .addresses.auditorStaking | quote }}
+            - name: BOUNTY_ESCROW_ADDRESS
+              value: {{ .addresses.bountyEscrow | quote }}
+            - name: DISPUTE_RESOLUTION_ADDRESS
+              value: {{ .addresses.disputeResolution | quote }}
+            {{- with .arbiter }}
+            - name: ARBITER_ADDRESS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CHALLENGE_WINDOW_SECONDS
+              value: {{ .challengeWindowSeconds | quote }}
+            - name: INDEXER_START_BLOCK
+              value: {{ .indexerStartBlock | quote }}
+            - name: INDEXER_CONFIRMATIONS
+              value: {{ .indexerConfirmations | quote }}
+            - name: INDEXER_POLL_MS
+              value: {{ .indexerPollMs | quote }}
+            - name: PAYOUT_KEEPER_INTERVAL_SECONDS
+              value: {{ .payoutKeeperIntervalSeconds | quote }}
+            - name: CLAIM_LOCK_ENABLED
+              value: {{ .claimLockEnabled | toString | quote }}
+            - name: OPERATOR_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: operator-private-key
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: session-secret
+            {{- end }}
+            {{- end }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

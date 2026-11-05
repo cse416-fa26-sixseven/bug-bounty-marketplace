@@ -159,6 +159,12 @@
             },
             "llmApiKey": {
               "type": "string"
+            },
+            "operatorPrivateKey": {
+              "type": "string"
+            },
+            "sessionSecret": {
+              "type": "string"
             }
           },
           "additionalProperties": true
@@ -180,6 +186,12 @@
                   "type": "string"
                 },
                 "llmApiKey": {
+                  "type": "string"
+                },
+                "operatorPrivateKey": {
+                  "type": "string"
+                },
+                "sessionSecret": {
                   "type": "string"
                 }
               },
@@ -1129,6 +1141,70 @@
       "type": "object",
       "description": "From values-infra.yaml (ADR 0002 section 5). Ignored by this chart; consumed by bbm-platform.",
       "additionalProperties": true
+    },
+    "chain": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "chainId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rpcUrl": {
+          "type": "string"
+        },
+        "publicRpcUrl": {
+          "type": "string"
+        },
+        "addresses": {
+          "type": "object",
+          "properties": {
+            "auditorStaking": {
+              "type": "string",
+              "pattern": "^(0x[0-9a-fA-F]{40})?$"
+            },
+            "bountyEscrow": {
+              "type": "string",
+              "pattern": "^(0x[0-9a-fA-F]{40})?$"
+            },
+            "disputeResolution": {
+              "type": "string",
+              "pattern": "^(0x[0-9a-fA-F]{40})?$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "arbiter": {
+          "type": "string",
+          "pattern": "^(0x[0-9a-fA-F]{40})?$"
+        },
+        "challengeWindowSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indexerStartBlock": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indexerConfirmations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indexerPollMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "payoutKeeperIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "claimLockEnabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
