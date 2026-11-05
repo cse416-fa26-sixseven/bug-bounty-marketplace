@@ -325,6 +325,14 @@ fi
 if [[ "$DRY_RUN" == 1 ]] || bootstrap_local_state_has_resources; then
   bootstrap_use_local_backend
   bootstrap_init_local
+  # Resource provider registrations are subscription-wide (and up.sh imports
+  # the ones already registered): forget them instead of unregistering them,
+  # so other workloads in a shared subscription keep working.
+  if [[ "$DRY_RUN" == 1 ]] || terraform -chdir="$BOOTSTRAP_DIR" state list 2>/dev/null |
+    grep -q '^azurerm_resource_provider_registration\.this'; then
+    run terraform -chdir="$BOOTSTRAP_DIR" state rm 'azurerm_resource_provider_registration.this' ||
+      die "could not drop the provider registrations from the bootstrap state; nothing destroyed"
+  fi
   tf_plan_apply bootstrap global --destroy || die "bootstrap destroy failed; re-run (the local state is kept)"
   _remove_override
   if [[ "$DRY_RUN" == 0 ]]; then
