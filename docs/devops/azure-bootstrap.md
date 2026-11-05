@@ -365,11 +365,19 @@ Repeat for `infra-global`. For `contracts-sepolia`, which isn't branch-restricte
 
 Each of staging and prod has its own Sepolia contracts and its own **operator key**
 ([ADR 0005](../adr/0005-operator-key-trust-model.md)). They live in the env's **chain vault**
-(`kv-bbm-<stg|prd>c-<sfx>`), which only the `api` identity can read. Terraform creates the vault
+(`kv-bbm-<stg|prd>c-<sfx>`), which the `api` identity reads and the worker and sandbox don't (ADR
+0005 lists every principal that can read it). Terraform creates the vault
 and `session-secret`; `up.sh` seeds `placeholder-set-me` for the other three so the CSI mount
 never hangs. Chain mode stays **off** (`chain.enabled: false` in `values-<env>.yaml`) until they
 are real: with it on, the API refuses a placeholder key or deployment and does not start. The test
-env has no chain.
+env has no chain (its chain vault exists but is unused).
+
+0. **Apply the data stack locally first** (`infra/terraform/scripts/tf.sh data <env> apply`, or
+   `infra/up.sh`), as a subscription Owner. It creates the chain vault and gives the users in
+   `secret_officer_user_object_ids` *Secrets Officer* on it, and CI's role-assignment rights only
+   cover service principals, so a `terraform.yml` apply of this change fails. Apply compute after
+   data so its Helm values carry `azure.chainKeyVaultName` (before that it is empty, which is fine
+   while chain mode is off).
 
 1. **Generate the operator key** (also the deployer, since the deploy script requires it). Keep it
    out of shell history and delete the file afterwards:
@@ -399,8 +407,11 @@ env has no chain.
 5. **Deploy**: Actions → **Contracts deploy** with `env`, `arbiter`, first `broadcast=false` (a dry
    run against live Sepolia), then `broadcast=true`. The run stores the deployments file (addresses
    and `deployBlock`) in the chain vault as `chain-deployment`. A second deploy needs
-   `replace_existing`, because it orphans the API's state on the old contracts. Prod runs need the
-   prod reviewer.
+   `replace_existing`, because it orphans the API's state on the old contracts (a dry run only
+   warns). Prod runs need the prod reviewer. The `staging` and `prod` Environments only accept
+   runs from `main`, so dispatch the workflow from `main`. If the run broadcast but failed to
+   store the file, download `deployments/11155111.json` from the run's artifact and set it by hand:
+   `az keyvault secret set --vault-name "$KV" --name chain-deployment --file 11155111.json --encoding utf-8`.
 
 6. **Turn chain mode on**: set `chain.enabled: true` in `deploy/helm/bbm/values-<env>.yaml` and
    roll the API (Deploy (AKS) or CD), so the pod mounts the chain vault. Later secret changes

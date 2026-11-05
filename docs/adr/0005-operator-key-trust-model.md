@@ -56,8 +56,9 @@ is therefore also the key that deployed that environment's contracts.
 **One deployment per environment.** Staging and prod each get their own Sepolia deployment and
 their own operator key. A shared deployment would have two APIs sending from one key, so their
 nonces would collide, and a compromise of one environment would reach the other. The ephemeral
-`test` environment has no chain for now; an in-cluster Anvil chain with the public Anvil keys,
-like the local `pnpm stack:demo`, is future work.
+`test` environment has no chain for now (the data stack still creates its chain vault, unused);
+an in-cluster Anvil chain with the public Anvil keys, like the local `pnpm stack:demo`, is future
+work.
 
 ### 2. Where the key is stored
 
@@ -78,7 +79,19 @@ The data stack therefore creates a second vault per environment, the chain vault
 | Vault | Secrets | Readers |
 | --- | --- | --- |
 | env vault `kv-bbm-<env>-<sfx>` | `database-url`, `llm-api-key`, `pg-admin-password` | `api`, `worker` |
-| chain vault `kv-bbm-<env>c-<sfx>` | `operator-private-key`, `chain-rpc-url`, `chain-deployment`, `session-secret` | `api` |
+| chain vault `kv-bbm-<env>c-<sfx>` | `operator-private-key`, `chain-rpc-url`, `chain-deployment`, `session-secret` | `api` (see below) |
+
+"Api-only" is about the workloads: the worker, the sandbox and the PR-plan identity get no access.
+Some other principals can still read the operator key, by design or as a known trade-off:
+
+- **The `staging` / `prod` GitHub Environment identities** (`gh-bbm-<env>`) hold *Key Vault
+  Secrets Officer* on the env's data resource group (ADR 0003 scopes grants to resource groups),
+  so any workflow job in that Environment can read it. Staging has no reviewer; prod does.
+- **Humans in `secret_officer_user_object_ids`**, who set the secrets by hand.
+- **AKS cluster admins**, through the synced Kubernetes Secret `bbm-chain-secrets`.
+- **The migrations Job**, which runs as the api identity (`migrationsClientId` is the api UAMI).
+
+Tightening any of these (a reviewer on staging, a separate migrations identity) is future work.
 
 Per-secret role assignments were rejected: a role can only be assigned on a secret that already
 exists, and these are set by hand after Terraform runs. Creating them from Terraform would either
