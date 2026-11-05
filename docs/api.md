@@ -102,6 +102,8 @@ is on.
 | `SESSION_SECRET`            | unset                                    | HMAC key (16+ characters) for session cookies. Enables sign-in; required with `CHAIN_RPC_URL`.                                   |
 | `AUTH_ORIGIN`               | unset                                    | The web app's public origin, which every SIWE message names. Unset: taken from each request (dev only: warns; with a chain and `NODE_ENV=production` the API refuses to start). The demo stack sets `http://localhost:3000`. |
 | `COOKIE_SECURE`             | `true` if `AUTH_ORIGIN` is `https`       | Marks the session cookie `Secure`. Leave it off for the plain-http local demo.                                                   |
+| `INDEXER_START_BLOCK`       | the deployments file's `deployBlock`     | With `CHAIN_RPC_URL`, the first block the event indexer reads when it has no checkpoint. Unset without a `deployBlock`: block 0. |
+| `INDEXER_CONFIRMATIONS`     | `0`                                      | With `CHAIN_RPC_URL`, how many blocks behind the head the event indexer stops. Use `3` on Sepolia and with load-balanced public RPCs, which can serve `eth_getLogs` from a backend a block behind the head they reported. A malformed value fails startup. |
 
 Over a limit the API answers `429` with `Retry-After` and
 `{ "statusCode": 429, "error": "Too many requests; try again in N seconds" }`.
