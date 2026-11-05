@@ -44,14 +44,15 @@ address as `disputeResolution()` (selector `0xbe9157cf`).
 `script/Deploy.s.sol` (`contract Deploy`) does the steps above. All settings
 come from environment variables, all optional:
 
-| Variable               | Default           | Meaning                                                                                                                            |
-| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `DEPLOYER_PRIVATE_KEY` | unset             | Key to broadcast with. Unset (or 0) uses the CLI sender (`--private-key`, `--sender`).                                             |
-| `OPERATOR`             | broadcaster       | Backend operator. Must equal the broadcaster, otherwise the script reverts with `Deploy: OPERATOR must equal the broadcaster ...`. |
-| `ARBITER`              | broadcaster       | Dispute arbiter.                                                                                                                   |
-| `CHALLENGE_WINDOW`     | `259200` (3 days) | Seconds after verification before a finding can be paid.                                                                           |
-| `REFUND_DELAY`         | `10800` (3 hours) | Seconds after the deadline before the developer can refund.                                                                        |
-| `WRITE_DEPLOYMENTS`    | `true`            | Write `deployments/<chainid>.json` on a `--broadcast` run. Dry runs and tests never write.                                         |
+| Variable                   | Default           | Meaning                                                                                                                            |
+| -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `DEPLOYER_PRIVATE_KEY`     | unset             | Key to broadcast with. Unset (or 0) uses the CLI sender (`--private-key`, `--sender`).                                             |
+| `OPERATOR`                 | broadcaster       | Backend operator. Must equal the broadcaster, otherwise the script reverts with `Deploy: OPERATOR must equal the broadcaster ...`. |
+| `ARBITER`                  | broadcaster       | Dispute arbiter.                                                                                                                   |
+| `CHALLENGE_WINDOW`         | `259200` (3 days) | Seconds after verification before a finding can be paid.                                                                           |
+| `REFUND_DELAY`             | `10800` (3 hours) | Seconds after the deadline before the developer can refund.                                                                        |
+| `WRITE_DEPLOYMENTS`        | `true`            | Write `deployments/<chainid>.json` on a `--broadcast` run. Dry runs and tests never write.                                         |
+| `REQUIRE_DISTINCT_ARBITER` | `false`           | Revert unless `ARBITER` differs from `OPERATOR`. The Sepolia deploy workflow sets it (ADR 0004).                                   |
 
 After a broadcast, `deployments/<chainid>.json` looks like:
 
@@ -134,10 +135,16 @@ chain integration tests read `31337.json`.
 - `ci.yml` `contracts` job: `forge build`, `forge test -vvv`,
   `forge snapshot --check`, a `forge script script/Deploy.s.sol` dry run, and
   Slither (advisory, `fail-on: none`).
-- `contracts-deploy.yml` (manual dispatch) deploys to **Sepolia** in the
-  `contracts-sepolia` GitHub Environment (one reviewer). `broadcast=false`
-  (the default) simulates against live Sepolia state and sends nothing. The
-  RPC URL and deployer key are read over OIDC from the shared Key Vault
-  (`sepolia-rpc-url`, `sepolia-deployer-key`), never from GitHub secrets; see
-  [Azure bootstrap](../devops/azure-bootstrap.md). The run summary lists the
+- `contracts-deploy.yml` (manual dispatch) deploys to **Sepolia** for one
+  environment, `staging` or `prod`, in that GitHub Environment (prod needs a
+  reviewer). Each environment has its own contracts and operator key
+  ([ADR 0004](../adr/0004-operator-key-trust-model.md)). Inputs: `env`,
+  `arbiter` (required; must differ from the operator), `broadcast` and
+  `replace_existing` (refuses to overwrite an existing deployment without
+  it). `broadcast=false` (the default) simulates against live Sepolia state
+  and sends nothing. The RPC URL and operator key are read over OIDC from the
+  env's chain Key Vault (`chain-rpc-url`, `operator-private-key`), never from GitHub
+  secrets; see [Azure bootstrap](../devops/azure-bootstrap.md). After a
+  broadcast the deployments file is stored in the same vault as
+  `chain-deployment`, which the API mounts. The run summary lists the
   addresses, and `broadcast/` + `deployments/` are uploaded as an artifact.

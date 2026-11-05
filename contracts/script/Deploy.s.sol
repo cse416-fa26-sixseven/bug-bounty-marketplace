@@ -25,6 +25,8 @@ import {DisputeResolution} from "../src/DisputeResolution.sol";
 ///   ARBITER               dispute arbiter. Defaults to the broadcaster.
 ///   CHALLENGE_WINDOW      seconds before a verified finding can be paid. Default 3 days.
 ///   REFUND_DELAY          seconds after the deadline before a refund. Default 3 hours.
+///   REQUIRE_DISTINCT_ARBITER  true: refuse when ARBITER equals OPERATOR.
+///                         Default false (Anvil uses one key for both).
 ///   WRITE_DEPLOYMENTS     write deployments/<chainid>.json (addresses, settings
 ///                         and deployBlock) after a real
 ///                         broadcast (`--broadcast`). Default true. Dry runs
@@ -51,6 +53,11 @@ contract Deploy is Script {
     /// @notice Reads the environment, deploys, and records the addresses.
     function run() external returns (Deployment memory d) {
         Config memory cfg = readConfig();
+        // Public networks (the Sepolia deploy workflow) need a separate
+        // arbiter: one key must not both verify and rule (ADR 0004).
+        if (vm.envOr("REQUIRE_DISTINCT_ARBITER", false)) {
+            require(cfg.arbiter != cfg.operator, "Deploy: ARBITER must differ from OPERATOR");
+        }
         d = deploy(cfg);
 
         bool broadcasting =
