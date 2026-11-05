@@ -26,3 +26,12 @@ export async function getJson<S extends z.ZodType>(url: string, schema?: S) {
 export async function postForm<S extends z.ZodType>(url: string, form: FormData, schema?: S) {
   return decode(await fetch(url, { method: "POST", body: form }), schema);
 }
+
+export async function postJson<S extends z.ZodType>(url: string, body: unknown, schema?: S) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return decode(res, schema);
+}

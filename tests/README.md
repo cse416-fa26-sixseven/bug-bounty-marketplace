@@ -14,6 +14,7 @@ This package has no `test` script on purpose. That means `pnpm -r test` and
 | **Unit**               | `apps/*/src/**/*.test.ts(x)`, `packages/shared`, `contracts/test` (forge), `workers/analysis/tests` | vitest (+ MSW in `apps/web`), `forge test`, pytest                            | `ci.yml` per-package jobs, on every PR (path-filtered)                                                                                          | None. HTTP is mocked (MSW / `app.inject`), and pytest blocks sockets.             |
 | **DB integration**     | `apps/api/src/**/pg-repository.test.ts`                                                             | vitest                                                                        | `ci.yml` `api` job, with a `postgres` service container (`DATABASE_URL`)                                                                        | Local Postgres only. Skipped when `DATABASE_URL` is unset.                        |
 | **System integration** | `tests/integration/`                                                                                | vitest project `integration`                                                  | `ci.yml` `containers` job, against the compose stack. Also `integration-azure.yml`, against a CI-run namespace on the test AKS cluster.         | Only the stack under test (`BBM_*` URLs). No third-party calls.                   |
+| **Pipeline (T18)**     | `tests/integration/pipeline.test.ts`                                                                | vitest project `integration`, opt-in with `BBM_PIPELINE=1`                    | `integration-azure.yml` (CI-run namespace with the analysis worker and the Kata PoC sandbox, ADR 0004). Not in `ci.yml`'s compose job.          | API under test only. Takes minutes (Slither warm-up, sandbox node scale-up).      |
 | **Regression**         | `tests/regression/` (API goldens), `contracts/.gas-snapshot`, `packages/shared/schema` drift        | vitest project `regression`, `forge snapshot --check`, `git diff --exit-code` | `ci.yml`: `containers` job (goldens), `contracts` job (gas), `shared` job (schema)                                                              | Stack under test only (goldens). The other two checks are offline.                |
 | **Smoke**              | `tests/smoke/`                                                                                      | vitest project `smoke`                                                        | `ci.yml` `containers` job. In Azure: after every CI-run / preview namespace deploy and after `deploy.yml` / `env-power resume` on staging/prod. | Stack under test only. Read-only unless `BBM_SMOKE_WRITE=1` (never set for prod). |
 | **E2E**                | `tests/e2e/`                                                                                        | Playwright (chromium)                                                         | `ci.yml` `containers` job (compose stack). Also `integration-azure.yml`, against the CI-run namespace's host                                    | Browser → web under test only                                                     |
@@ -40,6 +41,30 @@ pnpm stack:down
 The root `test:*` scripts forward to
 `pnpm --filter @bbm/system-tests run <script>`.
 
+### Pipeline tier (upload → findings → claim → PoC verdict)
+
+`integration/pipeline.test.ts` drives the whole analysis pipeline through the API, in no-chain
+mode (no wallet sign-in or stake: without `CHAIN_RPC_URL` the API takes `auditorId` from the
+request and skips the stake gate): it uploads `Vault.sol`, waits for a `Flagged` `reentrancy-eth`
+finding (≤ 5 min), claims the contract, submits `PoC_pass.t.sol` and waits for `Verified`
+(≤ 12 min: on AKS the Kata sandbox node scales up from zero first), then submits `PoC_fail.t.sol`
+against another finding (or a second contract) and waits for `Rejected`. The fixtures are the
+worker's (`workers/analysis/tests/fixtures/{Vault.sol,pocs/}`), shared with
+`scripts/demo-pipeline.sh`. It is skipped unless `BBM_PIPELINE=1`, because it needs the analysis
+worker with a sandbox backend and takes minutes. Locally it runs against the compose stack with
+the sandbox overlay (README "Live analysis pipeline"; needs `workers/analysis/.env` for the LLM):
+
+```sh
+docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build --wait db api analysis
+BBM_PIPELINE=1 pnpm test:integration -- pipeline        # about 2-4 minutes on a warm worker
+```
+
+On AKS the same test runs in `integration-azure.yml` against the CI-run namespace (see below). To
+point it at another namespace or env with analysis and the sandbox enabled:
+`BBM_API_URL=https://<host> BBM_PIPELINE=1 pnpm test:integration -- pipeline`.
+
 ### On-chain lifecycle (manual)
 
 `e2e/lifecycle.spec.ts` drives the full on-chain lifecycle in the browser:
@@ -62,18 +87,19 @@ pnpm demo:lifecycle            # the same two paths from the command line; print
 The defaults match the compose ports, so you only set these to target
 something else.
 
-| Var                    | Default                      | Used by                                                          |
-| ---------------------- | ---------------------------- | ---------------------------------------------------------------- |
-| `BBM_API_URL`          | `http://localhost:3001`      | integration, regression, smoke, plus the globalSetup health wait |
-| `BBM_WEB_URL`          | `http://localhost:3000`      | integration (proxy), smoke, e2e (`baseURL`)                      |
-| `BBM_ANALYSIS_URL`     | `http://localhost:8000`      | integration, smoke                                               |
-| `BBM_RPC_URL`          | `http://localhost:8545`      | integration/chain                                                |
-| `BBM_DEPLOYMENTS_FILE` | `.ci/deployments/31337.json` | integration/chain. The tests skip when the file is missing.      |
-| `BBM_SKIP_ANALYSIS`    | unset                        | `1` skips analysis checks. Analysis is internal-only on AKS.     |
-| `BBM_SMOKE_WRITE`      | unset                        | `1` adds smoke's create+read round-trip (CI, non-prod deploys)   |
-| `BBM_SMOKE_READONLY`   | unset                        | `1` forces read-only even when `BBM_SMOKE_WRITE=1`               |
-| `BBM_WAIT_MS`          | `30000`                      | How long globalSetup waits for `GET /health`                     |
-| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter               |
+| Var                    | Default                      | Used by                                                                                 |
+| ---------------------- | ---------------------------- | --------------------------------------------------------------------------------------- |
+| `BBM_API_URL`          | `http://localhost:3001`      | integration, regression, smoke, plus the globalSetup health wait                        |
+| `BBM_WEB_URL`          | `http://localhost:3000`      | integration (proxy), smoke, e2e (`baseURL`)                                             |
+| `BBM_ANALYSIS_URL`     | `http://localhost:8000`      | integration, smoke                                                                      |
+| `BBM_RPC_URL`          | `http://localhost:8545`      | integration/chain                                                                       |
+| `BBM_DEPLOYMENTS_FILE` | `.ci/deployments/31337.json` | integration/chain. The tests skip when the file is missing.                             |
+| `BBM_SKIP_ANALYSIS`    | unset                        | `1` skips the direct `/analyze` checks. Analysis is internal-only on AKS.               |
+| `BBM_PIPELINE`         | unset                        | `1` runs integration/pipeline (upload → PoC verdict through the API; needs the sandbox) |
+| `BBM_SMOKE_WRITE`      | unset                        | `1` adds smoke's create+read round-trip (CI, non-prod deploys)                          |
+| `BBM_SMOKE_READONLY`   | unset                        | `1` forces read-only even when `BBM_SMOKE_WRITE=1`                                      |
+| `BBM_WAIT_MS`          | `30000`                      | How long globalSetup waits for `GET /health`                                            |
+| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter                                      |
 
 The vitest globalSetup fails fast with a clear message if the API isn't
 reachable. Without it, every test would time out separately.
@@ -112,16 +138,20 @@ previews are namespaces on the test AKS cluster, deployed by
      first if it is paused.
   2. Exports `BBM_API_URL` and `BBM_WEB_URL`, both
      `https://run-<run_id>-<attempt>.test.<zone>` (web, `/api` and `/health`
-     share one host), and `BBM_SKIP_ANALYSIS=1`. Analysis has no external
-     ingress. There is no chain, so the chain tests skip on the missing
-     deployments file.
+     share one host), `BBM_SKIP_ANALYSIS=1` (analysis has no external
+     ingress, so the direct `/analyze` tests skip) and `BBM_PIPELINE=1` (the
+     namespace runs the analysis worker and the Kata PoC sandbox, so the
+     pipeline tier runs through the API). There is no chain, so the chain
+     tests skip on the missing deployments file and the PoC path runs in
+     no-chain mode.
   3. Runs `pnpm test:smoke` (with `BBM_SMOKE_WRITE=1`), `pnpm test:integration`
-     and `pnpm test:e2e`. Nightly, or when dispatched with `load: true`, it
+     (incl. the pipeline tier, up to ~25 min on a cold sandbox pool) and
+     `pnpm test:e2e`. Nightly, or when dispatched with `load: true`, it
      also runs k6 with `BASE_URL=$BBM_API_URL`.
   4. Always deletes the namespace, unless dispatched with `keep_env`.
-- **`preview.yml`** (namespace `pr-<n>`, mocked web) runs `pnpm test:smoke`
-  against `https://pr-<n>.preview.<zone>` with `BBM_SMOKE_WRITE=1` and
-  `BBM_SKIP_ANALYSIS=1`.
+- **`preview.yml`** (namespace `pr-<n>`, mocked web, no analysis or sandbox)
+  runs `pnpm test:smoke` against `https://pr-<n>.preview.<zone>` with
+  `BBM_SMOKE_WRITE=1` and `BBM_SKIP_ANALYSIS=1`.
 - **`deploy.yml` / `env-power.yml resume`** (AKS staging/prod) run
   `pnpm test:smoke` with `BBM_API_URL` / `BBM_WEB_URL` set to the ingress
   host (`https://<env>.<zone>`). Non-prod sets `BBM_SMOKE_WRITE=1`; all AKS
@@ -133,6 +163,10 @@ The CI commands are:
 # smoke (any env)
 BBM_API_URL=... BBM_WEB_URL=... BBM_SKIP_ANALYSIS=1 [BBM_SMOKE_WRITE=1] \
   pnpm --filter @bbm/system-tests run test:smoke
+
+# integration incl. the pipeline tier (CI-run namespaces: analysis + sandbox on)
+BBM_API_URL=... BBM_WEB_URL=... BBM_SKIP_ANALYSIS=1 BBM_PIPELINE=1 \
+  pnpm --filter @bbm/system-tests run test:integration
 
 # e2e (CI caches ~/.cache/ms-playwright per Playwright version; the script
 # only falls back to apt for system libs if Chromium can't launch)
