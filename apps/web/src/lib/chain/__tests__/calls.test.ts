@@ -201,6 +201,19 @@ describe("chainCalls", () => {
 
 /** BountyEscrow.bounties(id) as viem returns it: the struct's fields in order;
  * index 3 is the state (None, Open, Paid, Closed). */
+describe("readBounty", () => {
+  it("reads who funded the bounty under the contract's id, and its state", async () => {
+    const client = fakeClient({ read: vi.fn(async () => closedBounty(1)) });
+    await expect(chainCalls(INFO, client).readBounty("contract_1")).resolves.toEqual({
+      developer: "0x0000000000000000000000000000000000000001",
+      state: 1,
+    });
+    expect(client.read).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: "bounties", args: [onchainId("contract_1")] }),
+    );
+  });
+});
+
 function closedBounty(state: number): readonly unknown[] {
   return [
     "0x0000000000000000000000000000000000000001",

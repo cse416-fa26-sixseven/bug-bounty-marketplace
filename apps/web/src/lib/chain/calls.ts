@@ -44,7 +44,14 @@ export interface TxClient {
 }
 
 /** BountyEscrow.BountyState, in the contract's order. */
-const BOUNTY_STATE = { None: 0, Open: 1, Paid: 2, Closed: 3 } as const;
+export const BOUNTY_STATE = { None: 0, Open: 1, Paid: 2, Closed: 3 } as const;
+
+/** A bounty as BountyEscrow stores it under a contract's id. */
+export interface OnchainBounty {
+  developer: Address;
+  /** One of BOUNTY_STATE. */
+  state: number;
+}
 
 /** Plain-English text for the contracts' custom errors users can hit. */
 const READABLE_REVERTS: Record<string, string> = {
@@ -153,14 +160,18 @@ export function chainCalls(
   const bountyEscrow = info.addresses.bountyEscrow as Address;
   const disputeResolution = info.addresses.disputeResolution as Address;
 
-  async function bountyState(contractId: string): Promise<number> {
+  async function readBounty(contractId: string): Promise<OnchainBounty> {
     const bounty = (await client.read({
       address: bountyEscrow,
       abi: bountyEscrowAbi as Abi,
       functionName: "bounties",
       args: [onchainId(contractId)],
     })) as readonly unknown[];
-    return Number(bounty[3]);
+    return { developer: bounty[0] as Address, state: Number(bounty[3]) };
+  }
+
+  async function bountyState(contractId: string): Promise<number> {
+    return (await readBounty(contractId)).state;
   }
 
   /** Sends `request`. When the simulation reverts with one of `doneErrors`
@@ -201,6 +212,8 @@ export function chainCalls(
       ),
     /** True once the contract's bounty exists on-chain. */
     isFunded: async (contractId: string) => (await bountyState(contractId)) !== BOUNTY_STATE.None,
+    /** Who funded the bounty under the contract's id, and its state. */
+    readBounty,
     stake: (amountWei: string) =>
       send({
         address: auditorStaking,
