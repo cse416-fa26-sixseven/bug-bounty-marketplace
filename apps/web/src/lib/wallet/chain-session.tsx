@@ -4,13 +4,18 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { signIn } from "@/lib/api/auth";
 import { ANVIL_ACCOUNTS } from "@/lib/chain/accounts";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isInjectedChain, isLocalChain, useChainInfo } from "@/lib/chain/config";
 import { useRoleStore } from "@/lib/role/store";
+import { restoreInjected, watchInjected } from "./injected";
 
 /**
- * On the local chain, keeps the API session in step with the selected role:
- * signs in with the role's anvil account on load and on every role switch,
- * then refetches so pages show that account's data. Renders nothing.
+ * Keeps the API session in step with who is signing. Renders nothing.
+ *
+ * - Local chain: signs in with the selected role's anvil account on load and
+ *   on every role switch, then refetches so pages show that account's data.
+ * - Injected wallet (another chain): restores a still-valid session for the
+ *   wallet's shared account without prompting, and follows accountsChanged /
+ *   chainChanged. Signing in is the user's Connect click.
  */
 export function ChainSession() {
   const info = useChainInfo();
@@ -30,6 +35,15 @@ export function ChainSession() {
       cancelled = true;
     };
   }, [local, role, queryClient]);
+
+  useEffect(() => {
+    if (!isInjectedChain(info)) return;
+    const refetch = () => void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "chain" });
+    void restoreInjected(info)
+      .then(refetch)
+      .catch((err: unknown) => console.error("wallet restore failed", err));
+    return watchInjected(info, refetch);
+  }, [info, queryClient]);
 
   return null;
 }

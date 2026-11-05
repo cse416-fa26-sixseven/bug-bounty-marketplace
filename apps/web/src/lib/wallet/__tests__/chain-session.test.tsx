@@ -8,7 +8,11 @@ import { useRoleStore } from "@/lib/role/store";
 import { ANVIL_ACCOUNTS } from "@/lib/chain/accounts";
 import { parseSiweMessage } from "viem/siwe";
 import { siweMessage } from "@/test/siwe";
+import { fakeEthereum, installEthereum } from "@/test/fake-ethereum";
+import { useInjectedStore } from "../injected";
 import { ChainSession } from "../chain-session";
+
+const KEY = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a" as const;
 
 const CHAIN = {
   configured: true,
@@ -68,5 +72,42 @@ describe("ChainSession", () => {
     );
     await new Promise((r) => setTimeout(r, 50));
     expect(called).toBe(false);
+  });
+
+  it("on a testnet, restores the injected wallet's session without signing and follows its events", async () => {
+    const fake = fakeEthereum({ key: KEY, chainId: 11155111 });
+    fake.state.authorized = true;
+    const uninstall = installEthereum(fake.provider);
+    useInjectedStore.setState({ address: null, chainId: null, error: null, connecting: false });
+    const { rpcUrl: _rpcUrl, ...rest } = CHAIN;
+    let logins = 0;
+    server.use(
+      http.get("*/api/chain", () => HttpResponse.json({ ...rest, chainId: 11155111 })),
+      http.get("*/api/auth/me", () => HttpResponse.json({ address: fake.account.address })),
+      http.post("*/api/auth/login", () => {
+        logins += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <ChainSession />
+      </QueryClientProvider>,
+    );
+    try {
+      await waitFor(() => expect(useInjectedStore.getState().address).toBe(fake.account.address));
+      expect(logins).toBe(0);
+      expect(fake.state.calls.map((c) => c.method)).not.toContain("personal_sign");
+
+      act(() => fake.emit("chainChanged", "0x1"));
+      expect(useInjectedStore.getState().error).toMatch(/Wrong network/);
+
+      view.unmount();
+      act(() => fake.emit("chainChanged", "0xaa36a7"));
+      expect(useInjectedStore.getState().chainId).toBe(1);
+    } finally {
+      uninstall();
+    }
   });
 });

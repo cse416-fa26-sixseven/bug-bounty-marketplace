@@ -48,6 +48,8 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const profileQuery = useQuery({
     queryKey: ["auditor-profile", auditorId],
     queryFn: () => auditorApi.getProfile(auditorId),
+    // Testnet mode before a wallet is connected: there is no auditor yet.
+    enabled: auditorId !== "",
   });
 
   const refetchFindings = () =>
@@ -55,6 +57,9 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const refetchProfile = () =>
     void queryClient.invalidateQueries({ queryKey: ["auditor-profile", auditorId] });
 
+  if (auditorId === "") {
+    return <p className="text-slate-400">Connect your wallet to review this contract.</p>;
+  }
   if (contractQuery.isLoading || findingsQuery.isLoading || profileQuery.isLoading) {
     return <p className="text-slate-400">Loading contract...</p>;
   }

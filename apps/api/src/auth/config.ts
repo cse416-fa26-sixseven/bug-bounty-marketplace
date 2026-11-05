@@ -11,6 +11,26 @@ export interface AuthConfig {
   secureCookie: boolean;
 }
 
+/**
+ * Without AUTH_ORIGIN the SIWE domain comes from the request, which any client
+ * can forge. With a chain (sign-in on) that is refused under
+ * NODE_ENV=production (throws) and only warned about otherwise (returns the
+ * warning). Returns null when there is nothing to say.
+ */
+export function checkAuthOrigin(
+  config: AuthConfig,
+  env: NodeJS.ProcessEnv,
+  chainConfigured: boolean,
+): string | null {
+  if (!chainConfigured || config.origin) return null;
+  if (env.NODE_ENV === "production") {
+    throw new Error(
+      "AUTH_ORIGIN is required with a chain in production: set it to the web app's public origin (e.g. https://bountyguard.example)",
+    );
+  }
+  return "AUTH_ORIGIN is unset: sign-in messages name the domain each request comes from (local dev only)";
+}
+
 /** Reads AUTH_ORIGIN and COOKIE_SECURE. Throws on an AUTH_ORIGIN that is not
  * a bare http(s) origin. */
 export function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {

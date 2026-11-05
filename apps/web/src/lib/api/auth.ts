@@ -54,6 +54,21 @@ export function signIn(signer: MessageSigner): Promise<string> {
   return serialized(() => login(signer));
 }
 
+/** The API session's address, or null when not signed in. */
+export async function sessionAddress(): Promise<string | null> {
+  try {
+    return (await getJson("/api/auth/me", SessionSchema)).address;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return null;
+    throw err;
+  }
+}
+
+/** Clears the API session cookie. */
+export async function signOut(): Promise<void> {
+  await postJson("/api/auth/logout", {}, z.unknown());
+}
+
 /** Makes sure the API session belongs to `signer`, signing in again if it is
  * missing or belongs to another account (another role, or another tab). */
 export function ensureSignedIn(signer: MessageSigner): Promise<void> {
