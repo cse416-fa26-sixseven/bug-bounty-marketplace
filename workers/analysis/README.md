@@ -28,8 +28,12 @@ image pre-installs them. A pragma no version satisfies fails with
 | `POLL_INTERVAL_SECONDS` | `1` | Wait between polls when the queue is empty. |
 | `JOB_LEASE_SECONDS` / `JOB_MAX_ATTEMPTS` | `600` / `3` | Lease before a crashed job is retried; attempts before it fails. |
 | `WORKER_CONCURRENCY` | `2` | Jobs processed at once. |
-| `SANDBOX_ENABLED` | unset | `true`: also claim sandbox jobs and re-run auditors' PoCs in `bbm-sandbox` containers (needs the Docker socket; see `docker-compose.sandbox.yml` and [workers/sandbox](../sandbox/README.md)). |
-| `SANDBOX_TIMEOUT_SECONDS` / `CHALLENGE_WINDOW_SECONDS` | `120` / `86400` | PoC time limit; how long a Verified finding can be disputed. |
+| `SANDBOX_ENABLED` | unset | `true`: also claim sandbox jobs and re-run auditors' PoCs in the `bbm-sandbox` image (see [workers/sandbox](../sandbox/README.md)). |
+| `SANDBOX_BACKEND` | `docker` | `docker`: throwaway containers on the Docker socket (`docker-compose.sandbox.yml`). `kubernetes`: one Kubernetes Job per PoC in `SANDBOX_NAMESPACE` (AKS; see below). |
+| `SANDBOX_IMAGE` | `bbm-sandbox:latest` | Image of the PoC container / Job pod. |
+| `SANDBOX_TIMEOUT_SECONDS` / `CHALLENGE_WINDOW_SECONDS` | `120` / `86400` | In-container PoC time limit (`timeout -s KILL`, both backends); how long a Verified finding can be disputed. |
+| `SANDBOX_NAMESPACE` | unset | kubernetes: namespace the Jobs and Secrets are created in. Required with that backend (otherwise sandbox jobs fail as retryable infra errors and the worker logs why at start-up). |
+| `SANDBOX_JOB_TEMPLATE` | `/etc/bbm/sandbox/job.yaml` | kubernetes: the Job template (the chart's `bbm-sandbox-job-template` ConfigMap, mounted into the pod). |
 
 Locally, put these in `workers/analysis/.env` (git-ignored; see
 `.env.example`); the service and the compose stack read it.
@@ -39,6 +43,40 @@ jobs; a host-run poller (e.g. `uv run uvicorn ...` with `.env`) next to the
 compose `analysis` service would claim jobs whose sources live in the compose
 volume and fail them as "Source file not found". Leave `DATABASE_URL` unset in
 `.env` when the compose stack is running.
+
+### Sandbox on Kubernetes (`SANDBOX_BACKEND=kubernetes`)
+
+On AKS the worker holds no Docker socket. `src/analysis/sandbox_k8s.py` runs
+each PoC as a Kubernetes **Job** instead, with the same verdict rules as the
+Docker backend (`src/analysis/sandbox.py`), and the same script inside the
+container. Per PoC it:
+
+1. loads the Job template from `SANDBOX_JOB_TEMPLATE` (PyYAML) and fills in
+   only `metadata.name` (`poc-<sanitised id>`, a deterministic DNS label),
+   `metadata.namespace`, the container `image` and `command`, and the
+   `project` volume's `secret.secretName`; runtimeClass, node selector,
+   security context, resources, `activeDeadlineSeconds` and the rest are the
+   chart's;
+2. deletes a leftover Job/Secret of the same name (a retry after a crash),
+   waits for the Job to be gone, stores the project tar in Secret
+   `poc-<id>` (key `project.tar`, mounted read-only at `/in`), creates the
+   Job and gives the Secret an `ownerReference` to it;
+3. polls the Job every 2 s until it is `Complete` or `Failed`, waiting at
+   most the template's `activeDeadlineSeconds` + 60 s (the sandbox node pool
+   scales from zero, so the first PoC after an idle period waits for a node;
+   `JOB_LEASE_SECONDS` is 900 on AKS so the job lease outlives this wait);
+4. reads the container's exit code and the pod log. No
+   `bbm-sandbox-started` line, a deadline hit, or an API error is an infra
+   error (job retried); otherwise exit 137 → `Failed` naming both limits,
+   exit 0 with a passing suite → `Passed`, else `Failed`;
+5. deletes the Job (propagation `Background`) and the Secret in a `finally`.
+
+It uses in-cluster config (the pod's ServiceAccount token) through the
+official `kubernetes` client, behind the small `KubeApi` protocol; the unit
+tests (`tests/test_sandbox_k8s.py`) use an in-memory fake and open no
+socket. The RBAC the ServiceAccount needs (Jobs, Pods, pods/log, Secrets in
+the sandbox namespace only) is in the Helm chart. Design:
+[sandbox on AKS spec](../../docs/superpowers/specs/2026-11-05-sandbox-aks-design.md).
 
 ## Develop
 

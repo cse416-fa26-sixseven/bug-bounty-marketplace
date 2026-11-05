@@ -86,11 +86,17 @@ def run(settings: Settings, stop: threading.Event, explainer: Explainer | None =
     applied its migrations yet) is logged and retried after a pause."""
     explainer = explainer if explainer is not None else make_explainer(settings)
     log.info(
-        "worker started (jobs %s, concurrency %d, LLM %s)",
+        "worker started (jobs %s, concurrency %d, LLM %s, sandbox backend %s)",
         "/".join(settings.job_kinds),
         settings.worker_concurrency,
         "on" if settings.llm_configured else "off: Slither text only",
+        settings.sandbox_backend,
     )
+    if settings.sandbox_enabled and settings.sandbox_config_error:
+        log.error(
+            "sandbox misconfigured, sandbox jobs will fail as infra errors: %s",
+            settings.sandbox_config_error,
+        )
     in_flight: set[Future] = set()
     with ThreadPoolExecutor(settings.worker_concurrency) as pool:
         while not stop.is_set():

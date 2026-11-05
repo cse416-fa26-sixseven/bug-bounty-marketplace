@@ -1,8 +1,9 @@
 # workers/sandbox
 
-Docker image that auditors' Foundry PoCs run in (`bbm-sandbox:latest`). The
-analysis worker (`workers/analysis`) starts one container per PoC, pipes the
-contract and PoC in as a tar on stdin, and runs `forge test` with:
+Docker image that auditors' Foundry PoCs run in (`bbm-sandbox:latest` locally,
+`<acr>/bbm/sandbox:<tag>` on AKS). The analysis worker (`workers/analysis`)
+starts one container per PoC, hands it the contract and PoC as a tar (on
+stdin with Docker, from a Secret on Kubernetes), and runs `forge test` with:
 
 - no network (`--network none`)
 - 1 GB memory, 1 CPU, at most 256 processes
@@ -56,6 +57,41 @@ docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
 ```
 
 The analysis image stays non-root (uid 10001); `group_add` gives it the
-socket's group. In AKS the plan is Kata-isolated pods instead of the socket
-(see `docs/adr/0001-azure-environment-topology.md`, §8).
+socket's group.
+
+## Running it on AKS
+
+On the clusters there is no Docker socket. The analysis Deployment runs with
+`SANDBOX_BACKEND=kubernetes` and executes each PoC as a Kubernetes **Job** in
+the release's `<namespace>-sandbox` namespace, on the Kata (`KataVmIsolation`)
+`sandbox` node pool, so every PoC gets its own lightweight VM rather than a
+shared kernel. Per PoC the worker:
+
+1. builds the same tar as locally and stores it in a Secret `poc-<id>`
+   (key `project.tar`), mounted read-only at `/in` in the pod;
+2. creates Job `poc-<id>` from the template the Helm chart mounts at
+   `/etc/bbm/sandbox/job.yaml`, filling in only the name, namespace, image,
+   command (`tar -x -f /in/project.tar` then the usual `timeout -s KILL
+   <SANDBOX_TIMEOUT_SECONDS> forge test`) and the Secret name. The template
+   owns the isolation: `runtimeClassName: kata-vm-isolation`, the sandbox
+   pool's nodeSelector/toleration, no ServiceAccount token, no service links,
+   `runAsNonRoot` uid 10001, read-only root filesystem with a 256 MiB
+   emptyDir at `/tmp`, all capabilities dropped, `RuntimeDefault` seccomp,
+   1 CPU / 1 GiB / 1 GiB ephemeral limits, `backoffLimit: 0`,
+   `activeDeadlineSeconds: 600` and `ttlSecondsAfterFinished`. The namespace
+   enforces PSA `restricted`, a ResourceQuota and a deny-all NetworkPolicy
+   (no DNS either), so "no network" holds on every environment;
+3. polls the Job until it completes or fails (at most `activeDeadlineSeconds`
+   + 60 s: the pool scales from zero, so the first PoC after an idle period
+   waits a few minutes for a node), reads the pod log and the container's
+   exit code, and applies the verdict rules above. A Job that hits its
+   deadline before the PoC ran (no `bbm-sandbox-started` line, pod still
+   Pending) is an infra error and the job is retried, never a PoC failure;
+4. deletes the Job (and its pod) and the Secret, whatever happened; the
+   Secret also carries an `ownerReference` to the Job as a backstop.
+
+The analysis ServiceAccount's only Kubernetes rights are a Role in that
+sandbox namespace (Jobs, Pods, pods/log, Secrets). See
+`docs/superpowers/specs/2026-11-05-sandbox-aks-design.md` and
+`docs/adr/0004-*.md`; the chart side is in `deploy/helm/README.md`.
 

@@ -53,3 +53,37 @@ def test_chain_enabled_flag():
     assert Settings.from_env({}).chain_enabled is False
     assert Settings.from_env({"CHAIN_ENABLED": "true"}).chain_enabled is True
     assert Settings.from_env({"CHAIN_ENABLED": "0"}).chain_enabled is False
+
+
+def test_sandbox_backend_defaults_to_docker():
+    s = Settings.from_env({})
+    assert s.sandbox_backend == "docker"
+    assert s.sandbox_namespace is None
+    assert str(s.sandbox_job_template) == "/etc/bbm/sandbox/job.yaml"
+    assert s.sandbox_config_error is None
+
+
+def test_sandbox_kubernetes_settings_are_parsed():
+    s = Settings.from_env(
+        {
+            "SANDBOX_BACKEND": "Kubernetes",
+            "SANDBOX_NAMESPACE": "bbm-sandbox",
+            "SANDBOX_JOB_TEMPLATE": "/tmp/job.yaml",
+        }
+    )
+    assert s.sandbox_backend == "kubernetes"
+    assert s.sandbox_namespace == "bbm-sandbox"
+    assert str(s.sandbox_job_template) == "/tmp/job.yaml"
+    assert s.sandbox_config_error is None
+
+
+def test_kubernetes_backend_without_a_namespace_is_a_config_error():
+    s = Settings.from_env({"SANDBOX_BACKEND": "kubernetes"})
+    assert s.sandbox_config_error == "SANDBOX_BACKEND=kubernetes needs SANDBOX_NAMESPACE"
+    blank = Settings.from_env({"SANDBOX_BACKEND": "kubernetes", "SANDBOX_NAMESPACE": "  "})
+    assert blank.sandbox_config_error == "SANDBOX_BACKEND=kubernetes needs SANDBOX_NAMESPACE"
+
+
+def test_unknown_sandbox_backend_is_a_config_error():
+    s = Settings.from_env({"SANDBOX_BACKEND": "podman"})
+    assert s.sandbox_config_error == "SANDBOX_BACKEND='podman' is not one of docker, kubernetes"

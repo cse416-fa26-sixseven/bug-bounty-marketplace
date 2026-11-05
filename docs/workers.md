@@ -20,21 +20,38 @@ the pnpm workspace — each service manages its own toolchain.
 
 ## Services
 
-| Service                            | Language                  | Status   | Purpose                                                        |
-| ---------------------------------- | ------------------------- | -------- | -------------------------------------------------------------- |
-| [`analysis`](../workers/analysis/) | Python 3.12 (uv, FastAPI) | skeleton | Slither static analysis + advisory LLM explanation of findings |
+| Service                            | Language                  | Status  | Purpose                                                                             |
+| ---------------------------------- | ------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| [`analysis`](../workers/analysis/) | Python 3.12 (uv, FastAPI) | running | Slither static analysis + advisory LLM explanation of findings; runs PoC sandboxes |
+| [`sandbox`](../workers/sandbox/)   | Docker image (Foundry)    | running | Offline Foundry image auditors' PoCs run in, one container / Kata Job per PoC      |
 
 ### `workers/analysis`
 
-Currently exposes `GET /health` (`{"status":"ok"}`) and a stub
-`POST /analyze` (`{contractId, source}` → `501`). See
-[`workers/analysis/README.md`](../workers/analysis/README.md).
+Exposes `GET /health` (`{"status":"ok"}`) and `POST /analyze`
+(`{contractId, source}` → findings), and runs the job poller that claims
+`analysis` and (with `SANDBOX_ENABLED`) `sandbox` jobs from the Postgres
+`jobs` table. See [`workers/analysis/README.md`](../workers/analysis/README.md).
 
 It runs as the `analysis` service in the compose stack (`pnpm stack:up`, port
-`8000`). CI's `analysis` job runs ruff, pytest and the generated-models drift
-check. On Azure (AKS) it is internal-only and off by default in the Helm chart
-(`analysis.enabled`, scaled by KEDA when on),
-so the system tests run there with `BBM_SKIP_ANALYSIS=1`.
+`8000`), where PoCs run in `bbm-sandbox` containers on the Docker socket
+(`SANDBOX_BACKEND=docker`, `docker-compose.sandbox.yml`). CI's `analysis` job
+runs ruff, pytest and the generated-models drift check.
+
+On Azure it runs as a Deployment on AKS in every environment (test, staging,
+prod; `analysis.enabled` in the Helm chart), internal-only (no route). There
+it uses the **Kubernetes sandbox backend** (`SANDBOX_BACKEND=kubernetes`,
+`src/analysis/sandbox_k8s.py`): each PoC becomes a Kubernetes Job in the
+release's `<namespace>-sandbox` namespace on the Kata-isolated `sandbox` node
+pool, built from a Job template the chart mounts at
+`/etc/bbm/sandbox/job.yaml`, with the project tar delivered through a Secret.
+The verdict rules are the Docker backend's; a Job that never runs the PoC
+(deadline while Pending, missing started marker, API error) is a retryable
+infra error. The pipeline system tests (`BBM_PIPELINE=1`) exercise this on
+the test cluster; the direct `/analyze` tests still need the internal
+Service, so `integration-azure.yml` keeps `BBM_SKIP_ANALYSIS=1`. Details:
+[`workers/sandbox/README.md`](../workers/sandbox/README.md) ("Running it on
+AKS") and the
+[sandbox on AKS spec](superpowers/specs/2026-11-05-sandbox-aks-design.md).
 
 Run locally (uv installs Python 3.12 if needed):
 
@@ -74,11 +91,9 @@ docker run --rm -p 8000:8000 bbm-analysis
 
 **Planned (later branches).**
 
-- Real `/analyze` pipeline: run Slither in a sandbox (no network, resource
-  and time limits) → map detector results to the shared `Finding` schema
-  (initial status `Flagged`) → LLM plain-English `llmExplanation`, advisory
-  only (never changes status or payout).
-- The image will need Slither plus `solc-select` (and pinned `solc`
-  versions installed at build time, since runtime has no network).
+- Slither itself in an isolated Job (analysis jobs still run inside the
+  analysis pod).
+- Blob storage for uploads instead of the shared `bbm-sources` PVC the api
+  and analysis pods use on AKS.
 - Consume jobs from an Azure Storage Queue (`analysis-jobs`), scaled by KEDA,
-  instead of (or alongside) the synchronous HTTP endpoint.
+  instead of polling the Postgres `jobs` table.
