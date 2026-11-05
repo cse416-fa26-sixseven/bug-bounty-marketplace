@@ -26,6 +26,36 @@ or local disk via `SOURCE_STORAGE_DIR`). For a local Postgres, run
 `docker compose up -d db` and set
 `DATABASE_URL=postgres://bbm:bbm@localhost:5432/bbm`.
 
+## Sign-in (Sign-In with Ethereum)
+
+With `SESSION_SECRET` set (required once `CHAIN_RPC_URL` is), user routes act
+for the signed-in wallet. Sign-in follows
+[EIP-4361](https://eips.ethereum.org/EIPS/eip-4361), built with `viem/siwe`:
+
+| Route                   | Behaviour                                                                                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/nonce`  | JSON `{address}`. `{nonce, message}`: a SIWE message naming the web app's domain and URI, the address, the API's `CHAIN_ID`, a single-use nonce, `Issued At` and an `Expiration Time` 5 minutes on. `400` for a bad address. |
+| `POST /api/auth/login`  | JSON `{message, signature}` (optional `address`, which must match). Sets the `bbm_session` cookie and returns `{address}`. `401` when the nonce is unknown, spent or expired, or the domain, URI, chain or address differs.     |
+| `GET /api/auth/me`      | `{address}` of the session, or `401`.                                                                                                                                                                                           |
+| `POST /api/auth/logout` | Clears the cookie.                                                                                                                                                                                                              |
+
+**Which domain a message names.** With `AUTH_ORIGIN` set (e.g.
+`https://bountyguard.example`), every message names that origin, whatever the
+request says; set it in every deployment (Helm sets it to
+`https://<ingress.host>`). Without it the origin comes from the request: the
+browser's `Origin` header first (browsers send it on every POST, and the web
+app's `/api` proxy passes it through unchanged), then `Host`. The Next.js
+proxy rewrites `Host` to the API's and puts the page's in `X-Forwarded-Host`,
+which is believed only from a `TRUST_PROXY` proxy (Fastify's `request.host`).
+That fallback is for local development: a client can claim any origin, so
+only a fixed `AUTH_ORIGIN` lets the server refuse messages for another site.
+Login also checks that the request comes from the domain the message names.
+
+Nonces live in memory for 5 minutes (at most 5 open per address), so sign-in
+needs a single API replica. The session is an HMAC-signed cookie (address and
+expiry, 8 hours), `HttpOnly; SameSite=Lax`, plus `Secure` when `COOKIE_SECURE`
+is on.
+
 ## Environment variables
 
 | Variable                    | Default                                  | Effect                                                                                                                           |
@@ -43,6 +73,9 @@ or local disk via `SOURCE_STORAGE_DIR`). For a local Postgres, run
 | `RATE_LIMIT_UPLOAD_MAX`     | `20`                                     | Requests per 10 minutes to each of `POST /api/contracts` and `POST /api/auditor/poc`.                                            |
 | `RATE_LIMIT_AUTH_MAX`       | `60`                                     | Requests per minute to each of `POST /api/auth/nonce` and `POST /api/auth/login`.                                                |
 | `TRUST_PROXY`               | unset                                    | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is believed. Helm sets the AKS pod CIDR (the Gateway's pods).            |
+| `SESSION_SECRET`            | unset                                    | HMAC key (16+ characters) for session cookies. Enables sign-in; required with `CHAIN_RPC_URL`.                                   |
+| `AUTH_ORIGIN`               | unset                                    | The web app's public origin, which every SIWE message names. Unset: taken from each request (local dev only, the API warns).     |
+| `COOKIE_SECURE`             | `true` if `AUTH_ORIGIN` is `https`       | Marks the session cookie `Secure`. Leave it off for the plain-http local demo.                                                   |
 
 Over a limit the API answers `429` with `Retry-After` and
 `{ "statusCode": 429, "error": "Too many requests; try again in N seconds" }`.

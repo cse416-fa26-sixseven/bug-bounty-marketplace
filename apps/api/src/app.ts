@@ -9,6 +9,10 @@ import type { ChainActions } from "./chain/actions.js";
 import type { ChainConfig } from "./chain/config.js";
 import { registerChainRoutes } from "./chain/routes.js";
 import { Auth } from "./auth/session.js";
+import type { AuthConfig } from "./auth/config.js";
+
+/** anvil's chain id, which sign-in names when no chain is configured. */
+const LOCAL_CHAIN_ID = 31337;
 import { registerAuthRoutes } from "./auth/routes.js";
 import type { BountyEscrowPort } from "./chain/bounty-escrow.js";
 import { registerContractLifecycleRoutes } from "./contracts/lifecycle-routes.js";
@@ -52,8 +56,11 @@ export interface AppOptions {
    * browser by GET /api/chain. */
   chainConfig?: ChainConfig | null;
   /** HMAC secret for session cookies (SESSION_SECRET). With it, the API serves
-   * signed-message sign-in and user routes act for the signed-in address. */
+   * Sign-In with Ethereum and user routes act for the signed-in address. */
   sessionSecret?: string;
+  /** Sign-in origin and cookie settings (AUTH_ORIGIN, COOKIE_SECURE; see
+   * loadAuthConfig). Defaults to the per-request origin and a plain cookie. */
+  authConfig?: AuthConfig;
   /** Clock for sign-in; defaults to the pipeline config's clock. */
   now?: () => Date;
   /** BountyEscrow reads for the developer lifecycle routes. With it and a
@@ -103,7 +110,16 @@ function registerRoutes(app: FastifyInstance, options: AppOptions): void {
   const config = options.config ?? loadPipelineConfig();
 
   registerChainRoutes(app, { config: options.chainConfig ?? null });
-  const auth = options.sessionSecret ? new Auth(options.sessionSecret, options.now ?? config.now) : null;
+  const auth = options.sessionSecret
+    ? new Auth({
+        secret: options.sessionSecret,
+        now: options.now ?? config.now,
+        // Sign-in only matters in chain mode; without a chain, name the local one.
+        chainId: options.chainConfig?.chainId ?? LOCAL_CHAIN_ID,
+        origin: options.authConfig?.origin ?? null,
+        secureCookie: options.authConfig?.secureCookie ?? false,
+      })
+    : null;
   if (auth) registerAuthRoutes(app, auth);
   // Chain mode: identities come from the session, user transactions are confirmed on-chain.
   const identity = auth && options.bountyEscrow ? auth : null;

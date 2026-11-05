@@ -35,7 +35,8 @@ trap 'rm -f "$JAR"' EXIT
 echo "== Developer signs in, uploads Vault.sol and funds 1 ETH"
 MESSAGE=$(curl -sf -H 'content-type: application/json' -d "{\"address\":\"$DEV\"}" "$API/api/auth/nonce" | jq -r .message)
 SIGNATURE=$(cast_local wallet sign --private-key "$DEV_KEY" "$MESSAGE")
-curl -sf -c "$JAR" -H 'content-type: application/json' -d "{\"address\":\"$DEV\",\"signature\":\"$SIGNATURE\"}" \
+curl -sf -c "$JAR" -H 'content-type: application/json' \
+  -d "$(jq -n --arg message "$MESSAGE" --arg signature "$SIGNATURE" '{$message, $signature}')" \
   "$API/api/auth/login" >/dev/null || die "developer sign-in failed"
 CONTRACT=$(curl -sf -b "$JAR" -F "file=@$FIXTURES/Vault.sol" -F bountyAmount=1000000000000000000 \
   -F deadline=2030-01-01T00:00:00.000Z "$API/api/contracts" | jq -r .id)
