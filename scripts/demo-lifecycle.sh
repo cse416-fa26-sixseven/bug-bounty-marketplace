@@ -6,7 +6,7 @@
 #      arbiter rules against the auditor -> Rejected, stake slashed by half;
 #      the auditor then withdraws what is left.
 # Users sign their own transactions with anvil's dev accounts (cast, inside the
-# contracts image) and sign in to the API with a signed message. Prints
+# contracts image) and sign in to the API with a signed SIWE message. Prints
 # LIFECYCLE OK. Can run again on the same stack (it tops the stake back up).
 # Needs curl (7.76+), jq and docker.
 set -euo pipefail
@@ -69,7 +69,8 @@ sign_in() { # key address jar
   message=$(api -H 'content-type: application/json' -d "{\"address\":\"$2\"}" "$API/api/auth/nonce" | jq -r .message) \
     || die "sign-in nonce failed for $2"
   signature=$(cast_in wallet sign --private-key "$1" "$message") || die "signing failed for $2"
-  api -c "$3" -H 'content-type: application/json' -d "{\"address\":\"$2\",\"signature\":\"$signature\"}" \
+  api -c "$3" -H 'content-type: application/json' \
+    -d "$(jq -n --arg message "$message" --arg signature "$signature" '{$message, $signature}')" \
     "$API/api/auth/login" >/dev/null || die "sign-in failed for $2"
 }
 

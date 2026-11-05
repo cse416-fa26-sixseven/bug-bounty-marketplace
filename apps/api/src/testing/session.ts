@@ -14,7 +14,7 @@ export async function signIn(app: FastifyInstance, account: PrivateKeyAccount): 
   const login = await app.inject({
     method: "POST",
     url: "/api/auth/login",
-    payload: { address: account.address, signature: await account.signMessage({ message }) },
+    payload: { message, signature: await account.signMessage({ message }) },
   });
   if (login.statusCode !== 200) throw new Error(`sign-in failed: ${login.body}`);
   return String(login.headers["set-cookie"]).split(";")[0]!;
