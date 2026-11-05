@@ -563,6 +563,7 @@ has "up: home region from bootstrap.tfvars" 'home region: northcentralus (tfstat
 has "up: allowed-locations policy checked" 'region northcentralus is allowed by the subscription'
 has "up: no zones in northcentralus → ingress_pip_zones = []" 'env test: northcentralus has no availability zones: ingress_pip_zones = []'
 if grep -qF 'filled in for subscription' <<<"$out"; then bad "up: no tenant warning on placeholder"; else ok_ "up: no tenant warning on placeholder"; fi
+if grep -qF 'ERROR:' <<<"$out"; then bad "up: healthy run prints no ERROR"; else ok_ "up: healthy run prints no ERROR"; fi
 eq "up: dry-run left the tree untouched" "$(snapshot)" "$snap0"
 mut=$(grep -E '^az .*(import|secret set|purge|create|delete( |$)| update| register)|^gh (variable|api -X)|^terraform .*(apply|destroy|init|plan)|^(kubectl|kubelogin|helm) ' "$LOG" || true)
 eq "up: no mutating CLI calls" "$mut" ""

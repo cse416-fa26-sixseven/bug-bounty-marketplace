@@ -173,6 +173,13 @@ jobs:
       - name: Check the env region
         run: infra/terraform/scripts/env-region.sh "$ENV_NAME" --check
 
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -372,6 +379,13 @@ jobs:
       # A resume or terraform step above can take longer, and kubelogin
       # needs a fresh token for the AKS AAD server app, so az must present
       # the assertion again: log in anew right before cluster access.
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
+
       - name: Azure re-login (OIDC, fresh assertion)
         uses: azure/login@v2
         with:

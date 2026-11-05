@@ -2,12 +2,6 @@
 # Exercises for_each keys, ABAC conditions and the gh_setup_commands output.
 
 mock_provider "azurerm" {
-  mock_data "azurerm_subscription" {
-    defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000"
-    }
-  }
-
   mock_data "azurerm_client_config" {
     defaults = {
       tenant_id = "11111111-1111-1111-1111-111111111111"
@@ -460,6 +454,18 @@ run "shared_subscription_isolation" {
       ]
     ]))
     error_message = "no CI identity may hold a role at subscription scope"
+  }
+
+  assert {
+    condition = alltrue([
+      for ra in concat(
+        values(azurerm_role_assignment.admin_aks),
+        values(azurerm_role_assignment.admin_acr),
+        values(azurerm_role_assignment.power_operator),
+        values(azurerm_role_assignment.tfstate_humans),
+      ) : strcontains(ra.scope, "/resourceGroups/")
+    ])
+    error_message = "admin and power-operator grants to people must stay on BBM resource groups"
   }
 
   assert {

@@ -28,9 +28,10 @@
 # left alone.
 #
 # With --all, after a successful teardown the per-tenant tfvars/backend fields
-# up.sh wrote (subscription_id, suffix, admin/power-operator/Key Vault officer
+# up.sh wrote (suffix, admin/power-operator/Key Vault officer
 # object ids, the global hint block's principal ids, backend state account)
-# are reset to their placeholders, so up.sh on another tenant starts clean.
+# are reset to their placeholders and the gitignored .last-subscription is
+# removed, so up.sh on another tenant starts clean.
 # dns_zone_name, alert_emails, github_reviewer_ids, github_repo and the regions
 # (home location / location_abbr, each env's region and the env_locations
 # maps: user choices, not per tenant) are kept; if the next subscription needs

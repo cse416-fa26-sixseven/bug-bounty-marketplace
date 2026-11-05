@@ -181,7 +181,10 @@ owner=$(az role assignment list --assignee "$ME" --scope "/subscriptions/$SUB" -
 # (down.sh --all resets it; an old checkout or a skipped teardown does not).
 # The ID is not committed (ADR 0003): up.sh remembers it in a gitignored file;
 # older checkouts still have subscription_id in bootstrap.tfvars.
-prev_sub=$(lower "$(tfvars_get_string "$BOOT_VARS" subscription_id)")
+prev_sub=""
+if tfvars_has "$BOOT_VARS" subscription_id; then
+  prev_sub=$(lower "$(tfvars_get_string "$BOOT_VARS" subscription_id)")
+fi
 [[ -n "$prev_sub" ]] || prev_sub=$(lower "$(cat "$LAST_SUB_FILE" 2>/dev/null || true)")
 switch_msg=""
 if [[ -n "$prev_sub" && "$prev_sub" != "$PLACEHOLDER_GUID" && "$prev_sub" != "$SUB" ]]; then
