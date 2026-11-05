@@ -5,7 +5,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 /**
  * The whole bounty lifecycle in the browser, on the local chain:
- * the developer uploads and funds a bounty, the auditor stakes, claims and
+ * the developer uploads a contract and funds its bounty once the analysis is
+ * done, the auditor stakes, claims and
  * proves the reentrancy, the payout lands after the 60-second challenge
  * window, and the auditor withdraws it. Every transaction is signed in the
  * browser with the role's anvil account.
@@ -26,8 +27,9 @@ test.describe.configure({ mode: "serial" });
 /**
  * Developer: upload Vault.sol with a bounty of a unique amount (the PoC
  * imports the target as ../src/Vault.sol, so the file keeps its name; the
- * amount tells this test's queue row apart), and wait for its reentrancy
- * finding. Returns the amount as the queue shows it.
+ * amount tells this test's queue row apart), wait for its reentrancy finding,
+ * then fund the bounty from the contract page. Returns the amount as the
+ * queue shows it.
  */
 async function uploadFundedVault(page: Page): Promise<string> {
   const amount = `1.${String(Date.now() % 100_000).padStart(5, "0")}1`;
@@ -43,6 +45,11 @@ async function uploadFundedVault(page: Page): Promise<string> {
   await expect(page).toHaveURL(/\/contracts\/contract_/, { timeout: 60_000 });
   // Slither plus LLM explanations: usually under a minute, up to ~3 with a slow LLM.
   await expect(page.getByText("reentrancy-eth").first()).toBeVisible({ timeout: 300_000 });
+  // Funding waits for the analysis: the button enables once it is Done.
+  const fund = page.getByRole("button", { name: "Fund bounty" });
+  await expect(fund).toBeEnabled({ timeout: 60_000 });
+  await fund.click();
+  await expect(page.getByText(/Bounty funded on-chain/)).toBeVisible({ timeout: 60_000 });
   return `${amount} ETH`;
 }
 
