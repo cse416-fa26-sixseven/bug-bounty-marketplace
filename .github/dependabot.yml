@@ -36,6 +36,10 @@ updates:
       # Tracks the Node major in .nvmrc.
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
+      # vite is only here for vitest; a vite major has to follow the vitest
+      # major that supports it (vitest 5 + vite 8 cannot parse the .tsx tests).
+      - dependency-name: vite
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: uv
     directory: /workers/analysis
@@ -75,7 +79,8 @@ updates:
       # pyproject.toml pins Python to 3.12.
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
-      - dependency-name: ghcr.io/foundry-rs/foundry
+      # Dependabot names the image without the registry (foundry-rs/foundry).
+      - dependency-name: "*foundry-rs/foundry"
 
   - package-ecosystem: terraform
     directories:
@@ -92,6 +97,10 @@ updates:
         update-types: [minor, patch]
     ignore:
       # Majors (azurerm 5, azapi 3) need the `< N` caps in every
-      # versions.tf raised together; do those by hand.
-      - dependency-name: "*"
-        update-types: [version-update:semver-major]
+      # versions.tf raised together; do those by hand. `update-types` does
+      # not catch requirement updates (`~> 4.0` -> `~> 5.12`, `< 5.0` ->
+      # `< 5.13`), so ignore the next major by version range instead.
+      - dependency-name: hashicorp/azurerm
+        versions: [">= 5.0"]
+      - dependency-name: Azure/azapi
+        versions: [">= 3.0"]
