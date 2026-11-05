@@ -112,7 +112,7 @@ jobs:
               # api and web also run on the arm64 test cluster (ADR 0002 §8).
               # sandbox: the PoC runner image that the analysis worker launches as
               # Kata Jobs (ADR 0004); its context is workers/ for the shared
-              # solc list, like ci.yml's sandbox job. amd64 only, no mocked
+              # solc list, like the sandbox job in ci.yml. amd64 only, no mocked
               # variant.
               { api:       { context: ".",                file: "apps/api/Dockerfile",            platforms: ["linux/amd64", "linux/arm64"] },
                 web:       { context: ".",                file: "apps/web/Dockerfile",            platforms: ["linux/amd64", "linux/arm64"] },
