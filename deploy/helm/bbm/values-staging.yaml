@@ -38,14 +38,18 @@ web:
 
 api:
   hpa:
-    # Pinned to exactly one replica until the Blob storage adapter lands:
-    # uploaded sources live on a per-pod emptyDir (SOURCE_STORAGE_DIR), so a
-    # second replica would not see files uploaded to the first.
+    # Pinned to exactly one replica until the Blob storage adapter lands.
+    # Uploads sit on the shared Azure Files claim below (an interim
+    # arrangement for the analysis worker, not a multi-replica design).
     enabled: true
     minReplicas: 1
     maxReplicas: 1
   pdb:
     enabled: false
+  sourceStorage:
+    # ReadWriteMany Azure Files share: api writes uploads, analysis reads them.
+    persistentVolumeClaim:
+      enabled: true
 
 migrations:
   # Run migrations as a hook Job; the api starts with MIGRATE_ON_BOOT=false.
@@ -63,6 +67,10 @@ networkPolicy:
   # postgresCidr: from values-infra.yaml
 
 analysis:
-  enabled: false
+  # Slither + LLM worker (DATABASE_URL and llm-api-key from Key Vault via
+  # bbm-kv-analysis) and PoC runner. KEDA stays off: the worker polls Postgres.
+  enabled: true
 sandbox:
-  enabled: false
+  # PoC Jobs on the Kata sandbox pool (terraform sandbox_pool_enabled), in
+  # namespace bbm-sandbox (<release namespace>-sandbox).
+  enabled: true

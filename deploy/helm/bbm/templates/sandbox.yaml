@@ -1,22 +1,28 @@
 {{- /*
-Sandbox stub (sandbox.enabled, default off). Untrusted analysis code will run
-as short-lived Jobs in a separate, locked-down namespace on the Kata
-(pod-sandboxing) node pool. Only the scaffolding is rendered here:
-  - Namespace (PSA enforce=restricted)
-  - ServiceAccount bbm-sandbox-runner (workload identity: sandboxClientId)
-  - Role/RoleBinding: manage Jobs and read Pods/logs in that namespace only
+PoC sandbox (sandbox.enabled). Auditors' PoCs run as short-lived Kubernetes
+Jobs created by the analysis worker (SANDBOX_BACKEND=kubernetes) in a
+separate, locked-down namespace on the Kata (pod-sandboxing) node pool.
+Rendered here:
+  - Namespace <sandboxNamespace> (PSA enforce=restricted)
+  - Role/RoleBinding in that namespace for ServiceAccount bbm-analysis of
+    the RELEASE namespace: Jobs, Pods, pod logs and the per-PoC Secrets
+    (nothing in the release namespace, nothing cluster-wide)
   - ResourceQuota + LimitRange
-  - NetworkPolicy denying ALL ingress and egress
-  - ConfigMap holding the Job template the runner instantiates
+  - NetworkPolicy denying ALL ingress and egress (no DNS either)
+  - ConfigMap <fullname>-sandbox-job-template in the RELEASE namespace,
+    mounted into the analysis pod at /etc/bbm/sandbox/job.yaml
+The Job pod has no ServiceAccount (automountServiceAccountToken: false) and
+no identity; azure.sandboxClientId is unused by this chart.
 NOTE: the Namespace is owned by the release; `helm uninstall` deletes it and
 everything in it.
 */ -}}
 {{- if .Values.sandbox.enabled }}
 {{- $s := .Values.sandbox -}}
-{{- $ns := $s.namespace -}}
+{{- $ns := include "bbm.sandboxNamespace" . -}}
 {{- $jt := $s.jobTemplate -}}
-{{- if .Values.azure.workloadIdentity.enabled }}
-{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "azure.sandboxClientId" "value" .Values.azure.sandboxClientId) }}
+{{- $fn := include "bbm.fullname" . -}}
+{{- if eq $ns .Release.Namespace }}
+{{- fail (printf "sandbox.namespace must differ from the release namespace (%s)" .Release.Namespace) }}
 {{- end }}
 apiVersion: v1
 kind: Namespace
@@ -24,63 +30,57 @@ metadata:
   name: {{ $ns }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
+    bbm.io/release-namespace: {{ .Release.Namespace }}
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox-runner
-  namespace: {{ $ns }}
-  labels:
-    {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
-  {{- if and .Values.azure.workloadIdentity.enabled .Values.azure.sandboxClientId }}
-  annotations:
-    azure.workload.identity/client-id: {{ .Values.azure.sandboxClientId | quote }}
-  {{- end }}
-automountServiceAccountToken: false
----
+# What the analysis worker may do in the sandbox namespace, and nothing else:
+# create/delete the Job and its Secret, watch the Job, read the pod log.
+# `patch` on secrets is for the ownerReference that ties the Secret to the Job
+# (garbage-collected together).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox-runner
+  name: {{ $fn }}-analysis
   namespace: {{ $ns }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["create", "get", "list", "delete"]
+    verbs: ["create", "get", "list", "watch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["configmaps"]
-    resourceNames: ["{{ include "bbm.fullname" . }}-sandbox-job-template"]
+    resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox-runner
+  name: {{ $fn }}-analysis
   namespace: {{ $ns }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "bbm.fullname" . }}-sandbox-runner
+  name: {{ $fn }}-analysis
 subjects:
   - kind: ServiceAccount
-    name: {{ include "bbm.fullname" . }}-sandbox-runner
-    namespace: {{ $ns }}
+    name: {{ include "bbm.componentName" (dict "root" $ "component" "analysis") }}
+    namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox
+  name: {{ $fn }}-sandbox
   namespace: {{ $ns }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
@@ -88,6 +88,7 @@ spec:
   hard:
     pods: {{ $s.quota.pods | quote }}
     count/jobs.batch: {{ $s.quota.jobs | quote }}
+    secrets: {{ $s.quota.secrets | quote }}
     requests.cpu: {{ $s.quota.requestsCpu | quote }}
     requests.memory: {{ $s.quota.requestsMemory | quote }}
     limits.cpu: {{ $s.quota.limitsCpu | quote }}
@@ -98,7 +99,7 @@ spec:
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox
+  name: {{ $fn }}-sandbox
   namespace: {{ $ns }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
@@ -115,7 +116,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox-deny-all
+  name: {{ $fn }}-sandbox-deny-all
   namespace: {{ $ns }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
@@ -125,20 +126,27 @@ spec:
     - Ingress
     - Egress
 ---
+# Job template contract (spec docs/superpowers/specs/2026-11-05-sandbox-aks-design.md
+# section 4.2). The worker loads job.yaml with PyYAML and fills in exactly:
+#   metadata.name                                   poc-<sanitised poc id>
+#   metadata.namespace                              SANDBOX_NAMESPACE
+#   spec.template.spec.containers[0].image          SANDBOX_IMAGE
+#   spec.template.spec.containers[0].command        ["sh", "-c", <script>]
+#   the volume named "project": secret.secretName   the Secret poc-<id>
+# Everything else is owned by this chart (sandbox.jobTemplate).
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "bbm.fullname" . }}-sandbox-job-template
-  namespace: {{ $ns }}
+  name: {{ $fn }}-sandbox-job-template
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "bbm.labels" (dict "root" $ "component" "sandbox") | nindent 4 }}
 data:
-  # The runner fills in metadata.generateName suffix, image and args.
   job.yaml: |
     apiVersion: batch/v1
     kind: Job
     metadata:
-      generateName: sandbox-run-
+      name: REPLACED_BY_RUNNER
       namespace: {{ $ns }}
       labels:
         app.kubernetes.io/part-of: bbm
@@ -171,24 +179,34 @@ data:
             runAsNonRoot: true
             runAsUser: {{ $jt.runAsUser }}
             runAsGroup: {{ $jt.runAsUser }}
+            fsGroup: {{ $jt.runAsUser }}
             seccompProfile:
               type: RuntimeDefault
           containers:
-            - name: run
+            - name: poc
               image: REPLACED_BY_RUNNER
               resources:
                 {{- toYaml $jt.resources | nindent 16 }}
               securityContext:
+                runAsNonRoot: true
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop:
                     - ALL
+                seccompProfile:
+                  type: RuntimeDefault
               volumeMounts:
-                - name: work
-                  mountPath: /work
+                - name: tmp
+                  mountPath: /tmp
+                - name: project
+                  mountPath: /in
+                  readOnly: true
           volumes:
-            - name: work
+            - name: tmp
               emptyDir:
-                sizeLimit: {{ $jt.resources.limits | dig "ephemeral-storage" "512Mi" }}
+                sizeLimit: {{ $jt.tmpSizeLimit }}
+            - name: project
+              secret:
+                secretName: REPLACED_BY_RUNNER
 {{- end }}

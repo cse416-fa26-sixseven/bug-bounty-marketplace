@@ -1,6 +1,7 @@
 {{- $v := .Values.api -}}
 {{- $name := include "bbm.componentName" (dict "root" $ "component" "api") -}}
 {{- $csi := include "bbm.csi" . -}}
+{{- $sources := include "bbm.sourcesClaim" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,11 +14,11 @@ spec:
   replicas: {{ $v.replicaCount }}
   {{- end }}
   {{- /*
-  With a single replica, a surge pod would get its own empty upload
-  emptyDir (SOURCE_STORAGE_DIR) while the old pod still serves, and the HPA
-  max of 1 would be exceeded during rollouts. Default to replace-in-place
-  (maxSurge 0 / maxUnavailable 1) whenever at most one api replica can run;
-  api.strategy overrides this verbatim.
+  With a single replica, a surge pod would exceed the HPA max of 1 during
+  rollouts and, without the shared sources claim, get its own empty upload
+  emptyDir (SOURCE_STORAGE_DIR) while the old pod still serves. Default to
+  replace-in-place (maxSurge 0 / maxUnavailable 1) whenever at most one api
+  replica can run; api.strategy overrides this verbatim.
   */}}
   {{- $maxReplicas := ternary $v.hpa.maxReplicas $v.replicaCount $v.hpa.enabled | int }}
   {{- if $v.strategy }}
@@ -144,8 +145,13 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: sources
+          {{- if $sources }}
+          persistentVolumeClaim:
+            claimName: {{ include "bbm.sourcesClaimName" . }}
+          {{- else }}
           emptyDir:
             sizeLimit: {{ $v.sourceStorage.sizeLimit }}
+          {{- end }}
         {{- if $csi }}
         {{- include "bbm.csiVolume" (dict "spc" .Values.secrets.csi.secretProviderClassName) | nindent 8 }}
         {{- end }}

@@ -60,7 +60,9 @@ azure:
   # -- Client ID used by the migrations Job (ServiceAccount bbm-migrations);
   # terraform sets it to the api identity.
   migrationsClientId: ""
-  # -- Client ID of id-bbm-<env>-sandbox (ServiceAccount bbm-sandbox-runner).
+  # -- Client ID of id-bbm-<env>-sandbox. Reserved and UNUSED: terraform still
+  # emits it, but the PoC Job pods carry no identity and the analysis
+  # ServiceAccount (workerClientId) creates them.
   sandboxClientId: ""
   # -- Storage account name (stbbm<stg|prd><sfx>).
   storageAccountName: ""
@@ -162,7 +164,8 @@ web:
 
 api:
   # -- Replica count when api.hpa.enabled is false. Keep at 1 until the Blob
-  # storage adapter lands: uploads live on a per-pod emptyDir.
+  # storage adapter lands (uploads live on a per-pod emptyDir, or on the
+  # shared sources claim below, which is still an interim arrangement).
   replicaCount: 1
   image:
     repository: bbm/api
@@ -188,10 +191,26 @@ api:
     # Counters are per pod. Forced off behind the Gateway while
     # ingress.trustedProxyCidr is empty.
     enabled: true
-  # -- SOURCE_STORAGE_DIR, backed by an emptyDir.
+  # -- SOURCE_STORAGE_DIR of the api (uploads) and of the analysis worker,
+  # which reads them. Backed by the shared claim below when it is enabled,
+  # else by a per-pod emptyDir (Compose, kind, CI; the analysis pod then has
+  # no sources volume and SOURCE_STORAGE_DIR unset).
   sourceStorage:
     path: /data/sources
+    # -- sizeLimit of the emptyDir when the claim is disabled.
     sizeLimit: 1Gi
+    persistentVolumeClaim:
+      # -- Mount one ReadWriteMany claim in the api (rw) and analysis (ro)
+      # pods instead of the emptyDir. true on test/staging/prod.
+      enabled: false
+      # -- Name of a pre-created claim to use; empty = render
+      # PersistentVolumeClaim <fullname>-sources from the fields below.
+      existingClaim: ""
+      # -- Azure Files (SMB) on AKS; dynamically provisioned per namespace.
+      storageClassName: azurefile-csi
+      accessModes:
+        - ReadWriteMany
+      size: 5Gi
   resources:
     requests:
       cpu: 100m
@@ -212,8 +231,9 @@ api:
   # -- Deployment strategy, used verbatim when non-empty. Empty = automatic:
   # when at most one api replica can run (hpa.maxReplicas, or replicaCount
   # without HPA, <= 1) use RollingUpdate maxSurge 0 / maxUnavailable 1, so a
-  # rollout never runs a second pod with its own per-pod upload emptyDir
-  # (brief downtime instead); otherwise the Kubernetes default.
+  # rollout never runs a second pod (which, without the shared claim, would
+  # have its own empty upload emptyDir; brief downtime instead); otherwise
+  # the Kubernetes default.
   strategy: {}
   extraEnv: []
   podAnnotations: {}
@@ -238,7 +258,12 @@ migrations:
       memory: 256Mi
 
 analysis:
-  # -- Deploy the Python analysis worker (port 8000, /health).
+  # -- Deploy the Python analysis worker (port 8000, /health): Slither + LLM
+  # on uploaded contracts, and (with sandbox.enabled) the auditors' PoCs as
+  # Kubernetes Jobs. It polls the Postgres `jobs` table (DATABASE_URL from
+  # the same Secret as the api) and reads uploads from the shared sources
+  # claim (api.sourceStorage.persistentVolumeClaim). true on
+  # test/staging/prod.
   enabled: false
   replicaCount: 1
   image:
@@ -250,13 +275,34 @@ analysis:
     type: ClusterIP
   runAsUser: 10001
   runAsGroup: 10001
+  # -- Slither compiles with solc and holds the IR in memory; 2Gi keeps a
+  # 100 KB contract comfortably below the OOM line.
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: 250m
+      memory: 512Mi
     limits:
-      cpu: 1000m
-      memory: 1Gi
+      cpu: "1"
+      memory: 2Gi
+  # -- JOB_LEASE_SECONDS: how long a claimed job stays leased to one worker.
+  # Must outlive the sandbox wait (jobTemplate.activeDeadlineSeconds + 60 s,
+  # which includes a Kata node scaling up from zero), or a second worker
+  # would re-claim and run the PoC twice.
+  jobLeaseSeconds: 900
+  sandbox:
+    # -- SANDBOX_BACKEND: kubernetes (Jobs in the sandbox namespace, AKS) or
+    # docker (the Docker socket; Compose only, never on AKS).
+    backend: kubernetes
+    # -- SANDBOX_TIMEOUT_SECONDS: in-container `timeout -s KILL` around
+    # `forge test` (the Job's activeDeadlineSeconds is the outer limit).
+    timeoutSeconds: 120
+    # -- SANDBOX_IMAGE = [global.image.registry/]repository:tag (tag defaults
+    # to global.image.tag). This is an env value, not a pod image: PR
+    # previews --set it to bbm-preview/sandbox like api/web.
+    image:
+      repository: bbm/sandbox
+      tag: ""
+  # -- Extra env vars (list of EnvVar objects), e.g. LLM_ENDPOINT / LLM_MODEL.
   extraEnv: []
   podAnnotations: {}
   podLabels: {}
@@ -277,11 +323,18 @@ analysis:
     queueLength: "5"
 
 sandbox:
-  # -- Render the sandbox stub: Namespace bbm-sandbox (PSA restricted), runner
-  # ServiceAccount + RBAC, quota, deny-all NetworkPolicy and a Job template
-  # ConfigMap. Requires a sandbox node pool to actually run anything.
+  # -- Render the PoC sandbox: Namespace <release namespace>-sandbox (PSA
+  # restricted), a Role/RoleBinding letting ServiceAccount bbm-analysis manage
+  # Jobs/Secrets and read pod logs there, quota, a deny-all NetworkPolicy and
+  # the Job template ConfigMap the worker fills in. Also switches the analysis
+  # worker to SANDBOX_ENABLED=true with its ServiceAccount token mounted.
+  # Needs the Kata sandbox node pool (terraform sandbox_pool_enabled) to run
+  # anything. true on test/staging/prod.
   enabled: false
-  namespace: bbm-sandbox
+  # -- Namespace of the Jobs; empty = <release namespace>-sandbox.
+  namespace: ""
+  # -- Fixed parts of the Job the worker creates per PoC (see
+  # templates/sandbox.yaml for what the worker fills in).
   jobTemplate:
     # -- RuntimeClass for sandbox Jobs (AKS pod sandboxing / Kata).
     runtimeClassName: kata-vm-isolation
@@ -292,9 +345,13 @@ sandbox:
         operator: Equal
         value: "true"
         effect: NoSchedule
+    # -- Outer limit: covers a node scaling up from zero (3-5 min) plus the run.
     activeDeadlineSeconds: 600
     ttlSecondsAfterFinished: 300
     runAsUser: 10001
+    # -- sizeLimit of the writable /tmp emptyDir (the project is extracted
+    # and compiled there; the root filesystem is read-only).
+    tmpSizeLimit: 256Mi
     resources:
       requests:
         cpu: 250m
@@ -307,6 +364,8 @@ sandbox:
   quota:
     pods: "10"
     jobs: "10"
+    # -- One Secret (the project tarball) per Job.
+    secrets: "20"
     requestsCpu: "2"
     requestsMemory: 4Gi
     limitsCpu: "4"

@@ -5,13 +5,16 @@ Components:
   web       {{ include "bbm.fullname" . }}-web:{{ .Values.web.port }}   (/healthz)
   api       {{ include "bbm.fullname" . }}-api:{{ .Values.api.port }}   (/health)
 {{- if .Values.analysis.enabled }}
-  analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}
+  analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}{{ if not (include "bbm.sourcesClaim" .) }}; no shared sources claim, so it serves /analyze only{{ end }}
+{{- end }}
+{{- if include "bbm.sourcesClaim" . }}
+  sources   PVC {{ include "bbm.sourcesClaimName" . }} at {{ .Values.api.sourceStorage.path }} (api rw, analysis ro)
 {{- end }}
 {{- if .Values.postgres.inCluster.enabled }}
   postgres  {{ include "bbm.fullname" . }}-postgres:5432   (in-cluster, emptyDir: data is lost on restart; test/preview only)
 {{- end }}
 {{- if .Values.sandbox.enabled }}
-  sandbox   namespace {{ .Values.sandbox.namespace }} (stub: RBAC, quota, deny-all, Job template)
+  sandbox   namespace {{ include "bbm.sandboxNamespace" . }}: PoC Jobs ({{ include "bbm.sandboxImage" . }}, {{ .Values.sandbox.jobTemplate.runtimeClassName | default "default runtime" }}) created by bbm-analysis
 {{- end }}
 
 Secrets: provider={{ .Values.secrets.provider }} -> Secret {{ .Values.secrets.name }}
