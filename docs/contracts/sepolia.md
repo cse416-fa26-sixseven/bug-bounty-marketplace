@@ -180,12 +180,20 @@ secrets out of band before deploying, never in Terraform or GitHub:
 
 ```sh
 umask 077
-tr -d '\n' < sepolia-deployer.key > op           # the operator = the deployer
+# The operator is the deployer: 0x + 64 hex, from the shared vault.
+az keyvault secret show --vault-name <shared vault> --name sepolia-deployer-key --query value -o tsv | tr -d '\n' > op
 openssl rand -hex 32 | tr -d '\n' > ss
 az keyvault secret set --vault-name <env vault> --name chain-operator-key --file op --encoding utf-8
 az keyvault secret set --vault-name <env vault> --name session-secret --file ss --encoding utf-8
 rm op ss
 ```
 
+If either secret is missing, the CSI mount fails and the api pod never
+starts, so set them before the first deploy with `chain.enabled` (and again
+after rebuilding the env's vault). The api reads them once at start: after
+rotating one, run `kubectl -n bbm rollout restart deploy/bbm-api`.
+
 Stop any other API using the same operator key (for example a local Sepolia
-stack) while prod runs.
+stack) while prod runs, and avoid running `contracts-deploy.yml` with
+`broadcast=true` at the same time: both sign with that key and would race on
+nonces.

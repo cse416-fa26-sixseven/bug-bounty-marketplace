@@ -100,7 +100,8 @@ secrets:
     databaseUrl: ""
     # -- LLM API key for provider=plain.
     llmApiKey: ""
-    # -- With chain.enabled, provider=plain: the operator's 0x-prefixed private
+    # -- With chain.enabled, provider=plain (provider=existing: the Secret's
+    # operator-private-key and session-secret keys): the operator's 0x-prefixed private
     # key (OPERATOR_PRIVATE_KEY) and the session cookie HMAC secret
     # (SESSION_SECRET, 16+ characters).
     operatorPrivateKey: ""
@@ -132,7 +133,8 @@ chain:
   # -- Chain id the contracts are deployed on (11155111 = Sepolia).
   chainId: 11155111
   # -- JSON-RPC URL the api uses. Must be keyless: it is a plain value. Also
-  # published to browsers as publicRpcUrl unless that is set.
+  # published to browsers as publicRpcUrl unless that is set. Use an https
+  # (443) endpoint: networkPolicy.restrictEgress only lets the api out on 443.
   rpcUrl: ""
   # -- RPC URL GET /api/chain publishes to browsers ("" = rpcUrl).
   publicRpcUrl: ""
@@ -146,6 +148,7 @@ chain:
   # -- The deployment's challenge window in seconds.
   challengeWindowSeconds: 600
   # -- Block the event indexer starts from (the deployment's deployBlock).
+  # Always set it on a public chain: 0 scans from genesis.
   indexerStartBlock: 0
   # -- Blocks the indexer stays behind the head (load-balanced public RPCs
   # lag; 3 on Sepolia).

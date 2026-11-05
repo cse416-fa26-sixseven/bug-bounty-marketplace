@@ -10,7 +10,7 @@ postgres.inCluster.enabled).
 Egress (only when networkPolicy.restrictEgress): default-deny; allow DNS
 for everything, plus per component:
   api        -> Postgres (5432 to postgresCidr and/or the in-cluster postgres
-                pods), HTTPS 443 anywhere (Entra, Storage)
+                pods), HTTPS 443 anywhere (Entra, Storage, the chain's JSON-RPC)
   web        -> api
   analysis   -> Postgres (jobs table), HTTPS 443 anywhere (LLM endpoint,
                 the Kubernetes API server for sandbox Jobs)

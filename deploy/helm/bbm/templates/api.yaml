@@ -108,12 +108,14 @@ spec:
             {{- with .Values.chain }}
             {{- if .enabled }}
             {{- include "bbm.validateChain" $ }}
+            {{- /* int64: Helm reads YAML numbers as floats, and quote alone
+            prints 12066691 as 1.2066691e+07, which the api rejects. */}}
             - name: CHAIN_RPC_URL
               value: {{ .rpcUrl | quote }}
             - name: PUBLIC_CHAIN_RPC_URL
               value: {{ .publicRpcUrl | default .rpcUrl | quote }}
             - name: CHAIN_ID
-              value: {{ .chainId | quote }}
+              value: {{ .chainId | int64 | quote }}
             - name: AUDITOR_STAKING_ADDRESS
               value: {{ .addresses.auditorStaking | quote }}
             - name: BOUNTY_ESCROW_ADDRESS
@@ -125,15 +127,15 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             - name: CHALLENGE_WINDOW_SECONDS
-              value: {{ .challengeWindowSeconds | quote }}
+              value: {{ .challengeWindowSeconds | int64 | quote }}
             - name: INDEXER_START_BLOCK
-              value: {{ .indexerStartBlock | quote }}
+              value: {{ .indexerStartBlock | int64 | quote }}
             - name: INDEXER_CONFIRMATIONS
-              value: {{ .indexerConfirmations | quote }}
+              value: {{ .indexerConfirmations | int64 | quote }}
             - name: INDEXER_POLL_MS
-              value: {{ .indexerPollMs | quote }}
+              value: {{ .indexerPollMs | int64 | quote }}
             - name: PAYOUT_KEEPER_INTERVAL_SECONDS
-              value: {{ .payoutKeeperIntervalSeconds | quote }}
+              value: {{ .payoutKeeperIntervalSeconds | int64 | quote }}
             - name: CLAIM_LOCK_ENABLED
               value: {{ .claimLockEnabled | toString | quote }}
             - name: OPERATOR_PRIVATE_KEY

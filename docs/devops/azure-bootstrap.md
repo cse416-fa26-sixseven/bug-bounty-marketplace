@@ -317,6 +317,10 @@ KV=$(infra/terraform/scripts/tf.sh data staging output -raw key_vault_name)   # 
 az keyvault secret set --vault-name "$KV" -n llm-api-key --value "<key>"
 ```
 
+Prod runs the api in chain mode (`chain.enabled` in `values-prod.yaml`), so the prod vault also
+needs `chain-operator-key` and `session-secret` before any prod deploy, or the CSI mount fails the
+same way. See [Sepolia runbook, Deployed environments](../contracts/sepolia.md#deployed-environments).
+
 Terraform never manages this secret, so the real value never enters state. The CSI driver picks up
 the new version within its 2-minute rotation interval. A 403 means your user isn't in
 `secret_officer_user_object_ids` in `envs/<env>/data.tfvars` (`up.sh` adds you; those grants use
@@ -466,7 +470,8 @@ The full runbook is [switching-accounts.md](switching-accounts.md); the cutover 
    Then re-add the Environment reviewers if `github_reviewer_ids` is empty (section 11).
 
 3. **Re-set the Key Vault secrets**, which never enter state: `llm-api-key` in each env vault
-   (section 10), `sepolia-rpc-url` and `sepolia-deployer-key` in the shared vault (section 12).
+   (section 10), `chain-operator-key` and `session-secret` in the prod vault (section 10), and
+   `sepolia-rpc-url` and `sepolia-deployer-key` in the shared vault (section 12).
 4. **Commit the rewritten tfvars and backend files** and the bootstrap backend block (section 9)
    in a PR.
 5. **Verify CD:** after the merge, the `main` build deploys to staging and waits for the prod
