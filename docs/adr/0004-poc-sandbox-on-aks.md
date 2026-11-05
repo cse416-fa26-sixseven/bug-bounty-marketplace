@@ -132,7 +132,7 @@
 `infra/terraform/scripts/kata-spike.sh <env> [<tag>]` runs the sandbox image as a Pod with the
 Job's RuntimeClass, nodeSelector, toleration and security context, waits for the pool to scale up,
 and exits 0 only if the pod completed **and** the guest kernel (`uname -r`) differs from the
-node's. If the RuntimeClass is missing it first reconciles the cluster (`az aks update`, see
+node's. If the RuntimeClass is missing it first reconciles the cluster (`az aks update --yes`, see
 Consequences) and checks again. It is run after the first `tf.sh compute test apply` (rollout
 step 2) and before staging and prod are applied. A runc result is a failure, never a silent
 downgrade.
@@ -178,7 +178,7 @@ downgrade.
   both go with the namespace (teardown, janitor). Previews create neither.
 - **Analysis on AKS** needs `llm-api-key` and `database-url` in the env Key Vault (staging/prod)
   and the ACR mirror images; test namespaces use the in-cluster Postgres.
-- **Rollout** (design §6): PR → `main`; `tf.sh compute test apply`; `az aks update -g
+- **Rollout** (design §6): PR → `main`; `tf.sh compute test apply`; `az aks update --yes -g
 rg-bbm-test-compute-<abbr> -n aks-bbm-test-<abbr>` to reconcile the cluster so the RuntimeClass
   `kata-vm-isolation` appears (a KataVmIsolation pool added to an existing cluster does not
   install it until then; `kata-spike.sh` runs the same update when the RuntimeClass is missing);

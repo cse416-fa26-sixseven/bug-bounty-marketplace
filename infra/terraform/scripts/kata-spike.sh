@@ -19,7 +19,7 @@
 #      kubeconfig (yours is untouched); checks RuntimeClass kata-vm-isolation
 #      exists. A KataVmIsolation pool added to an existing cluster does not
 #      install it until the cluster is reconciled, so if it is missing the
-#      script runs `az aks update -g <compute rg> -n <cluster>` (no settings
+#      script runs `az aks update -g <compute rg> -n <cluster> --yes` (no settings
 #      changed, a few minutes) and checks again before giving up.
 #   2. Creates namespace kata-spike and a Pod with runtimeClassName
 #      kata-vm-isolation, nodeSelector bbm.io/pool=sandbox, the bbm.io/sandbox
@@ -131,7 +131,7 @@ kubelogin convert-kubeconfig -l azurecli --kubeconfig "$kubeconfig"
 
 if ! kubectl get runtimeclass kata-vm-isolation >/dev/null 2>&1; then
   log "RuntimeClass kata-vm-isolation is missing: reconciling $cluster (az aks update, a few minutes) so the KataVmIsolation pool installs it"
-  az aks update -g "$compute_rg" -n "$cluster" --only-show-errors -o none ||
+  az aks update -g "$compute_rg" -n "$cluster" --yes --only-show-errors -o none ||
     die "az aks update -g $compute_rg -n $cluster failed; reconcile the cluster by hand and re-run"
   kubectl get runtimeclass kata-vm-isolation >/dev/null 2>&1 ||
     die "RuntimeClass kata-vm-isolation is still missing on $cluster after the reconcile: is the sandbox pool (workload_runtime KataVmIsolation) applied? Run tf.sh compute $env apply with sandbox_pool_enabled = true, then re-run"
