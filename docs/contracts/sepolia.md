@@ -8,8 +8,8 @@ supplies the RPC URL and funded keys, and every broadcast is deliberate.
 
 | Thing                    | Notes                                                                                                                                           |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sepolia RPC URL          | An Alchemy or Infura URL. It usually carries an API key, so keep it secret (`SEPOLIA_RPC_URL` below; `sepolia-rpc-url` in the shared Key Vault). |
-| Deployer / operator key  | One funded Sepolia account. `Deploy.s.sol` requires the operator to be the broadcaster, so the API's `OPERATOR_PRIVATE_KEY` is this same key. It pays gas for the deploy and later for every verdict and payout, so give it ~0.2 Sepolia ETH. Shared Key Vault: `sepolia-deployer-key`. |
+| Sepolia RPC URL          | An Alchemy or Infura URL. It usually carries an API key, so keep it secret (`SEPOLIA_RPC_URL` below; `chain-rpc-url` in a deployed env's chain vault). |
+| Deployer / operator key  | One funded Sepolia account. `Deploy.s.sol` requires the operator to be the broadcaster, so the API's `OPERATOR_PRIVATE_KEY` is this same key. It pays gas for the deploy and later for every verdict and payout, so give it ~0.2 Sepolia ETH. In a deployed env: `operator-private-key` in its chain vault, one key per env. |
 | Arbiter address          | A separate account that rules on disputes, e.g. a MetaMask account. Only its address is needed at deploy time (`ARBITER`). |
 | Test users               | MetaMask accounts for a developer and an auditor, each with Sepolia ETH from a faucet. The auditor needs the required stake (0.1 ETH) plus gas. |
 
@@ -18,15 +18,17 @@ line (it lands in shell history and `ps`): export it from a file or a vault.
 
 ## 1. Deploy the contracts
 
-**From CI (preferred).** `contracts-deploy.yml` (manual dispatch, `contracts-sepolia`
-environment, one reviewer) reads `sepolia-rpc-url` and `sepolia-deployer-key`
-from the shared Key Vault over OIDC. Set them once as in
-[Azure bootstrap](../devops/azure-bootstrap.md) (`az keyvault secret set`, `--file`
-for the key), run the workflow with `broadcast=false` to dry-run against live
-Sepolia, then with `broadcast=true`. The run's artifact holds
-`deployments/11155111.json`. To set `ARBITER` or shorter windows from CI, add
-them to that step's `env` first; by default the deployer is also the arbiter
-and the challenge window is 3 days.
+**From CI (preferred), for a deployed env.** `contracts-deploy.yml` (manual
+dispatch, inputs `env` = `staging` or `prod`, `arbiter`, `broadcast`,
+`replace_existing`) deploys that env's own contracts
+([ADR 0004](../adr/0004-operator-key-trust-model.md)). It reads `chain-rpc-url`
+and `operator-private-key` over OIDC from the env's api-only chain vault,
+refuses an arbiter equal to the operator, and after a broadcast stores the
+deployments file there as `chain-deployment`, which the API mounts. Set the
+secrets as in [Azure bootstrap §12](../devops/azure-bootstrap.md), dry-run with
+`broadcast=false`, then `broadcast=true`. The run's artifact also holds
+`deployments/11155111.json`. The challenge window is 3 days unless you add
+`CHALLENGE_WINDOW` to that step's `env`.
 
 **By hand.** With Foundry v1.3.5:
 
@@ -158,8 +160,11 @@ After each transaction a notice links it on Sepolia Etherscan.
 ## Deployed environments
 
 The bbm Helm chart sets `AUTH_ORIGIN=https://<ingress.host>` and
-`COOKIE_SECURE=true` for the api. It doesn't wire chain mode yet (`CHAIN_*`,
-`OPERATOR_PRIVATE_KEY`, `SESSION_SECRET`). When it does, follow the existing
-convention: the RPC URL and operator key stay in Key Vault (set out of band
-with `az keyvault secret set`, never in Terraform state or GitHub secrets)
-and reach the pod through the CSI SecretProviderClass, like `llm-api-key`.
+`COOKIE_SECURE=true` for the api. With `chain.enabled: true` in
+`values-<env>.yaml` it also wires chain mode: SecretProviderClass
+`bbm-kv-chain` reads the env's chain vault with the api identity only
+(`chain-rpc-url`, `operator-private-key`, `session-secret`, and
+`chain-deployment` mounted as `CHAIN_DEPLOYMENTS_FILE`), and the analysis
+worker gets `CHAIN_ENABLED=true`. It ships off in staging and prod; turn it on
+once the vault is filled ([Azure bootstrap §12](../devops/azure-bootstrap.md)).
+`/health` reports `operatorBalanceLow` when the operator holds under 0.05 ETH.

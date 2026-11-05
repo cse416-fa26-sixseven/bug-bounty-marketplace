@@ -562,6 +562,7 @@ power tags (`power-state`, `bbm-last-deployed-tag`, `auto-pause`) and Terraform 
 
 - **Outputs:**
   - Resource group and secrets: `resource_group_name`, `key_vault_name`, `key_vault_id`, `tenant_id`.
+    _ADR 0004 adds_ `chain_key_vault_name`, `chain_key_vault_id` (the api-only chain vault).
   - Postgres: `pg_fqdn`, `pg_server_name`.
   - Storage: `storage_account_name`, `storage_blob_endpoint`, `queue_name`.
   - Ingress: `ingress_pip_name`, `ingress_ip`, `ingress_fqdn`.
@@ -609,6 +610,9 @@ networkPolicy:
 _Superseded by ADR 0002 §5: `ingress.host` is `<env>.<zone>`, and the keys `dns.*` and
 `platform.*` are added for the `bbm-platform` chart._
 
+_ADR 0004 adds_ `azure.chainKeyVaultName`: the chain vault the api's `bbm-kv-chain`
+SecretProviderClass reads.
+
 ### What the Helm chart needs from `data` and `compute`
 
 1. **Worker identity.**
@@ -617,7 +621,8 @@ _Superseded by ADR 0002 §5: `ingress.host` is `<env>.<zone>`, and the keys `dns
      operator.
    - It also gets Storage Queue Data Reader on the storage account.
 2. **Key Vault access.** Key Vault Secrets User on the env vault for the api UAMI (which migrations
-   also use) and for the worker UAMI.
+   also use) and for the worker UAMI. _ADR 0004 adds_ Secrets User on the chain vault for the api UAMI
+   only.
 3. **Ingress IP.** The AKS cluster identity `id-bbm-<env>-aks` gets Network Contributor on
    `rg-bbm-<env>-data-eus2`, so the Gateway's load balancer can bind the static PIP.
 4. **Add-ons and pools.**

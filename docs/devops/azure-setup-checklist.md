@@ -52,8 +52,9 @@ decided or deferred along the way. Not committed.
    because CI can't grant User principals.
 8. **Mirror images into ACR** (§11): `mirror/postgres:16-alpine` (the ACA test and preview envs need
    it) and `mirror/curl:8.10.1` (`helm test`).
-9. **Shared Key Vault secrets** (§12): `sepolia-rpc-url`, `sepolia-deployer-key`. Optional until you
-   deploy contracts.
+9. **Chain secrets and contracts** (§12), staging and prod: `operator-private-key` and
+   `chain-rpc-url` in the env's chain vault, fund the operator from a Sepolia faucet, then run
+   **Contracts deploy**, then set `chain.enabled: true` in that env's Helm values.
 10. **First pipeline test env:** Actions, then `integration-azure` → _Run workflow_ on `main`. It
     should build, provision ACA, run the tests and destroy everything. Check the resource group
     `rg-bbm-test-eus2` is empty afterwards.
