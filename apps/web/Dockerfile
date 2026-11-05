@@ -9,11 +9,11 @@
 # Run (API_INTERNAL_URL is read per request, so one image fits any API origin):
 #   docker run -p 3000:3000 -e API_INTERNAL_URL=http://api:3001 bbm-web
 
-ARG NODE_VERSION=20.17.0
+ARG NODE_VERSION=22.23.4
 ARG PNPM_VERSION=9.15.9
 
 # ---------------------------------------------------------------------------
-# base: Node + pnpm. Corepack bundled with Node 20.17 fails signature checks
+# base: Node + pnpm. Corepack bundled with older Node fails signature checks
 # ("Cannot find matching keyid"), so pnpm is installed with npm instead.
 # The build stages and the runtime share bookworm (glibc): sharp's native
 # binaries are traced for the build platform.
