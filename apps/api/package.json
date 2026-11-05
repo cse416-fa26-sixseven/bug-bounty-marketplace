@@ -13,6 +13,8 @@
     "migrate": "node dist/migrate-cli.js"
   },
   "dependencies": {
+    "@azure/identity": "^4.14.0",
+    "@azure/storage-blob": "^12.30.0",
     "@bbm/shared": "workspace:^",
     "@fastify/multipart": "^10",
     "@fastify/rate-limit": "^11.2.1",
