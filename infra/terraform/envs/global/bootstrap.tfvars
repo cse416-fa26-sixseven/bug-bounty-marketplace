@@ -4,17 +4,17 @@
 # parent DNS zone). infra/up.sh --location <region> rewrites location /
 # location_abbr here, in global.tfvars and in the backend .hcl state RG
 # (up.sh checks the subscription's allowed-locations policy).
-location      = "northcentralus"
-location_abbr = "ncus" # modules/naming local.location_abbrs
+location      = "eastus2"
+location_abbr = "eus2" # modules/naming local.location_abbrs
 
 # Region of each env's resource groups (ADR 0002 section 8, ADR 0003): all envs
 # share the home region. Copied by infra/up.sh
 # from envs/<env>/data.tfvars (the source of truth; --env-location <env>=<region>
 # rewrites it) here and into global.tfvars. Keep one line per env.
 env_locations = {
-  test    = { location = "canadacentral", location_abbr = "cac" }
-  staging = { location = "denmarkeast", location_abbr = "dke" }
-  prod    = { location = "northcentralus", location_abbr = "ncus" }
+  test    = { location = "eastus2", location_abbr = "eus2" }
+  staging = { location = "centralus", location_abbr = "cus" }
+  prod    = { location = "centralus", location_abbr = "cus" }
 }
 
 github_repo = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs it with gh repo view
@@ -22,12 +22,12 @@ github_repo = "cse416-fa26-sixseven/bug-bounty-marketplace" # infra/up.sh syncs 
 github_oidc_subject_prefix = "repo:cse416-fa26-sixseven@343170626/bug-bounty-marketplace@1398822185"
 
 # Object ID of the bbm-admins Entra group (az ad group show -g bbm-admins --query id -o tsv).
-admin_object_ids          = ["bf41ada0-7cb4-48ca-9c34-c2616abf5b54"]
+admin_object_ids          = ["3f8bfd5e-e047-4cf0-9783-19f68e694eba"]
 power_operator_object_ids = []
 
 alert_emails               = ["alerts@bug-bounty.cse416-group.pranavjothivel.com"]
 subscription_budget_amount = 50
-budget_start_date          = "2026-10-01T00:00:00Z"
+budget_start_date          = "2026-11-01T00:00:00Z"
 
 # Numeric GitHub user IDs (gh api users/<login> --jq .id) for required reviewers.
 github_reviewer_ids = [321178584]
