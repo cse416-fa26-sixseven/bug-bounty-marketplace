@@ -24,6 +24,7 @@ const INFO: Extract<ChainInfo, { configured: true }> = {
   requiredStakeWei: "100000000000000000",
 };
 const HASH = `0x${"ab".repeat(32)}` as Hash;
+const DEVELOPER = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 
 function fakeClient(overrides: Partial<TxClient> = {}): TxClient & { writes: ContractWrite[] } {
   const writes: ContractWrite[] = [];
@@ -52,7 +53,7 @@ describe("chainCalls", () => {
     const calls = chainCalls(INFO, client);
 
     await expect(
-      calls.fundBounty("contract_1", new Date("2030-01-01T00:00:00.000Z"), "1000000000000000000"),
+      calls.fundBounty("contract_1", new Date("2030-01-01T00:00:00.000Z"), "1000000000000000000", DEVELOPER),
     ).resolves.toBe(HASH);
 
     expect(client.writes[0]).toMatchObject({
@@ -99,7 +100,7 @@ describe("chainCalls", () => {
     });
     const calls = chainCalls(INFO, client);
     await expect(
-      calls.fundBounty("contract_1", new Date("2020-01-01T00:00:00.000Z"), "1"),
+      calls.fundBounty("contract_1", new Date("2020-01-01T00:00:00.000Z"), "1", DEVELOPER),
     ).rejects.toThrow(/deadline has already passed/);
     expect(client.write).not.toHaveBeenCalled();
   });
@@ -135,11 +136,6 @@ describe("chainCalls", () => {
 
   it.each([
     [
-      "fundBounty",
-      "BountyExists",
-      (c: ChainCalls) => c.fundBounty("contract_1", new Date("2030-01-01"), "1"),
-    ],
-    [
       "openDispute",
       "DisputeExists",
       (c: ChainCalls) => c.openDispute("contract_1", "finding_1", "r"),
@@ -157,6 +153,29 @@ describe("chainCalls", () => {
       expect(client.write).not.toHaveBeenCalled();
     },
   );
+
+  it("treats BountyExists as done only when the developer funded the existing bounty", async () => {
+    const exists = () =>
+      fakeClient({
+        simulate: vi.fn(async () => {
+          throw new ChainTxError("BountyExists");
+        }),
+        // closedBounty's developer is 0x...01.
+        read: vi.fn(async () => closedBounty(1)),
+      });
+    const fund = (client: ReturnType<typeof fakeClient>, developer: string) =>
+      chainCalls(INFO, client).fundBounty("contract_1", new Date("2030-01-01"), "1", developer);
+
+    const ours = exists();
+    await expect(fund(ours, "0x0000000000000000000000000000000000000001")).resolves.toBeNull();
+    expect(ours.write).not.toHaveBeenCalled();
+
+    const squatted = exists();
+    await expect(fund(squatted, "0x00000000000000000000000000000000000000d1")).rejects.toMatchObject({
+      reason: "BountyExists",
+    });
+    expect(squatted.write).not.toHaveBeenCalled();
+  });
 
   it("treats cancel and refund of a bounty already closed on-chain as done", async () => {
     const client = fakeClient({
@@ -183,12 +202,12 @@ describe("chainCalls", () => {
     ).rejects.toMatchObject({ reason: "BountyNotOpen" });
   });
 
-  it("reports whether a bounty is funded on-chain", async () => {
+  it("reads the bounty's state from BountyEscrow", async () => {
     const client = fakeClient({ read: vi.fn(async () => closedBounty(0)) });
     const calls = chainCalls(INFO, client);
-    await expect(calls.isFunded("contract_1")).resolves.toBe(false);
+    await expect(calls.readBounty("contract_1")).resolves.toMatchObject({ state: 0 });
     vi.mocked(client.read).mockResolvedValue(closedBounty(1));
-    await expect(calls.isFunded("contract_1")).resolves.toBe(true);
+    await expect(calls.readBounty("contract_1")).resolves.toMatchObject({ state: 1 });
     expect(client.read).toHaveBeenCalledWith(
       expect.objectContaining({
         address: INFO.addresses.bountyEscrow,
@@ -201,6 +220,19 @@ describe("chainCalls", () => {
 
 /** BountyEscrow.bounties(id) as viem returns it: the struct's fields in order;
  * index 3 is the state (None, Open, Paid, Closed). */
+describe("readBounty", () => {
+  it("reads who funded the bounty under the contract's id, and its state", async () => {
+    const client = fakeClient({ read: vi.fn(async () => closedBounty(1)) });
+    await expect(chainCalls(INFO, client).readBounty("contract_1")).resolves.toEqual({
+      developer: "0x0000000000000000000000000000000000000001",
+      state: 1,
+    });
+    expect(client.read).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: "bounties", args: [onchainId("contract_1")] }),
+    );
+  });
+});
+
 function closedBounty(state: number): readonly unknown[] {
   return [
     "0x0000000000000000000000000000000000000001",

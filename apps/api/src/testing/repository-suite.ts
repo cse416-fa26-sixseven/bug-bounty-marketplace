@@ -8,6 +8,7 @@ import type {
   NewJob,
   PipelineRepository,
 } from "../pipeline/repository.js";
+import type { MemoryStore } from "../pipeline/memory-repository.js";
 
 /** What the shared repository tests need from an implementation. Test-only
  * hooks (seeding findings, failing jobs) stand in for the Python worker. */
@@ -16,6 +17,8 @@ export interface RepositoryHarness {
   pipeline: PipelineRepository;
   seedFinding(record: FindingRecord): Promise<void>;
   setJobStatus(jobId: string, status: JobStatus, lastError?: string): Promise<void>;
+  /** Queues another analysis job for the contract, as a re-run would. */
+  addAnalysisJob(job: { id: string; subjectId: string; createdAt: string; status: JobStatus }): Promise<void>;
   jobsFor(subjectId: string): Promise<Array<{ kind: string; status: JobStatus }>>;
   /** Removes what the tests have inserted so far, so the next test starts with
    * no claims. The auditors in these tests hold one claim at a time. */
@@ -136,6 +139,14 @@ function makePoc(findingId: string): { poc: PoCSubmission; job: NewJob } {
   };
 }
 
+/** Marks a contract's analysis jobs done in a MemoryStore, standing in for the
+ * worker: the queue, claims and funding wait for a finished analysis. */
+export function markAnalysed(store: MemoryStore, contractId: string): void {
+  for (const job of store.jobs.values()) {
+    if (job.kind === "analysis" && job.subjectId === contractId) job.status = "done";
+  }
+}
+
 /** Registers the shared repository behaviour tests for one implementation. */
 export function describeRepositories(
   name: string,
@@ -156,6 +167,14 @@ export function describeRepositories(
     async function insert(overrides: Partial<Contract> = {}) {
       const record = makeContract(overrides);
       await h.contracts.insertContract(record);
+      return record;
+    }
+
+    /** A contract whose analysis job the worker has finished, so it is listed
+     * in the queue. */
+    async function insertAnalysed(overrides: Partial<Contract> = {}) {
+      const record = await insert(overrides);
+      await h.setJobStatus(record.analysisJob.id, "done");
       return record;
     }
 
@@ -276,10 +295,53 @@ export function describeRepositories(
       });
     }
 
+    it("listQueue and isAnalysisDone wait for the latest analysis job to be done", async () => {
+      const queued = await insert();
+      const failed = await insert();
+      await h.setJobStatus(failed.analysisJob.id, "failed", "solc: compilation failed");
+      const running = await insert();
+      await h.setJobStatus(running.analysisJob.id, "running");
+      const done = await insertAnalysed();
+
+      const ids = (await h.contracts.listQueue(T0)).map((c) => c.id);
+      expect(ids).toContain(done.contract.id);
+      for (const record of [queued, failed, running]) {
+        expect(ids).not.toContain(record.contract.id);
+        expect(await h.contracts.isAnalysisDone(record.contract.id)).toBe(false);
+      }
+      expect(await h.contracts.isAnalysisDone(done.contract.id)).toBe(true);
+      expect(await h.contracts.isAnalysisDone("contract_missing")).toBe(false);
+    });
+
+    it("isAnalysisDone and listQueue follow the newest analysis job, by time then id", async () => {
+      const job = (subjectId: string, createdAt: Date, status: JobStatus, id = `job_${randomUUID()}`) =>
+        h.addAnalysisJob({ id, subjectId, createdAt: createdAt.toISOString(), status });
+      const listed = async (id: string) => (await h.contracts.listQueue(T0)).some((c) => c.id === id);
+
+      // An older failure does not hold back a newer finished run.
+      const rerun = await insert();
+      await h.setJobStatus(rerun.analysisJob.id, "failed", "solc error");
+      await job(rerun.contract.id, minutes(5), "done");
+      expect(await h.contracts.isAnalysisDone(rerun.contract.id)).toBe(true);
+      expect(await listed(rerun.contract.id)).toBe(true);
+
+      // An older finished run does not stand in for a newer one still running.
+      const running = await insertAnalysed();
+      await job(running.contract.id, minutes(5), "running");
+      expect(await h.contracts.isAnalysisDone(running.contract.id)).toBe(false);
+      expect(await listed(running.contract.id)).toBe(false);
+
+      // Same timestamp: the larger id is the newer job.
+      const tie = await insert();
+      await job(tie.contract.id, minutes(5), "done", "job_zzzz_" + randomUUID());
+      await job(tie.contract.id, minutes(5), "failed", "job_aaaa_" + randomUUID());
+      expect(await h.contracts.isAnalysisDone(tie.contract.id)).toBe(true);
+    });
+
     it("listQueue includes Open and expired claims, not active claims, with the bounty", async () => {
-      const open = await insert();
-      const active = await insert();
-      const expired = await insert();
+      const open = await insertAnalysed();
+      const active = await insertAnalysed();
+      const expired = await insertAnalysed();
       await h.contracts.claimContract(active.contract.id, "auditor_1", minutes(30), T0);
       // A different auditor: auditor_1 already holds the active claim above, and
       // one auditor may hold one claim at a time.
@@ -371,9 +433,22 @@ export function describeRepositories(
       expect(await h.jobsFor(poc.id)).toEqual([{ kind: "sandbox", status: "queued" }]);
     });
 
+    it("markFunded with a deadline moves an unfunded bounty's deadline, never a funded one's", async () => {
+      const { contract } = await insert();
+      const later = new Date("2031-06-01T00:00:00.000Z");
+      await h.contracts.markFunded(contract.id, T0, later);
+      expect(await h.contracts.isFunded(contract.id)).toBe(true);
+      expect((await h.contracts.findContractById(contract.id, T0))?.deadline).toBe(later.toISOString());
+      expect((await h.contracts.findBounty(contract.id))?.deadline).toBe(later.toISOString());
+
+      await h.contracts.markFunded(contract.id, minutes(1), new Date("2032-01-01T00:00:00.000Z"));
+      expect((await h.contracts.findContractById(contract.id, T0))?.deadline).toBe(later.toISOString());
+      expect((await h.contracts.findBounty(contract.id))?.deadline).toBe(later.toISOString());
+    });
+
     it("markFunded, fundedOnly queue, findBounty and setContractStatus", async () => {
-      const funded = await insert();
-      const unfunded = await insert();
+      const funded = await insertAnalysed();
+      const unfunded = await insertAnalysed();
       expect((await h.contracts.findBounty(funded.contract.id))?.amount).toBe(funded.bounty.amount);
       expect(await h.contracts.isFunded(funded.contract.id)).toBe(false);
       await h.contracts.markFunded(funded.contract.id, T0);

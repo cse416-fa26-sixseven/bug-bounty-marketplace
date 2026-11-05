@@ -2,11 +2,12 @@
 
 import { use } from "react";
 import Link from "next/link";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { developerApi, ApiError } from "@/lib/api";
-import { useChainCalls } from "@/lib/chain/use-chain";
 import { AnalysisNotice } from "../_components/AnalysisNotice";
+import { ContractActions } from "../_components/ContractActions";
 import { FindingCard } from "../_components/FindingCard";
+import { FundBounty } from "../_components/FundBounty";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -19,7 +20,6 @@ const STATUS_STYLES: Record<string, string> = {
 
 export default function ContractDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const queryClient = useQueryClient();
 
   const contractQuery = useQuery({
     queryKey: ["contract", id],
@@ -44,24 +44,6 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
     retry: false,
   });
 
-  const chain = useChainCalls();
-  const reclaimMutation = useMutation({
-    mutationFn: async () => {
-      // On-chain the developer takes the bounty back (refund), then the API records it.
-      if (chain) await chain.refund(id);
-      return developerApi.reclaimBounty(id);
-    },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["contract", id] }),
-  });
-
-  const cancelMutation = useMutation({
-    mutationFn: async () => {
-      if (chain) await chain.deleteBounty(id);
-      return developerApi.cancelContract(id);
-    },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["contract", id] }),
-  });
-
   if (contractQuery.isLoading) {
     return <p className="text-slate-400">Loading contract...</p>;
   }
@@ -74,18 +56,6 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
 
   const contract = contractQuery.data;
   const findings = findingsQuery.data ?? [];
-  const canReclaim =
-    new Date(contract.deadline) < new Date() &&
-    contract.status !== "Resolved" &&
-    contract.status !== "Expired" &&
-    !findings.some((f) => ["Submitted", "Verified", "Disputed"].includes(f.status));
-  const canCancel = contract.status === "Open";
-
-  const reclaimError =
-    reclaimMutation.error instanceof Error ? reclaimMutation.error.message : null;
-  const cancelError =
-    cancelMutation.error instanceof Error ? cancelMutation.error.message : null;
-
   return (
     <div>
       <Link href="/contracts" className="text-xs text-emerald-400 inline-block mb-5">
@@ -120,35 +90,9 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
         </div>
       </dl>
 
-      <div className="mt-6 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={!canReclaim || reclaimMutation.isPending}
-          onClick={() => {
-            if (window.confirm("Reclaim this expired demo bounty?")) reclaimMutation.mutate();
-          }}
-          title={canReclaim ? undefined : "Only available after the deadline passes"}
-          className="rounded-md border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {reclaimMutation.isPending ? "Reclaiming..." : "Reclaim bounty"}
-        </button>
+      <ContractActions contract={contract} findings={findings} />
 
-        {canCancel && (
-          <button
-            type="button"
-            disabled={cancelMutation.isPending}
-            onClick={() => {
-              if (window.confirm("Cancel this contract and close its demo bounty?"))
-                cancelMutation.mutate();
-            }}
-            className="rounded-md border border-red-500/50 px-3 py-1.5 text-sm font-medium text-red-300 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {cancelMutation.isPending ? "Cancelling..." : "Cancel contract"}
-          </button>
-        )}
-      </div>
-      {reclaimError && <p className="mt-2 text-sm text-red-400">{reclaimError}</p>}
-      {cancelError && <p className="mt-2 text-sm text-red-400">{cancelError}</p>}
+      <FundBounty contract={contract} analysis={analysisQuery.data} />
 
       <h2 className="mt-10 text-lg font-semibold text-white">Findings</h2>
       {findingsQuery.isError ? (

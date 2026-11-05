@@ -47,16 +47,24 @@ export interface ContractRepository {
    * stake lock is free or already released; a claim held by someone else, or
    * with a lock still pending or held, is left alone. */
   releaseClaimIfUnlocked(contractId: string, auditorId: string): Promise<void>;
-  /** Contracts open to claim (including expired claims), with their bounty.
-   * `fundedOnly` keeps only bounties confirmed funded on-chain. */
+  /** Contracts open to claim (including expired claims) whose latest analysis
+   * job is done, with their bounty. `fundedOnly` keeps only bounties
+   * confirmed funded on-chain. */
   listQueue(now: Date, options?: { fundedOnly?: boolean }): Promise<QueueItem[]>;
   findBounty(contractId: string): Promise<Bounty | null>;
   /** Ids of contracts the auditor holds an active claim on at `now`. */
   listClaimedContractIds(auditorId: string, now: Date): Promise<string[]>;
+  /** True when the contract's latest analysis job is done. Funding and claims
+   * wait for it, so a contract whose analysis failed (for example, it does
+   * not compile) is never fundable or claimable. */
+  isAnalysisDone(contractId: string): Promise<boolean>;
   /** True once the bounty is confirmed funded on-chain (markFunded). */
   isFunded(contractId: string): Promise<boolean>;
-  /** Records that the bounty is funded on-chain. Idempotent. */
-  markFunded(contractId: string, at: Date): Promise<void>;
+  /** Records that the bounty is funded on-chain. Idempotent. With `deadline`,
+   * an unfunded bounty first takes that deadline (contract and bounty): funding
+   * waits for the analysis, so the developer may fund with a later deadline
+   * than the one entered at upload. A funded bounty keeps its deadline. */
+  markFunded(contractId: string, at: Date, deadline?: Date): Promise<void>;
   /** Moves the contract through the contract status machine. Null when the
    * contract is unknown; same status is a no-op; an illegal move throws
    * InvalidTransitionError. */

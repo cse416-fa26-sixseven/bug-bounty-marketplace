@@ -32,7 +32,7 @@ STAKING=$(echo "$CHAIN" | jq -r .addresses.auditorStaking)
 JAR=$(mktemp)
 trap 'rm -f "$JAR"' EXIT
 
-echo "== Developer signs in, uploads Vault.sol and funds 1 ETH"
+echo "== Developer signs in and uploads Vault.sol"
 MESSAGE=$(curl -sf -H 'content-type: application/json' -d "{\"address\":\"$DEV\"}" "$API/api/auth/nonce" | jq -r .message)
 SIGNATURE=$(cast_local wallet sign --private-key "$DEV_KEY" "$MESSAGE")
 curl -sf -c "$JAR" -H 'content-type: application/json' \
@@ -41,25 +41,29 @@ curl -sf -c "$JAR" -H 'content-type: application/json' \
 CONTRACT=$(curl -sf -b "$JAR" -F "file=@$FIXTURES/Vault.sol" -F bountyAmount=1000000000000000000 \
   -F deadline=2030-01-01T00:00:00.000Z "$API/api/contracts" | jq -r .id)
 [ -n "$CONTRACT" ] && [ "$CONTRACT" != null ] || die "upload failed"
-cast_rpc send --private-key "$DEV_KEY" --value 1ether "$ESCROW" "fund(bytes32,uint256)" \
-  "$(cast_local keccak "$CONTRACT")" 1893456000 >/dev/null || die "fund failed"
-curl -sf -b "$JAR" -X POST "$API/api/contracts/$CONTRACT/funded" >/dev/null || die "funded check failed"
 
 echo "== Auditor stakes 0.1 ETH"
 if [ "$(cast_rpc call "$STAKING" 'stakeOf(address)(uint256)' "$AUD" | awk '{print $1}')" = 0 ]; then
   cast_rpc send --private-key "$AUD_KEY" --value 0.1ether "$STAKING" "stake()" >/dev/null || die "stake failed"
 fi
 
-echo "== Waiting for the analysis (up to 5 minutes)"
-FINDING=""
+echo "== Waiting for the analysis (up to 5 minutes); funding waits for it"
+STATUS=""
 for _ in $(seq 1 300); do
-  FINDING=$(curl -sf "$API/api/contracts/$CONTRACT/findings" \
-    | jq -r '[.[] | select(.slitherDetector=="reentrancy-eth")][0].id // empty') || true
-  [ -n "$FINDING" ] && break
+  STATUS=$(curl -sf "$API/api/contracts/$CONTRACT/analysis" | jq -r .status) || true
+  [ "$STATUS" = Done ] || [ "$STATUS" = Failed ] && break
   sleep 1
 done
-[ -n "$FINDING" ] || die "no reentrancy finding after 5 minutes: check docker compose logs analysis"
+[ "$STATUS" = Done ] || die "analysis not done after 5 minutes (last: ${STATUS:-unknown}): check docker compose logs analysis"
+FINDING=$(curl -sf "$API/api/contracts/$CONTRACT/findings" \
+  | jq -r '[.[] | select(.slitherDetector=="reentrancy-eth")][0].id // empty')
+[ -n "$FINDING" ] || die "no reentrancy finding: check docker compose logs analysis"
 COUNT=$(curl -sf "$API/api/contracts/$CONTRACT/findings" | jq length)
+
+echo "== Developer funds 1 ETH"
+cast_rpc send --private-key "$DEV_KEY" --value 1ether "$ESCROW" "fund(bytes32,uint256)" \
+  "$(cast_local keccak "$CONTRACT")" 1893456000 >/dev/null || die "fund failed"
+curl -sf -b "$JAR" -X POST "$API/api/contracts/$CONTRACT/funded" >/dev/null || die "funded check failed"
 
 printf '\nDEMO READY\n'
 echo "Staged contract: $WEB/contracts/$CONTRACT ($COUNT findings, 1 ETH bounty)"

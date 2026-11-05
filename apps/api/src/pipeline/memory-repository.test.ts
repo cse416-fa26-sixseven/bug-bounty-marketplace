@@ -25,6 +25,18 @@ describeRepositories(
         job.status = status;
         job.lastError = lastError ?? null;
       },
+      addAnalysisJob: async ({ id, subjectId, createdAt, status }) => {
+        store.jobs.set(id, {
+          id,
+          kind: "analysis",
+          subjectId,
+          createdAt,
+          status,
+          attempts: 0,
+          lastError: null,
+          updatedAt: createdAt,
+        });
+      },
       jobsFor: async (subjectId) =>
         [...store.jobs.values()]
           .filter((j) => j.subjectId === subjectId)

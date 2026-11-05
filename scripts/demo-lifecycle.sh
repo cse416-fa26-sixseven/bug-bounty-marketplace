@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full on-chain lifecycle against `pnpm stack:demo`, from the command line:
-#   1. payout: fund -> analysis -> stake -> claim -> passing PoC -> Verified ->
+#   1. payout: upload -> analysis -> fund -> stake -> claim -> passing PoC -> Verified ->
 #      paid after the challenge window -> the auditor withdraws;
 #   2. dispute: a second bounty -> Verified -> the developer disputes -> the
 #      arbiter rules against the auditor -> Rejected, stake slashed by half;
@@ -88,22 +88,30 @@ wait_status() { # contract finding status seconds
 
 pending_payout() { api -b "$WORK/aud" "$API/api/auditor/profile" | jq -r .pendingPayout; }
 
-# Developer: upload, fund on-chain, confirm. Prints "contract finding".
+wait_analysis() { # contract seconds: funding and claims wait for a finished analysis
+  local status=""
+  for _ in $(seq 1 "$2"); do
+    status=$(api "$API/api/contracts/$1/analysis" 2>/dev/null | jq -r .status) || true
+    [ "$status" = Done ] && return 0
+    [ "$status" = Failed ] && die "analysis of $1 failed: $(api "$API/api/contracts/$1/analysis" | jq -r .error)"
+    sleep 1
+  done
+  die "analysis of $1 not done after $2 seconds (last seen: ${status:-unknown})"
+}
+
+# Developer: upload, wait for the analysis, fund on-chain, confirm. Prints "contract finding".
 funded_contract() {
-  local contract onchain finding=""
+  local contract onchain finding
   contract=$(api -b "$WORK/dev" -F "file=@$FIXTURES/Vault.sol" -F "bountyAmount=$ONE_ETH" \
     -F deadline=2030-01-01T00:00:00.000Z "$API/api/contracts" | jq -r .id) || die "upload failed"
+  wait_analysis "$contract" 300
   onchain=$(cast_in keccak "$contract") || die "keccak failed"
   cast_rpc send --private-key "$DEV_KEY" --value 1ether "$ESCROW" "fund(bytes32,uint256)" "$onchain" 1893456000 >/dev/null \
     || die "fund failed"
   api -b "$WORK/dev" -X POST "$API/api/contracts/$contract/funded" >/dev/null || die "funded check failed"
-  for _ in $(seq 1 300); do
-    finding=$(api "$API/api/contracts/$contract/findings" 2>/dev/null \
-      | jq -r '[.[] | select(.slitherDetector=="reentrancy-eth")][0].id // empty') || true
-    [ -n "$finding" ] && break
-    sleep 1
-  done
-  [ -n "$finding" ] || die "no reentrancy finding for $contract after 5 minutes"
+  finding=$(api "$API/api/contracts/$contract/findings" \
+    | jq -r '[.[] | select(.slitherDetector=="reentrancy-eth")][0].id // empty') || die "findings failed"
+  [ -n "$finding" ] || die "no reentrancy finding for $contract"
   echo "$contract $finding"
 }
 

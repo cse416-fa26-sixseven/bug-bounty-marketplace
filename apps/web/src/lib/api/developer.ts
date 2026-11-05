@@ -1,10 +1,12 @@
 import { z } from "zod";
 import {
   AnalysisStatusSchema,
+  BountySchema,
   ContractSchema,
   DisputeSchema,
   FindingSchema,
   type AnalysisStatus,
+  type Bounty,
   type Contract,
   type Dispute,
   type Finding,
@@ -45,6 +47,12 @@ export function listContracts(params?: { developerAddress?: string }): Promise<C
 /** GET /api/contracts/:id */
 export function getContract(contractId: string): Promise<Contract> {
   return getJson(`/api/contracts/${contractId}`, ContractSchema);
+}
+
+/** GET /api/contracts/:id/bounty - the amount and deadline entered at upload,
+ * which the developer funds on-chain once the analysis is done. */
+export function getBounty(contractId: string): Promise<Bounty> {
+  return getJson(`/api/contracts/${contractId}/bounty`, BountySchema);
 }
 
 /** GET /api/contracts/:id/findings */

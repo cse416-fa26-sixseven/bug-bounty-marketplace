@@ -30,6 +30,13 @@ function contractColumns(nowParam: string): string {
           c.created_at, c.deadline`;
 }
 
+/** SQL: the newest analysis job of contract `c` is done. */
+const LATEST_ANALYSIS_DONE = `(
+  SELECT j.status FROM jobs j
+   WHERE j.kind = 'analysis' AND j.subject_id = c.id
+   ORDER BY j.created_at DESC, j.id DESC
+   LIMIT 1) = 'done'`;
+
 /** SQL: the auditor (`$2`) holds an active claim, or a claim with a lock
  * state, on a contract other than `$1`. `nowParam` is the placeholder for now. */
 function holdsAnotherClaim(nowParam: string): string {
@@ -231,7 +238,8 @@ export class PgContractRepository implements ContractRepository {
          FROM contracts c JOIN bounties b ON b.id = c.bounty_id
         WHERE (c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $1))
           AND (c.claim_lock_status IS NULL OR c.claim_lock_status = 'released')
-          AND ($2::boolean = false OR b.onchain_funded_at IS NOT NULL)`,
+          AND ($2::boolean = false OR b.onchain_funded_at IS NOT NULL)
+          AND ${LATEST_ANALYSIS_DONE}`,
       [now, options.fundedOnly ?? false],
     );
     return result.rows.map((row) => ({
@@ -284,6 +292,14 @@ export class PgContractRepository implements ContractRepository {
     return result.rows.map((row) => row.id);
   }
 
+  async isAnalysisDone(contractId: string): Promise<boolean> {
+    const result = await this.pool.query<{ done: boolean }>(
+      `SELECT ${LATEST_ANALYSIS_DONE} AS done FROM contracts c WHERE c.id = $1`,
+      [contractId],
+    );
+    return result.rows[0]?.done ?? false;
+  }
+
   async isFunded(contractId: string): Promise<boolean> {
     const result = await this.pool.query<{ funded: boolean }>(
       "SELECT onchain_funded_at IS NOT NULL AS funded FROM bounties WHERE contract_id = $1",
@@ -292,10 +308,23 @@ export class PgContractRepository implements ContractRepository {
     return result.rows[0]?.funded ?? false;
   }
 
-  async markFunded(contractId: string, at: Date): Promise<void> {
+  async markFunded(contractId: string, at: Date, deadline?: Date): Promise<void> {
+    if (!deadline) {
+      await this.pool.query(
+        "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",
+        [contractId, at],
+      );
+      return;
+    }
+    // One statement: the deadline moves only while the bounty is unfunded, so
+    // a repeat call cannot change a funded bounty's terms.
     await this.pool.query(
-      "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",
-      [contractId, at],
+      `WITH b AS (
+         UPDATE bounties SET deadline = $3, onchain_funded_at = $2
+          WHERE contract_id = $1 AND onchain_funded_at IS NULL
+          RETURNING contract_id)
+       UPDATE contracts SET deadline = $3 WHERE id IN (SELECT contract_id FROM b)`,
+      [contractId, at, deadline],
     );
   }
 

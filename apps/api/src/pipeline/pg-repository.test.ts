@@ -43,8 +43,9 @@ describeRepositories(
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
       findBounty: (id) => repo.findBounty(id),
       listClaimedContractIds: (id, now) => repo.listClaimedContractIds(id, now),
-      markFunded: (id, at) => repo.markFunded(id, at),
+      markFunded: (id, at, deadline) => repo.markFunded(id, at, deadline),
       isFunded: (id) => repo.isFunded(id),
+      isAnalysisDone: (id) => repo.isAnalysisDone(id),
       setContractStatus: (id, next, now) => repo.setContractStatus(id, next, now),
     };
     // Deletes every row the tests inserted so far, so a shared dev database
@@ -107,6 +108,13 @@ describeRepositories(
           status,
           lastError ?? null,
         ]);
+      },
+      addAnalysisJob: async ({ id, subjectId, createdAt, status }) => {
+        await db.query(
+          `INSERT INTO jobs (id, kind, subject_id, status, attempts, created_at, updated_at)
+           VALUES ($1, 'analysis', $2, $3, 0, $4, $4)`,
+          [id, subjectId, status, createdAt],
+        );
       },
       jobsFor: async (subjectId) => {
         const result = await db.query<{ kind: string; status: JobStatus }>(

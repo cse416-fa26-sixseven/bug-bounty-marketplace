@@ -3,7 +3,11 @@ import type { Address, Hex } from "viem";
 import { buildApp } from "../app.js";
 import type { BountyEscrowPort, OnchainBounty } from "../chain/bounty-escrow.js";
 import { onchainId } from "../chain/ids.js";
+import { MemoryChainActionStore } from "../chain/memory-action-store.js";
+import { MemoryPipelineRepository, MemoryStore } from "../pipeline/memory-repository.js";
 import { multipartBody } from "../testing/http.js";
+import { markAnalysed } from "../testing/repository-suite.js";
+import { MemoryContractRepository } from "./memory-repository.js";
 import { AUDITOR, DEVELOPER, signIn } from "../testing/session.js";
 
 const ZERO = `0x${"0".repeat(64)}` as Hex;
@@ -28,16 +32,25 @@ function setup(options: { chainActions?: unknown } = {}) {
         },
     ),
   } satisfies Pick<BountyEscrowPort, "readBounty">;
+  const store = new MemoryStore();
   const app = buildApp({
     sessionSecret: "s",
     bountyEscrow,
     chainActions: options.chainActions as never,
+    repository: new MemoryContractRepository(store),
+    pipeline: new MemoryPipelineRepository(store),
+    findingStatus: new MemoryChainActionStore(store),
   });
-  function fundOnChain(contractId: string, state = 1, developer: Address = DEVELOPER.address) {
+  function fundOnChain(
+    contractId: string,
+    state = 1,
+    developer: Address = DEVELOPER.address,
+    deadline = DEADLINE,
+  ) {
     bounties.set(onchainId(contractId), {
       developer,
       amount: BigInt(AMOUNT),
-      deadline: BigInt(Date.parse(DEADLINE) / 1000),
+      deadline: BigInt(Date.parse(deadline) / 1000),
       state,
       submissionCount: 0n,
       verifiedFinding: ZERO,
@@ -45,8 +58,14 @@ function setup(options: { chainActions?: unknown } = {}) {
       frozen: false,
     });
   }
-  async function upload(cookie: string, developerAddress: string = DEVELOPER.address) {
-    return app.inject({
+  /** Uploads a contract; unless `analysed` is false, the worker is taken to
+   * have finished its analysis. */
+  async function upload(
+    cookie: string,
+    developerAddress: string = DEVELOPER.address,
+    analysed = true,
+  ) {
+    const response = await app.inject({
       method: "POST",
       url: "/api/contracts",
       headers: { cookie, ...multipartBody({}).headers },
@@ -55,8 +74,10 @@ function setup(options: { chainActions?: unknown } = {}) {
         { name: "Vault.sol", content: Buffer.from("pragma solidity ^0.8.19; contract V {}") },
       ).payload,
     });
+    if (response.statusCode === 201 && analysed) markAnalysed(store, response.json().id as string);
+    return response;
   }
-  return { app, bounties, fundOnChain, upload };
+  return { app, store, bounties, fundOnChain, upload };
 }
 
 describe("contract lifecycle routes with a chain", () => {
@@ -82,6 +103,55 @@ describe("contract lifecycle routes with a chain", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().id).toBe(id);
     }
+  });
+
+  it("refuses to mark funded until the analysis is done, even when the chain holds it", async () => {
+    const { app, store, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev, DEVELOPER.address, false)).json().id as string;
+    fundOnChain(id);
+    const funded = () =>
+      app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+
+    const early = await funded();
+    expect(early.statusCode).toBe(409);
+    expect(early.json()).toEqual({ error: "analysis not finished" });
+
+    const job = [...store.jobs.values()].find((j) => j.subjectId === id)!;
+    job.status = "failed";
+    expect((await funded()).statusCode).toBe(409);
+
+    job.status = "done";
+    expect((await funded()).statusCode).toBe(200);
+  });
+
+  it("adopts a later on-chain deadline for an unfunded bounty, but not a past, earlier or funded one", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const funded = (id: string) =>
+      app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+
+    const past = (await upload(dev)).json().id as string;
+    fundOnChain(past, 1, DEVELOPER.address, "2020-01-01T00:00:00.000Z");
+    expect((await funded(past)).statusCode).toBe(409);
+
+    // Future, but earlier than the deadline entered at upload: not adopted.
+    const earlier = (await upload(dev)).json().id as string;
+    fundOnChain(earlier, 1, DEVELOPER.address, "2029-06-01T00:00:00.000Z");
+    expect((await funded(earlier)).statusCode).toBe(409);
+
+    const id = (await upload(dev)).json().id as string;
+    const LATER = "2031-06-01T00:00:00.000Z";
+    fundOnChain(id, 1, DEVELOPER.address, LATER);
+    const res = await funded(id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deadline).toBe(LATER);
+
+    // Funded: its terms no longer move.
+    fundOnChain(id, 1, DEVELOPER.address, "2032-01-01T00:00:00.000Z");
+    expect((await funded(id)).statusCode).toBe(409);
+    fundOnChain(id, 1, DEVELOPER.address, LATER);
+    expect((await funded(id)).statusCode).toBe(200);
   });
 
   it("refuses to mark funded when the chain does not hold the bounty", async () => {
@@ -152,6 +222,64 @@ describe("contract lifecycle routes with a chain", () => {
     }
   });
 
+  it("refuses to cancel while the developer's own bounty is open on-chain and unrecorded", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "bounty not deleted on-chain" });
+  });
+
+  it("cancels despite a bounty someone else funded under the contract's id", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1, AUDITOR.address);
+    // Not the developer's bounty: /funded refuses it, and cancel needs no on-chain step.
+    const funded = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    expect(funded.statusCode).toBe(409);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("Expired");
+  });
+
+  it("refuses to mark a cancelled contract funded, even when the chain holds its bounty", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    const cancel = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(cancel.json().status).toBe("Expired");
+    fundOnChain(id, 1);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "contract is not open" });
+    const queue = await app.inject({ method: "GET", url: "/api/auditor/queue" });
+    expect(queue.json().map((c: { id: string }) => c.id)).not.toContain(id);
+  });
+
+  it("cancels a contract never funded on-chain without an on-chain step, but never reclaims it", async () => {
+    const { app, upload } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev, DEVELOPER.address, false)).json().id as string;
+
+    const reclaim = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/reclaim`,
+      headers: { cookie: dev },
+    });
+    expect(reclaim.statusCode).toBe(409);
+
+    const cancel = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/cancel`,
+      headers: { cookie: dev },
+    });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json().status).toBe("Expired");
+  });
+
   it("claims for the signed-in auditor and rejects a different body auditorId", async () => {
     const { app, upload, fundOnChain } = setup();
     const dev = await signIn(app, DEVELOPER);
@@ -220,6 +348,73 @@ describe("review fixes", () => {
     expect(res.statusCode).toBe(200);
     expect(chainActions.releaseClaimLock).toHaveBeenCalledWith(id);
     expect(chainActions.releaseExpiredLocks).not.toHaveBeenCalled();
+  });
+
+  it("still releases the claim lock when cancelling over another wallet's bounty", async () => {
+    const chainActions = {
+      chainConfigured: true,
+      releaseClaimLock: vi.fn(async () => true),
+      releaseExpiredLocks: vi.fn(async () => 0),
+      lockClaim: vi.fn(async () => undefined),
+    };
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1, AUDITOR.address);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(200);
+    expect(chainActions.releaseClaimLock).toHaveBeenCalledWith(id);
+  });
+
+  it("counts the developer's bounty as theirs whatever the address case", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1, DEVELOPER.address.toLowerCase() as Address);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "bounty not deleted on-chain" });
+  });
+
+  it("cancels, but never reclaims, over another wallet's paid or closed bounty", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    for (const state of [2, 3]) {
+      const id = (await upload(dev)).json().id as string;
+      fundOnChain(id, state, AUDITOR.address);
+      const reclaim = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/reclaim`,
+        headers: { cookie: dev },
+      });
+      expect(reclaim.statusCode).toBe(409);
+      const cancel = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/cancel`,
+        headers: { cookie: dev },
+      });
+      expect(cancel.statusCode).toBe(200);
+    }
+  });
+
+  it("confirms funding again for a Claimed contract already funded", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id);
+    const funded = () =>
+      app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    expect((await funded()).statusCode).toBe(200);
+    const claim = await app.inject({
+      method: "POST",
+      url: "/api/auditor/claim",
+      headers: { cookie: await signIn(app, AUDITOR) },
+      payload: { contractId: id },
+    });
+    expect(claim.json().status).toBe("Claimed");
+    const again = await funded();
+    expect(again.statusCode).toBe(200);
+    expect(again.json().status).toBe("Claimed");
   });
 
   it("keeps the contract when the claim lock cannot be released", async () => {

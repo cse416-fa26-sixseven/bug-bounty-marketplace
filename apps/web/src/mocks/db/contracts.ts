@@ -1,5 +1,7 @@
 import {
   DeveloperNoteInputSchema,
+  type AnalysisStatus,
+  type Bounty,
   type Contract,
   type ContractStatus,
   type Finding,
@@ -88,6 +90,65 @@ export function generateFindingsForContract(contractId: string, count = 2): Find
   return findings;
 }
 
+/** A mock upload whose filename contains this (any case) fails analysis the
+ * way a contract that does not compile does: no findings, never fundable or
+ * claimable. */
+export const FAILING_ANALYSIS_MARKER = "broken";
+
+const MOCK_COMPILER_ERROR =
+  "ParserError: Expected ';' but got '}'\n --> {file}:7:1:\n  |\n7 | }\n  | ^";
+
+/** Analysis runs still in flight or failed. A contract with no entry has a
+ * finished (Done) analysis, as every seeded contract but contract_1 does. */
+const analysisRuns = new Map<string, { status: "Running" | "Failed"; error: string | null; updatedAt: string }>();
+
+/** Starts the simulated Slither + LLM analysis: findings land ~3s later, or
+ * the run fails for a FAILING_ANALYSIS_MARKER filename. */
+function startAnalysis(contractId: string, filename: string): void {
+  analysisRuns.set(contractId, { status: "Running", error: null, updatedAt: timestamp(0) });
+  scheduleOnce(`analysis:${contractId}`, ANALYSIS_DELAY_MS, () => {
+    if (filename.toLowerCase().includes(FAILING_ANALYSIS_MARKER)) {
+      analysisRuns.set(contractId, {
+        status: "Failed",
+        error: MOCK_COMPILER_ERROR.replace("{file}", filename),
+        updatedAt: timestamp(0),
+      });
+      return;
+    }
+    generateFindingsForContract(contractId);
+    analysisRuns.delete(contractId);
+  });
+}
+
+/** Finishes the contract's analysis now, with no findings (a clean report).
+ * For tests and fixtures that need a contract auditors can claim. */
+export function completeAnalysisClean(contractId: string): void {
+  cancelScheduled(`analysis:${contractId}`);
+  analysisRuns.delete(contractId);
+}
+
+/** Mirrors GET /api/contracts/:id/analysis. */
+export function analysisStatusFor(contract: Contract): AnalysisStatus {
+  const run = analysisRuns.get(contract.id);
+  return {
+    contractId: contract.id,
+    status: run?.status ?? "Done",
+    error: run?.error ?? null,
+    findingCount: listFindingsByContract(contract.id).length,
+    updatedAt: run?.updatedAt ?? contract.createdAt,
+  };
+}
+
+/** True once the contract's analysis finished, as the API requires before
+ * funding or claiming. */
+export function isAnalysisDone(contractId: string): boolean {
+  return !analysisRuns.has(contractId);
+}
+
+export function findBountyByContract(contractId: string): Bounty | undefined {
+  return db.bounties.find((b) => b.contractId === contractId);
+}
+
 export function findContractById(contractId: string): Contract | undefined {
   return db.contracts.find((c) => c.id === contractId);
 }
@@ -145,12 +206,7 @@ export function createContract(input: CreateContractInput): Contract {
     deadline: input.deadline,
   };
   db.contracts.push(contract);
-
-  // Simulate the Slither + LLM analysis pipeline: findings land ~3s later.
-  scheduleOnce(`analysis:${contractId}`, ANALYSIS_DELAY_MS, () => {
-    generateFindingsForContract(contractId);
-  });
-
+  startAnalysis(contractId, input.filename);
   return contract;
 }
 
@@ -247,6 +303,7 @@ export function setFindingNote(findingId: string, developerId: string, note: unk
 }
 
 export function seedContractsArea(): void {
+  analysisRuns.clear();
   const now = Date.now();
   const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
   const DAY = 86_400_000;
@@ -366,7 +423,5 @@ export function seedContractsArea(): void {
   db.findings.push(findingDisputed);
   // Keep the open seed usable: analysis must complete just as it does
   // for a new upload. Schedule after all seeds so fixture IDs stay stable.
-  scheduleOnce(`analysis:${contract1Id}`, ANALYSIS_DELAY_MS, () => {
-    generateFindingsForContract(contract1Id);
-  });
+  startAnalysis(contract1Id, "Vault.sol");
 }

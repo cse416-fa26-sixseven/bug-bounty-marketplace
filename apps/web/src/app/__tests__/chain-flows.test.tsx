@@ -1,21 +1,38 @@
 // @vitest-environment jsdom
 import React, { type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Finding } from "@bbm/shared";
+import type { AnalysisStatus, Contract, Finding } from "@bbm/shared";
 import { auditorApi, developerApi } from "@/lib/api";
 import { ChainTxError, type ChainCalls } from "@/lib/chain/calls";
 import { ethToWei } from "@/lib/money";
+import { MOCK_ADDRESSES } from "@/lib/addresses";
 import SubmitPage from "../submit/page";
 import { StakeGate } from "../auditor/_components/StakeGate";
 import { FindingCard } from "../contracts/_components/FindingCard";
+import { FundBounty } from "../contracts/_components/FundBounty";
+import { ContractActions } from "../contracts/_components/ContractActions";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
+// vi.mock factories are hoisted, so the fixtures they use are too.
+const { DEADLINE, BOUNTY } = vi.hoisted(() => {
+  const DEADLINE = "2030-01-01T00:00:00.000Z";
+  const BOUNTY = {
+    id: "bounty_1",
+    contractId: "contract_1",
+    amount: "1000000000000000000",
+    currency: "ETH",
+    fundedAt: "2026-10-20T12:00:00.000Z",
+    deadline: DEADLINE,
+  };
+  return { DEADLINE, BOUNTY };
+});
+
 const chain = {
   fundBounty: vi.fn(),
-  isFunded: vi.fn(),
+  readBounty: vi.fn(),
   stake: vi.fn(),
   openDispute: vi.fn(),
   rule: vi.fn(),
@@ -50,22 +67,66 @@ vi.mock("@/lib/api", async (importOriginal) => {
         deadline: input.deadline,
       })),
       markFunded: vi.fn(async () => ({}) as never),
+      cancelContract: vi.fn(async () => ({}) as never),
+      reclaimBounty: vi.fn(async () => ({}) as never),
+      getBounty: vi.fn(async () => BOUNTY),
       disputeFinding: vi.fn(async () => ({}) as never),
     },
     auditorApi: { ...actual.auditorApi, postStake: vi.fn(actual.auditorApi.postStake) },
   };
 });
 
+const CONTRACT: Contract = {
+  id: "contract_1",
+  // The mock wallet's developer address: the connected wallet is the developer.
+  developerAddress: MOCK_ADDRESSES.developer,
+  filename: "Vault.sol",
+  sourceHash: "a".repeat(64),
+  sourceReference: "contracts/contract_1/a.sol",
+  bountyId: "bounty_1",
+  status: "Open",
+  createdAt: "2026-10-20T12:00:00.000Z",
+  deadline: DEADLINE,
+};
+
+const NO_BOUNTY = { developer: "0x0000000000000000000000000000000000000000", state: 0 };
+const OUR_OPEN_BOUNTY = { developer: MOCK_ADDRESSES.developer, state: 1 };
+const FOREIGN_OPEN_BOUNTY = { developer: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC", state: 1 };
+
+function analysis(status: AnalysisStatus["status"]): AnalysisStatus {
+  return {
+    contractId: "contract_1",
+    status,
+    error: status === "Failed" ? "ParserError" : null,
+    findingCount: 0,
+    updatedAt: "2026-10-20T12:00:00.000Z",
+  };
+}
+
+/** The fund button once the bounty terms have loaded. */
+async function enabledFundButton() {
+  const button = await screen.findByRole("button", { name: /fund bounty/i });
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
+/** The client of the last withClient render, for rerenders. */
+let lastClient: QueryClient | undefined;
+
 function withClient(children: ReactNode) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  lastClient = client;
   return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
 }
 
 beforeEach(() => {
   for (const fn of Object.values(chain)) fn.mockReset();
   vi.mocked(developerApi.markFunded).mockClear();
+  vi.mocked(developerApi.cancelContract).mockClear();
+  vi.mocked(developerApi.reclaimBounty).mockClear();
+  vi.mocked(developerApi.getBounty).mockClear();
   vi.mocked(developerApi.submitContract).mockClear();
   vi.mocked(developerApi.disputeFinding).mockClear();
   vi.mocked(auditorApi.postStake).mockClear();
@@ -85,34 +146,220 @@ async function submitVault() {
 }
 
 describe("lifecycle flows on the local chain", () => {
-  it("funds the bounty on-chain after the upload, then tells the API", async () => {
-    chain.fundBounty.mockResolvedValue("0xhash");
+  it("uploads the contract without funding it: funding waits for the analysis", async () => {
     await submitVault();
-    await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalled());
-    const [contractId, deadline, amount] = chain.fundBounty.mock.calls[0]!;
-    expect(vi.mocked(developerApi.markFunded).mock.calls[0]![0]).toBe(contractId);
-    expect(deadline).toEqual(new Date(new Date("2030-01-01T00:00").toISOString()));
-    expect(amount).toBe(ethToWei("1"));
-  });
-
-  it("shows a failed funding transaction and does not mark the bounty funded", async () => {
-    chain.fundBounty.mockRejectedValue(new ChainTxError("PastDeadline"));
-    await submitVault();
-    expect(
-      await screen.findByText(/funding the bounty failed: The deadline has already passed/),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(developerApi.submitContract).toHaveBeenCalledOnce());
+    expect(vi.mocked(developerApi.submitContract).mock.calls[0]![0]).toMatchObject({
+      bountyAmount: ethToWei("1"),
+      deadline: new Date("2030-01-01T00:00").toISOString(),
+    });
+    expect(chain.fundBounty).not.toHaveBeenCalled();
     expect(developerApi.markFunded).not.toHaveBeenCalled();
   });
 
-  it("retries funding the uploaded contract without uploading it again", async () => {
-    chain.fundBounty
-      .mockRejectedValueOnce(new ChainTxError("TransactionTimeout"))
-      .mockResolvedValue(null);
-    await submitVault();
-    fireEvent.click(await screen.findByRole("button", { name: /retry funding/i }));
+  it("funds the stored bounty on-chain once the analysis is done, then tells the API", async () => {
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    chain.fundBounty.mockResolvedValue("0xhash");
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    fireEvent.click(await enabledFundButton());
     await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalledWith("contract_1"));
-    expect(chain.fundBounty).toHaveBeenCalledTimes(2);
-    expect(developerApi.submitContract).toHaveBeenCalledOnce();
+    expect(chain.fundBounty).toHaveBeenCalledWith(
+      "contract_1",
+      new Date(DEADLINE),
+      BOUNTY.amount,
+      CONTRACT.developerAddress,
+    );
+  });
+
+  it("keeps the fund button disabled while the analysis runs, and hides it when it failed", async () => {
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    const { unmount } = withClient(<FundBounty contract={CONTRACT} analysis={analysis("Running")} />);
+    expect(await screen.findByText("Funding opens once the analysis finishes.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /fund bounty/i })).toBeDisabled();
+    unmount();
+
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Failed")} />);
+    expect(screen.queryByRole("button", { name: /fund bounty/i })).not.toBeInTheDocument();
+  });
+
+  it("asks for a new deadline when the upload's deadline has passed", async () => {
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    chain.fundBounty.mockResolvedValue("0xhash");
+    vi.mocked(developerApi.getBounty).mockResolvedValueOnce({ ...BOUNTY, deadline: "2020-01-01T00:00:00.000Z" });
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    const button = await enabledFundButton();
+
+    fireEvent.click(button);
+    expect(await screen.findByText("Choose a new deadline in the future.")).toBeInTheDocument();
+    expect(chain.fundBounty).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/choose a new one/i), { target: { value: "2031-06-01T00:00" } });
+    fireEvent.click(button);
+    await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalled());
+    expect(chain.fundBounty).toHaveBeenCalledWith(
+      "contract_1",
+      new Date("2031-06-01T00:00"),
+      BOUNTY.amount,
+      CONTRACT.developerAddress,
+    );
+  });
+
+  it("shows a failed funding transaction and does not mark the bounty funded", async () => {
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    chain.fundBounty.mockRejectedValue(new ChainTxError("PastDeadline"));
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    fireEvent.click(await enabledFundButton());
+    expect(await screen.findByText(/The deadline has already passed/)).toBeInTheDocument();
+    expect(developerApi.markFunded).not.toHaveBeenCalled();
+  });
+
+  it("confirms a bounty already funded on-chain with the API instead of funding it again", async () => {
+    chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    expect(await screen.findByText(/Bounty funded on-chain/)).toBeInTheDocument();
+    await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalledWith("contract_1"));
+    expect(chain.fundBounty).not.toHaveBeenCalled();
+  });
+
+  it("confirms again once the analysis finishes, and on Try again after an error", async () => {
+    chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
+    vi.mocked(developerApi.markFunded).mockRejectedValueOnce(new Error("analysis not finished"));
+    const { rerender } = withClient(<FundBounty contract={CONTRACT} analysis={analysis("Running")} />);
+    expect(await screen.findByText(/once the analysis is done/)).toBeInTheDocument();
+    // Not tried while the API would refuse it.
+    expect(developerApi.markFunded).not.toHaveBeenCalled();
+
+    rerender(
+      <QueryClientProvider client={lastClient!}>
+        <FundBounty contract={CONTRACT} analysis={analysis("Done")} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument());
+  });
+
+  it("renders nothing for a contract that is not Open, or for anyone but its developer", async () => {
+    // Nothing funded on-chain, so only the status or the wallet can hide the form.
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    /** Renders `contract` and waits until the on-chain read has settled. */
+    async function renderSettled(contract: Contract) {
+      chain.readBounty.mockClear();
+      const rendered = withClient(<FundBounty contract={contract} analysis={analysis("Done")} />);
+      await waitFor(() => expect(chain.readBounty).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      return rendered;
+    }
+
+    // Positive control: an Open contract with its developer connected shows the form.
+    const control = await renderSettled(CONTRACT);
+    expect(screen.getByRole("button", { name: /fund bounty/i })).toBeInTheDocument();
+    control.unmount();
+
+    for (const status of ["Claimed", "Resolved", "Expired"] as const) {
+      const { container, unmount } = await renderSettled({ ...CONTRACT, status });
+      expect(container).toBeEmptyDOMElement();
+      unmount();
+    }
+    const { container } = await renderSettled({ ...CONTRACT, developerAddress: MOCK_ADDRESSES.auditor });
+    expect(container).toBeEmptyDOMElement();
+    expect(developerApi.markFunded).not.toHaveBeenCalled();
+  });
+
+  it("switches to the foreign-bounty message when funding finds another wallet's bounty", async () => {
+    // The first read is stale: another wallet funds before the developer's transaction.
+    chain.readBounty.mockResolvedValueOnce(NO_BOUNTY).mockResolvedValue(FOREIGN_OPEN_BOUNTY);
+    chain.fundBounty.mockRejectedValue(new ChainTxError("BountyExists"));
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    fireEvent.click(await enabledFundButton());
+    expect(await screen.findByText(/Another wallet has funded a bounty/)).toBeInTheDocument();
+    expect(chain.fundBounty).toHaveBeenCalledWith(
+      "contract_1",
+      new Date(DEADLINE),
+      BOUNTY.amount,
+      CONTRACT.developerAddress,
+    );
+    expect(developerApi.markFunded).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed on-chain read instead of rendering nothing", async () => {
+    chain.readBounty.mockRejectedValue(new Error("RPC unavailable"));
+    const { unmount } = withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    expect(await screen.findByText(/Could not read the bounty on-chain: RPC unavailable/)).toBeInTheDocument();
+    unmount();
+    withClient(<ContractActions contract={CONTRACT} findings={[]} />);
+    expect(await screen.findByText(/Could not read the bounty on-chain: RPC unavailable/)).toBeInTheDocument();
+  });
+
+  it("tells the developer to cancel when another wallet funded under the contract's id", async () => {
+    chain.readBounty.mockResolvedValue(FOREIGN_OPEN_BOUNTY);
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    expect(await screen.findByText(/Another wallet has funded a bounty/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /fund bounty/i })).not.toBeInTheDocument();
+    expect(developerApi.markFunded).not.toHaveBeenCalled();
+  });
+
+  it("cancels without deleteBounty when nothing of the developer's is open on-chain", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    for (const onchain of [NO_BOUNTY, FOREIGN_OPEN_BOUNTY]) {
+      chain.readBounty.mockResolvedValue(onchain);
+      const { unmount } = withClient(<ContractActions contract={CONTRACT} findings={[]} />);
+      fireEvent.click(await screen.findByRole("button", { name: /cancel contract/i }));
+      await waitFor(() => expect(developerApi.cancelContract).toHaveBeenCalledWith("contract_1"));
+      expect(chain.deleteBounty).not.toHaveBeenCalled();
+      vi.mocked(developerApi.cancelContract).mockClear();
+      unmount();
+    }
+  });
+
+  it("deletes the developer's own open bounty on-chain before cancelling", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
+    chain.deleteBounty.mockResolvedValue("0xhash");
+    withClient(<ContractActions contract={CONTRACT} findings={[]} />);
+    fireEvent.click(await screen.findByRole("button", { name: /cancel contract/i }));
+    await waitFor(() => expect(developerApi.cancelContract).toHaveBeenCalledWith("contract_1"));
+    expect(chain.deleteBounty).toHaveBeenCalledWith("contract_1");
+  });
+
+  it("hides Reclaim for a never-funded contract past its deadline, and shows it once funded", async () => {
+    const pastDeadline = { ...CONTRACT, deadline: "2020-01-01T00:00:00.000Z" };
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    const { unmount } = withClient(<ContractActions contract={pastDeadline} findings={[]} />);
+    expect(await screen.findByRole("button", { name: /cancel contract/i })).toBeInTheDocument();
+    await waitFor(() => expect(chain.readBounty).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /reclaim bounty/i })).not.toBeInTheDocument();
+    unmount();
+
+    chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
+    withClient(<ContractActions contract={pastDeadline} findings={[]} />);
+    expect(await screen.findByRole("button", { name: /reclaim bounty/i })).toBeEnabled();
+  });
+
+  it("offers to delete a bounty left open on-chain after the contract was cancelled", async () => {
+    chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
+    chain.deleteBounty.mockResolvedValue("0xhash");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    withClient(<ContractActions contract={{ ...CONTRACT, status: "Expired" }} findings={[]} />);
+    const button = await screen.findByRole("button", { name: /delete on-chain bounty/i });
+    // Declining the confirmation sends nothing.
+    fireEvent.click(button);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(chain.deleteBounty).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    await waitFor(() => expect(chain.deleteBounty).toHaveBeenCalledWith("contract_1"));
+    expect(screen.queryByRole("button", { name: /cancel contract/i })).not.toBeInTheDocument();
+  });
+
+  it("shows no bounty actions to anyone but the contract's developer", async () => {
+    chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
+    const { container } = withClient(
+      <ContractActions contract={{ ...CONTRACT, developerAddress: MOCK_ADDRESSES.auditor }} findings={[]} />,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("stakes on-chain instead of posting to the API", async () => {

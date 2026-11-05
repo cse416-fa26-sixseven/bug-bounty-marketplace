@@ -24,9 +24,9 @@ export const CONTRACT_MULTIPART_LIMITS = {
   fields: 10,
 } as const;
 
-/** Registers `POST /api/contracts`, `GET /api/contracts` and
- * `GET /api/contracts/:id`. The app must already have @fastify/multipart
- * registered with CONTRACT_MULTIPART_LIMITS. */
+/** Registers `POST /api/contracts`, `GET /api/contracts`,
+ * `GET /api/contracts/:id` and `GET /api/contracts/:id/bounty`. The app must
+ * already have @fastify/multipart registered with CONTRACT_MULTIPART_LIMITS. */
 export function registerContractRoutes(app: FastifyInstance, deps: ContractRouteDeps): void {
   const now = deps.now ?? (() => new Date());
 
@@ -75,5 +75,14 @@ export function registerContractRoutes(app: FastifyInstance, deps: ContractRoute
       return reply.code(404).send({ error: "Not found" });
     }
     return contract;
+  });
+
+  // The terms the developer funds on-chain once the analysis is done.
+  app.get<{ Params: { id: string } }>("/api/contracts/:id/bounty", async (request, reply) => {
+    const bounty = await deps.repository.findBounty(request.params.id);
+    if (!bounty) {
+      return reply.code(404).send({ error: "Not found" });
+    }
+    return bounty;
   });
 }
