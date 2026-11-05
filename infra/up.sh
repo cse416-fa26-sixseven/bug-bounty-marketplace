@@ -531,8 +531,16 @@ for e in "${ENVS[@]}"; do
   r=$(envval ENV_LOC "$e")
   [[ "$pg_checked" == *" $r "* ]] && continue
   pg_checked+="$r "
-  if az postgres flexible-server list-skus -l "$r" -o json 2>/dev/null |
-    jq -e '[.[].supportedServerEditions[]? | select(.name == "Burstable") | .supportedServerSkus[]?.name] | index("Standard_B1ms")' >/dev/null; then
+  pg_skus=$(az postgres flexible-server list-skus -l "$r" -o json 2>/dev/null || echo '[]')
+  # A subscription can be "restricted from provisioning" PostgreSQL in a region
+  # while the SKU list still looks normal; only `reason` and an empty
+  # supportedServerVersions give it away (create then fails with
+  # "The value of the 'Version' should be in: []").
+  pg_reason=$(jq -r '[.[].reason // empty] | first // empty' <<<"$pg_skus" 2>/dev/null || true)
+  if [[ -n "$pg_reason" ]]; then
+    die "PostgreSQL Flexible Server cannot be created in $r for this subscription: $pg_reason Move env $e with --env-location $e=<region> (check: az postgres flexible-server list-skus -l <region> --query '[].reason'), or ask Azure support for region access."
+  fi
+  if jq -e '[.[].supportedServerEditions[]? | select(.name == "Burstable") | .supportedServerSkus[]?.name] | index("Standard_B1ms")' >/dev/null <<<"$pg_skus"; then
     ok "PostgreSQL Flexible Standard_B1ms is offered in $r"
   else
     warn "PostgreSQL Flexible Standard_B1ms not offered in $r for this subscription (see azure-bootstrap.md §4)"
