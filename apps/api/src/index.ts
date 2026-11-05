@@ -21,7 +21,11 @@ import {
 } from "./indexer/dispute-settler.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
-import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
+import {
+  chooseSourceStorage,
+  createSourceStorage,
+  describeSourceStorage,
+} from "./contracts/storage.js";
 import { runMigrations } from "./db/migrate.js";
 import { parseBoolEnv, parseIntEnv } from "./env.js";
 import { loadRateLimitConfig, parseTrustProxy } from "./http/rate-limit.js";
@@ -30,10 +34,13 @@ import { checkAuthOrigin, loadAuthConfig } from "./auth/config.js";
 // DATABASE_URL selects Postgres. Without it the API keeps contracts in memory,
 // which is fine for local UI work and tests. MIGRATE_ON_BOOT (default true)
 // applies migrations at startup; PG_POOL_MAX caps the pool (default 5).
-// SOURCE_STORAGE_DIR selects local-disk source storage; without it sources
-// are held in memory.
+// SOURCE_STORAGE_BLOB_CONTAINER_URL selects Azure Blob source storage (the
+// ambient identity, i.e. workload identity on AKS, must be allowed to write
+// the container); otherwise SOURCE_STORAGE_DIR selects local disk; without
+// either, sources are held in memory.
 const databaseUrl = process.env.DATABASE_URL;
-const storageDir = process.env.SOURCE_STORAGE_DIR;
+const storageChoice = chooseSourceStorage(process.env);
+console.log(`@bbm/api source storage: ${describeSourceStorage(storageChoice)}`);
 const migrateOnBoot = parseBoolEnv(process.env.MIGRATE_ON_BOOT, true);
 const pool = databaseUrl
   ? new Pool({ connectionString: databaseUrl, max: parseIntEnv(process.env.PG_POOL_MAX, 5) })
@@ -104,7 +111,7 @@ const app = buildApp({
   trustProxy,
   repository: contractRepository,
   pipeline: pipelineRepository,
-  storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
+  storage: createSourceStorage(storageChoice),
   // The PoC stake gate reads stake regardless of CLAIM_LOCK_ENABLED.
   stakeReader: stakingPort,
   chainActions,
