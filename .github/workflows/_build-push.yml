@@ -110,7 +110,7 @@ jobs:
           images=$(jq -cn --argjson services "$SERVICES" --arg tag "$TAG" --arg mocked "$WEB_MOCKED" '
             def spec:
               # api and web also run on the arm64 test cluster (ADR 0002 §8).
-              # sandbox: the PoC runner image the analysis worker launches as
+              # sandbox: the PoC runner image that the analysis worker launches as
               # Kata Jobs (ADR 0004); its context is workers/ for the shared
               # solc list, like ci.yml's sandbox job. amd64 only, no mocked
               # variant.
