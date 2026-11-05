@@ -116,7 +116,10 @@ export function ContractActions({ contract, findings }: { contract: Contract; fi
           <button
             type="button"
             disabled={deleteStrandedMutation.isPending}
-            onClick={() => deleteStrandedMutation.mutate()}
+            onClick={() => {
+              if (window.confirm("Delete this bounty on-chain and get your funds back?"))
+                deleteStrandedMutation.mutate();
+            }}
             className="rounded-md border border-amber-500/50 px-3 py-1.5 text-sm font-medium text-amber-300 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {deleteStrandedMutation.isPending ? "Deleting..." : "Delete on-chain bounty"}
@@ -130,6 +133,11 @@ export function ContractActions({ contract, findings }: { contract: Contract; fi
         </p>
       )}
       {error && <p className="mt-2 text-sm text-red-400">{error.message}</p>}
+      {onchainQuery.isError && (
+        <p role="alert" className="mt-2 text-sm text-red-400">
+          Could not read the bounty on-chain: {onchainQuery.error.message}
+        </p>
+      )}
     </>
   );
 }

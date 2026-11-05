@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React, { type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnalysisStatus, Contract, Finding } from "@bbm/shared";
 import { auditorApi, developerApi } from "@/lib/api";
@@ -32,7 +32,6 @@ const { DEADLINE, BOUNTY } = vi.hoisted(() => {
 
 const chain = {
   fundBounty: vi.fn(),
-  isFunded: vi.fn(),
   readBounty: vi.fn(),
   stake: vi.fn(),
   openDispute: vi.fn(),
@@ -164,7 +163,12 @@ describe("lifecycle flows on the local chain", () => {
     withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
     fireEvent.click(await enabledFundButton());
     await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalledWith("contract_1"));
-    expect(chain.fundBounty).toHaveBeenCalledWith("contract_1", new Date(DEADLINE), BOUNTY.amount);
+    expect(chain.fundBounty).toHaveBeenCalledWith(
+      "contract_1",
+      new Date(DEADLINE),
+      BOUNTY.amount,
+      CONTRACT.developerAddress,
+    );
   });
 
   it("keeps the fund button disabled while the analysis runs, and hides it when it failed", async () => {
@@ -196,6 +200,7 @@ describe("lifecycle flows on the local chain", () => {
       "contract_1",
       new Date("2031-06-01T00:00"),
       BOUNTY.amount,
+      CONTRACT.developerAddress,
     );
   });
 
@@ -235,22 +240,57 @@ describe("lifecycle flows on the local chain", () => {
   });
 
   it("renders nothing for a contract that is not Open, or for anyone but its developer", async () => {
-    chain.readBounty.mockResolvedValue({ ...OUR_OPEN_BOUNTY, state: 2 });
+    // Nothing funded on-chain, so only the status or the wallet can hide the form.
+    chain.readBounty.mockResolvedValue(NO_BOUNTY);
+    /** Renders `contract` and waits until the on-chain read has settled. */
+    async function renderSettled(contract: Contract) {
+      chain.readBounty.mockClear();
+      const rendered = withClient(<FundBounty contract={contract} analysis={analysis("Done")} />);
+      await waitFor(() => expect(chain.readBounty).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      return rendered;
+    }
+
+    // Positive control: an Open contract with its developer connected shows the form.
+    const control = await renderSettled(CONTRACT);
+    expect(screen.getByRole("button", { name: /fund bounty/i })).toBeInTheDocument();
+    control.unmount();
+
     for (const status of ["Claimed", "Resolved", "Expired"] as const) {
-      const { container, unmount } = withClient(
-        <FundBounty contract={{ ...CONTRACT, status }} analysis={analysis("Done")} />,
-      );
-      await new Promise((r) => setTimeout(r, 0));
+      const { container, unmount } = await renderSettled({ ...CONTRACT, status });
       expect(container).toBeEmptyDOMElement();
       unmount();
     }
-    chain.readBounty.mockResolvedValue(NO_BOUNTY);
-    const { container } = withClient(
-      <FundBounty contract={{ ...CONTRACT, developerAddress: MOCK_ADDRESSES.auditor }} analysis={analysis("Done")} />,
-    );
-    await new Promise((r) => setTimeout(r, 0));
+    const { container } = await renderSettled({ ...CONTRACT, developerAddress: MOCK_ADDRESSES.auditor });
     expect(container).toBeEmptyDOMElement();
     expect(developerApi.markFunded).not.toHaveBeenCalled();
+  });
+
+  it("switches to the foreign-bounty message when funding finds another wallet's bounty", async () => {
+    // The first read is stale: another wallet funds before the developer's transaction.
+    chain.readBounty.mockResolvedValueOnce(NO_BOUNTY).mockResolvedValue(FOREIGN_OPEN_BOUNTY);
+    chain.fundBounty.mockRejectedValue(new ChainTxError("BountyExists"));
+    withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    fireEvent.click(await enabledFundButton());
+    expect(await screen.findByText(/Another wallet has funded a bounty/)).toBeInTheDocument();
+    expect(chain.fundBounty).toHaveBeenCalledWith(
+      "contract_1",
+      new Date(DEADLINE),
+      BOUNTY.amount,
+      CONTRACT.developerAddress,
+    );
+    expect(developerApi.markFunded).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed on-chain read instead of rendering nothing", async () => {
+    chain.readBounty.mockRejectedValue(new Error("RPC unavailable"));
+    const { unmount } = withClient(<FundBounty contract={CONTRACT} analysis={analysis("Done")} />);
+    expect(await screen.findByText(/Could not read the bounty on-chain: RPC unavailable/)).toBeInTheDocument();
+    unmount();
+    withClient(<ContractActions contract={CONTRACT} findings={[]} />);
+    expect(await screen.findByText(/Could not read the bounty on-chain: RPC unavailable/)).toBeInTheDocument();
   });
 
   it("tells the developer to cancel when another wallet funded under the contract's id", async () => {
@@ -301,8 +341,14 @@ describe("lifecycle flows on the local chain", () => {
   it("offers to delete a bounty left open on-chain after the contract was cancelled", async () => {
     chain.readBounty.mockResolvedValue(OUR_OPEN_BOUNTY);
     chain.deleteBounty.mockResolvedValue("0xhash");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
     withClient(<ContractActions contract={{ ...CONTRACT, status: "Expired" }} findings={[]} />);
-    fireEvent.click(await screen.findByRole("button", { name: /delete on-chain bounty/i }));
+    const button = await screen.findByRole("button", { name: /delete on-chain bounty/i });
+    // Declining the confirmation sends nothing.
+    fireEvent.click(button);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(chain.deleteBounty).not.toHaveBeenCalled();
+    fireEvent.click(button);
     await waitFor(() => expect(chain.deleteBounty).toHaveBeenCalledWith("contract_1"));
     expect(screen.queryByRole("button", { name: /cancel contract/i })).not.toBeInTheDocument();
   });

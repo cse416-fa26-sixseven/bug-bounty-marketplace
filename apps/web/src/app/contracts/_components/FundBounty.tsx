@@ -69,17 +69,27 @@ export function FundBounty({
   const fundMutation = useMutation({
     mutationFn: async (deadline: Date) => {
       if (!chain || !bountyQuery.data) throw new Error("The bounty terms have not loaded yet.");
-      await chain.fundBounty(contract.id, deadline, bountyQuery.data.amount);
+      await chain.fundBounty(contract.id, deadline, bountyQuery.data.amount, contract.developerAddress);
       return developerApi.markFunded(contract.id);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["contract", contract.id] });
-      void queryClient.invalidateQueries({ queryKey: ["onchain-bounty", contract.id] });
       void queryClient.invalidateQueries({ queryKey: ["bounty", contract.id] });
     },
+    // Even on failure: if another wallet funded under this id first, the
+    // fresh read switches the form to that message.
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["onchain-bounty", contract.id] }),
   });
 
-  if (!visible || analysis?.status === "Failed" || !onchainQuery.data) return null;
+  if (!visible || analysis?.status === "Failed") return null;
+  if (onchainQuery.isError) {
+    return (
+      <p role="alert" className="mt-6 text-sm text-red-400">
+        Could not read the bounty on-chain: {onchainQuery.error.message}
+      </p>
+    );
+  }
+  if (!onchainQuery.data) return null;
 
   if (ownership === "foreign") {
     return (

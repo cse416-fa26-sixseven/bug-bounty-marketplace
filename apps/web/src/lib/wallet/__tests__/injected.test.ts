@@ -280,7 +280,7 @@ describe("injectedTxClient", () => {
   it("refuses to read through a wallet on another chain", async () => {
     const fake = wallet({ chainId: 1 });
     const client = injectedTxClient(SEPOLIA, null, fake.provider);
-    await expect(chainCalls(SEPOLIA, client).isFunded("contract_1")).rejects.toThrow(
+    await expect(chainCalls(SEPOLIA, client).readBounty("contract_1")).rejects.toThrow(
       wrongNetwork(SEPOLIA.chainId),
     );
     expect(fake.state.calls.map((c) => c.method)).not.toContain("eth_call");
