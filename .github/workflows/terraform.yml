@@ -273,7 +273,7 @@ jobs:
 
       - name: Sticky PR comment
         if: always() && steps.deps.outcome == 'success'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: terraform-plan-${{ matrix.id }}
           path: ${{ runner.temp }}/comment.md
