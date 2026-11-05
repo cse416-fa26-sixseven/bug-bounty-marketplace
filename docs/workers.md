@@ -80,5 +80,7 @@ docker run --rm -p 8000:8000 bbm-analysis
   only (never changes status or payout).
 - The image will need Slither plus `solc-select` (and pinned `solc`
   versions installed at build time, since runtime has no network).
-- Consume jobs from an Azure Storage Queue (`analysis-jobs`), scaled by KEDA,
-  instead of (or alongside) the synchronous HTTP endpoint.
+- Scale on the Postgres `jobs` table (the worker claims jobs from it; the
+  provisioned Azure Storage Queue `analysis-jobs` and the KEDA scaler are
+  unused). On AKS the worker reads sources from the env Blob container
+  (`SOURCE_STORAGE_BLOB_CONTAINER_URL`, workload identity).

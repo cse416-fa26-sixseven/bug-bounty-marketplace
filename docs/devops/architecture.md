@@ -32,8 +32,8 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 | Component        | Source             | Image                | Port | Health       | Notes                                                                                                                                  |
 | ---------------- | ------------------ | -------------------- | ---- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | web              | `apps/web`         | `bbm/web`            | 3000 | `/healthz`   | Next.js. Proxies `/api/*` to `API_INTERNAL_URL`. A `-mocked` variant is built with MSW enabled.                                        |
-| api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to `SOURCE_STORAGE_DIR` (local disk for now).                                         |
-| analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI). Slither + LLM explanations; polls queued jobs from Postgres. Not deployed on AKS yet (needs shared sources).                                                |
+| api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to the env Blob container (`SOURCE_STORAGE_BLOB_CONTAINER_URL`, workload identity) on staging/prod, to `SOURCE_STORAGE_DIR` elsewhere. |
+| analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI). Slither + LLM explanations; polls queued jobs from Postgres and reads sources from the Blob container. On staging; prod still off.                      |
 | anvil            | `contracts`        | `bbm/contracts`      | 8545 | JSON-RPC     | Local chain for compose and CI only.                                                                                                   |
 | contracts-deploy | `contracts`        | `bbm/contracts`      | n/a  | n/a          | One-shot `forge script script/Deploy.s.sol`. Writes `deployments/31337.json`.                                                          |
 | postgres         | upstream           | `postgres:16-alpine` | 5432 | `pg_isready` | Compose service, in-cluster pod in test-cluster namespaces (`<acr>/mirror/postgres:16-alpine`), or PG Flexible Server on staging/prod. |
@@ -161,18 +161,20 @@ flowchart LR
     NGX -- "/api, /health" --> API["api pod :3001"]
     WEB -- "/api/* proxy<br/>API_INTERNAL_URL" --> API
     API -- "private VNet, PG_POOL_MAX" --> PG[("PG Flexible Server<br/>snet-psql")]
-    API -. "planned: Blob adapter" .-> BLOB[("Blob container sources")]
+    API -- "put sources, PoCs<br/>workload identity" --> BLOB[("Blob container sources")]
     API -- "insert queued jobs" --> PG
-    AN["analysis pods :8000<br/>(disabled on AKS)"] -. "claim jobs (FOR UPDATE SKIP LOCKED)" .-> PG
-    AN -. "planned: read source" .-> BLOB
+    AN["analysis pods :8000<br/>(staging; off on prod)"] -- "claim jobs (FOR UPDATE SKIP LOCKED)<br/>write findings" --> PG
+    AN -- "read source<br/>workload identity" --> BLOB
     AN -. "planned: PoC Job" .-> SBX["bbm-sandbox namespace<br/>Kata pods, deny-all egress"]
 ```
 
-Dashed edges are designed and provisioned (identities, roles, container) but not yet in use on
-AKS. Jobs go through the Postgres `jobs` table; the provisioned Storage queue and the KEDA
-`azure-queue` ScaledObject template are unused. `analysis.enabled` and `sandbox.enabled` are
-`false` in the staging and prod values files. In test-cluster namespaces the api talks to the
-in-cluster Postgres pod instead of PG Flexible Server.
+Dashed edges are designed and provisioned but not yet in use on AKS. Jobs go through the
+Postgres `jobs` table; the provisioned Storage queue and the KEDA `azure-queue` ScaledObject
+template are unused. `sourceStorage.provider` is `blob` and `analysis.enabled` is `true` on
+staging only (one fixed worker replica); prod keeps the api's local `emptyDir` and no worker
+until staging has proven the pipeline. `sandbox.enabled` is `false` everywhere. In test-cluster
+namespaces the api talks to the in-cluster Postgres pod instead of PG Flexible Server and keeps
+sources on its `emptyDir`.
 
 ## Identity
 
@@ -321,10 +323,11 @@ flowchart TB
   availability zones is not configured yet.
 - **Disruption.** PDBs are rendered only when the minimum replica count is above 1, so a
   single-replica environment can still drain nodes during upgrades.
-- **Worker scaling.** The chart has a KEDA `azure-queue` ScaledObject on `analysis-jobs` (0–3
-  replicas, 5 messages per replica, 300 s cooldown), but jobs go through Postgres and nothing writes
-  to that queue, so it stays off. Scale on the `jobs` table (e.g. a KEDA postgresql trigger)
-  instead when the worker runs on AKS.
+- **Worker scaling.** The analysis worker runs a fixed `analysis.replicaCount` (1 on staging,
+  `WORKER_CONCURRENCY` 2 jobs at a time). The chart's KEDA `azure-queue` ScaledObject on
+  `analysis-jobs` (0–3 replicas, 5 messages per replica, 300 s cooldown) stays off, because jobs go
+  through Postgres and nothing writes to that queue. Scale on the `jobs` table (e.g. a KEDA
+  postgresql trigger) if one replica is not enough.
 
 **Database**
 
@@ -338,15 +341,19 @@ flowchart TB
 - B1ms is burstable. Under sustained load it runs on CPU credits; once those are gone it drops to
   baseline. Moving to a General Purpose SKU is a tfvars change in `envs/<env>/data.tfvars`.
 
-**Known limit: one API replica**
+**Uploaded sources**
 
-The API writes uploaded sources to a per-pod `emptyDir` (`SOURCE_STORAGE_DIR`). Two replicas
-would split uploads between pods, so `api.hpa.maxReplicas` is 1 in both envs. The rollout strategy
-is `maxSurge: 0`, which means a short gap during each API deploy. The Blob `sources` container, the
-api identity's Blob Data Contributor role and the `storageBlobEndpoint` value already exist. Once a
-Blob storage adapter replaces local disk, the API becomes stateless and its HPA max can be raised.
-Uploaded files on the `emptyDir` are also lost when a paused cluster resumes, because nodes are
-recreated.
+With `sourceStorage.provider: blob` (staging) the API writes uploaded sources and PoCs to the env
+storage account's `sources` container as the api identity (Storage Blob Data Contributor on that
+container) and the worker reads them as the worker identity (Storage Blob Data Reader). Both use
+workload identity; the account has shared keys disabled. The API is then stateless and
+`api.hpa.maxReplicas` may be raised; the rollout uses the Kubernetes default strategy.
+
+With `sourceStorage.provider: local` (prod, test namespaces) the API writes to a per-pod
+`emptyDir` (`SOURCE_STORAGE_DIR`). Two replicas would split uploads between pods, so
+`api.hpa.maxReplicas` is 1 and the rollout strategy is `maxSurge: 0` (a short gap during each API
+deploy). Files on the `emptyDir` are lost when a pod restarts or a paused cluster resumes, and the
+analysis worker cannot read them, so analysis stays off there.
 
 **Load testing**
 
@@ -374,17 +381,16 @@ recreated.
 
 ## Known gaps and next steps
 
-- **Blob storage adapter** for uploads. This removes the API single-replica limit (see above).
-- **Run the analysis worker on AKS.** Jobs already flow through Postgres (the API inserts
-  `queued` rows; the worker claims them with `FOR UPDATE SKIP LOCKED`), and the LLM settings are
-  in the env values. What's missing: the worker can't read uploaded sources, because the API keeps
-  them in its own pod's `emptyDir` (`SOURCE_STORAGE_DIR`). Once sources are in Blob storage (the
-  adapter above), give the worker `DATABASE_URL` and the storage settings (add `database-url` to
-  the analysis SecretProviderClass and an env entry in `templates/analysis.yaml`), allow Postgres
-  egress in its NetworkPolicy (`bbm.postgresEgressRules`, like api and migrations), and set
-  `analysis.enabled`. The KEDA ScaledObject scales on the Azure Storage queue, which nothing
-  writes to yet; keep `analysis.keda.enabled` and `keda_enabled` off until it does, or scale on
-  the job table instead.
+- **Analysis on prod.** Staging runs the worker against Blob storage; once it has proven the
+  pipeline, set `sourceStorage.provider: blob` and `analysis.enabled: true` in
+  `values-prod.yaml` (the container, roles and Key Vault secrets already exist) and consider
+  raising the api HPA max. The KEDA ScaledObject scales on the Azure Storage queue, which nothing
+  writes to; keep `analysis.keda.enabled` and `keda_enabled` off unless the scaler targets the
+  `jobs` table.
+- **Sandbox jobs on AKS.** PoC re-runs (`sandbox` jobs) stay queued: the worker only claims them
+  with `SANDBOX_ENABLED`, which needs the Kata pool and the sandbox Job runner.
+- **On-chain actions from AKS.** The api is not given the Sepolia RPC URL / operator key (only
+  the contracts-deploy workflow reads them), so verdicts and payouts don't run on-chain there.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
 - **Sandbox pool** once Dsv5 quota is granted.

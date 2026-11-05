@@ -69,18 +69,30 @@ SecretProviderClass or HTTPRoute.
 | file | used by | highlights |
 |---|---|---|
 | `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot |
-| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1 |
+| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api 1 replica, Blob source storage, analysis worker (1 replica) |
 | `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1 |
 | `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown |
 | `values-ci.yaml` | `ct install`, kind smoke tests | plain Secret with dummy `DATABASE_URL`, everything optional off |
 
-> **API replicas.** Uploaded sources are stored on a per-pod `emptyDir`
-> (`SOURCE_STORAGE_DIR=/data/sources`). Because of that, the api must stay at
-> exactly one replica in every environment until a Blob storage adapter
-> lands. Both env files pin the api HPA to `min 1 / max 1`. While at most one
-> replica can run, the Deployment uses `RollingUpdate` with `maxSurge 0` /
-> `maxUnavailable 1` (replace in place, brief downtime on rollout).
-> `api.strategy` overrides it.
+> **Source storage (`sourceStorage.provider`).** `blob` (staging) stores
+> uploaded sources and PoCs in the env storage account's container
+> (`azure.storageBlobEndpoint` from values-infra + `azure.storageContainerName`,
+> default `sources`): the api writes and the analysis worker reads with
+> their workload identities (`SOURCE_STORAGE_BLOB_CONTAINER_URL`), so the api
+> may run several replicas. `local` (default, prod, test namespaces) keeps
+> them on a per-pod api `emptyDir` (`SOURCE_STORAGE_DIR=/data/sources`), so
+> the api must stay at exactly one replica, the Deployment uses
+> `RollingUpdate` with `maxSurge 0` / `maxUnavailable 1` (replace in place,
+> brief downtime on rollout; `api.strategy` overrides it), and the analysis
+> worker has nothing to read.
+
+> **Analysis worker.** `analysis.enabled` deploys `analysis.replicaCount`
+> pods that poll the `jobs` table: `DATABASE_URL` and `LLM_API_KEY` come from
+> the same secret source as the api (with `csi`, SecretProviderClass
+> `bbm-kv-analysis` syncs both into `bbm-secrets-analysis` as the worker
+> identity), `LLM_ENDPOINT` / `LLM_MODEL` from `analysis.extraEnv`, and the
+> NetworkPolicy allows Postgres and HTTPS egress. KEDA stays off (see the
+> `analysis.keda` comments).
 
 > **Staging node placement.** `values-staging.yaml` leaves
 > `global.nodeSelector` empty on purpose. The staging apps pool is disabled
@@ -329,6 +341,8 @@ az acr import --name <acr> \
 - **Role assignments:**
   - `Key Vault Secrets User` on the env Key Vault for the api identity.
   - The same role for the worker identity when analysis is enabled.
+  - `Storage Blob Data Contributor` (api) and `Storage Blob Data Reader`
+    (worker) on the `sources` container when `sourceStorage.provider=blob`.
   - `Network Contributor` on the data RG for the AKS cluster identity, so the
     Gateway's LoadBalancer Service can bind the static PIP.
 - **Node pools:**
