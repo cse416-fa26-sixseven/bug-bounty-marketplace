@@ -76,11 +76,13 @@ false-positive mark, and an auditor-reported finding that is verified and paid.
 Both are skipped unless `E2E_CHAIN=1`, because they need the chain demo stack
 and the web app against the real API, which CI does not start. They share the
 anvil role accounts, so with `E2E_CHAIN=1` Playwright runs one test at a time.
+A failed run can leave the auditor holding a claim, so start a fresh
+`pnpm stack:demo` before running them again.
 
 ```sh
 pnpm stack:demo                # fresh database and chain, 60-second challenge window
 NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
-E2E_CHAIN=1 pnpm test:e2e -- lifecycle features   # about 12 minutes
+E2E_CHAIN=1 pnpm test:e2e -- lifecycle features   # about 6 minutes
 pnpm demo:lifecycle            # the same two paths from the command line; prints LIFECYCLE OK
 ```
 

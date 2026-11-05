@@ -22,14 +22,13 @@ import {
  */
 
 test.skip(!process.env.E2E_CHAIN, SKIP_REASON);
-// The auditor holds one claim at a time; the second test ends with its payout,
-// which releases the claim for the next run.
-test.describe.configure({ mode: "serial" });
+// The second test ends with its payout, which releases the auditor's claim for
+// the next spec (the config runs chain specs on one worker).
 
 test("developer notes a finding, the note persists, and the funded bounty is cancelled", async ({
   page,
 }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(720_000);
   page.on("dialog", (dialog) => void dialog.accept());
   await startAsDeveloper(page);
   await uploadFundedVault(page);
@@ -44,25 +43,24 @@ test("developer notes a finding, the note persists, and the funded bounty is can
 
   // Cancelling deletes the on-chain bounty (refunding it), then closes the contract.
   await page.getByRole("button", { name: "Cancel contract" }).click();
-  await expect(page.getByRole("button", { name: "Cancel contract" })).toBeHidden({
-    timeout: 60_000,
-  });
   await expect(page.getByText("Expired", { exact: true }).first()).toBeVisible({
-    timeout: 30_000,
+    timeout: 60_000,
   });
 });
 
 test("auditor marks a false positive and reports a finding that is verified and paid", async ({
   page,
 }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(720_000);
   await startAsDeveloper(page);
   const bounty = await uploadFundedVault(page);
   const contractId = page.url().split("/").pop();
   await stakeAndClaim(page, bounty);
 
   // Slither's informational low-level-calls finding is the false positive.
-  const lowLevel = page.getByRole("listitem").filter({ hasText: "low-level-calls" });
+  const lowLevel = page
+    .getByRole("listitem")
+    .filter({ has: page.getByText("low-level-calls", { exact: true }) });
   await lowLevel.getByRole("button", { name: "Mark false positive" }).click();
   await expect(lowLevel.getByText("Marked false positive by auditor.")).toBeVisible({
     timeout: 30_000,

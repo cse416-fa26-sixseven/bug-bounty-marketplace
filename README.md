@@ -128,8 +128,8 @@ PoCs are Foundry tests that import the target as `import "../src/<filename>";`
 (see [workers/sandbox](workers/sandbox/README.md)).
 
 In live mode only the pipeline routes are real: upload, contract pages,
-findings, analysis status, the auditor queue, claim, PoC upload,
-auditor-reported findings and developer notes. Stake,
+findings, analysis status, the auditor queue, claim, PoC upload and
+developer notes. Stake,
 the auditor profile, disputes, false-positive marking, reclaim/cancel and the
 arbiter stay mocked, so those buttons answer "not found" for real contracts
 and the profile's claimed list shows only seeded contracts; keep the demo to
@@ -150,7 +150,6 @@ comes from demo data. Each role signs
 its transactions in the browser with its anvil account (developer, auditor,
 arbiter) and signs in to the API with Sign-In with Ethereum (EIP-4361) when
 you switch roles.
-
 
 ```sh
 pnpm stack:demo

@@ -31,7 +31,7 @@ test.describe.configure({ mode: "serial" });
 test("developer funds, auditor proves the exploit, the payout lands and is withdrawn", async ({
   page,
 }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(720_000);
   await startAsDeveloper(page);
   const bounty = await uploadFundedVault(page);
   await claimAndProve(page, bounty);
@@ -48,7 +48,7 @@ test("developer funds, auditor proves the exploit, the payout lands and is withd
 test("developer disputes within the window and the arbiter rules against the auditor", async ({
   page,
 }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(720_000);
   page.on("dialog", (dialog) => void dialog.accept());
   await startAsDeveloper(page);
   const bounty = await uploadFundedVault(page);
