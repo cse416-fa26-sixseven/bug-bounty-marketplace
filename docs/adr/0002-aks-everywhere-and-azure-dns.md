@@ -16,6 +16,9 @@
   `northcentralus`; section 7 now describes the home region.
 - **Amended:** 2026-10-25, continuous deployment (section 9): green `main` builds deploy to staging
   automatically, then to prod with the same tag after the `prod` reviewer approves.
+- **Amended by:** [ADR 0003](0003-shared-subscription-isolation.md) (2026-11-04): the deployment
+  moves to a shared subscription isolated by resource group, and every env runs in one region
+  (sections 7 and 8).
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
   interfaces, and its region (`eastus2` / `eus2`, fallback `centralus`). Everything else in 0001
@@ -270,6 +273,10 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
 
 ### 7. Region (home region; per-env regions in section 8)
 
+> **Amended by [ADR 0003](0003-shared-subscription-isolation.md) §4:** the home region keeps its
+> role (tfstate, shared RG), but the "Why `northcentralus`" rationale below no longer applies:
+> the region is chosen at bring-up, and every env runs in it too.
+
 - **Home region:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars` (and the same
   in `global.tfvars`): tfstate, the shared RG (ACR, shared Log Analytics and Key Vault, parent DNS
   zone). `infra/up.sh --location <region>` writes both there and into the backend `.hcl` state
@@ -301,6 +308,11 @@ HTTPRoute hostname and ignores the other keys. The Gateway API move (section 3) 
   blocked; the team chose `northcentralus`, the only allowed US region.
 
 ### 8. One region per environment
+
+> **Amended by [ADR 0003](0003-shared-subscription-isolation.md) §4:** all envs now run in one
+> region (`up.sh --env-location all=<region>`). The split below was a workaround for the old
+> subscription's per-region quota; the region mechanism it describes (`env_locations`,
+> Environment-level `AZURE_LOCATION*`, `env-region.sh`) is unchanged.
 
 - **Finding.** The first bring-up put all three clusters in `northcentralus` on one
   `Standard_B2als_v2` node each (2 vCPU / 4 GiB, 6 of the region's 6 vCPUs). It failed: the managed

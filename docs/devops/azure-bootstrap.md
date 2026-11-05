@@ -8,6 +8,11 @@ You need **Owner** on the subscription, the right to create Entra app registrati
 on the GitHub repo. After bootstrap, CI takes over: every Azure workflow skips green until the repo
 variables written here exist.
 
+The subscription may be **shared with unrelated workloads** ([ADR 0003](../adr/0003-shared-subscription-isolation.md)).
+BBM is isolated by resource group: only bootstrap (run by the subscription Owner) touches the
+subscription itself, every `gh-bbm-*` identity has roles on BBM RGs only, and the budget counts
+only BBM's RGs. Teammates need Owner or Contributor on the BBM RGs, not on the subscription.
+
 Design background: [ADR 0001](../adr/0001-azure-environment-topology.md) (topology, identities,
 state) and [ADR 0002](../adr/0002-aks-everywhere-and-azure-dns.md) (AKS for every env, Azure DNS,
 TLS, `up.sh` / `down.sh`). The Terraform layout and `tf.sh` are in
@@ -16,13 +21,13 @@ domain later, see [Switching accounts or domains](switching-accounts.md).
 
 What ends up in Azure:
 
-| Stack       | Creates                                                                                                                                                                                                                    |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bootstrap` | state account `stbbmtfstate<sfx>` (locked, Entra auth only); every resource group; provider registrations; GitHub OIDC apps `gh-bbm-*` and their roles; DNS parent zone and child zones; the $50/month subscription budget |
-| `global`    | ACR `acrbbm<sfx>`, shared Log Analytics, shared Key Vault (no secrets), per-RG budgets                                                                                                                                     |
-| `data`      | per env: VNet, Postgres (not `test`), Key Vault, storage, identities, static ingress IP, DNS records, private zone                                                                                                         |
-| `compute`   | per env: AKS cluster, node pools, workload-identity federated credentials                                                                                                                                                  |
-| platform    | per cluster (Helm, not Terraform): cert-manager and `bbm-platform` (Let's Encrypt issuers, wildcard certificate, Gateway `bbm` of gatewayClass `approuting-istio`)                                                         |
+| Stack       | Creates                                                                                                                                                                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bootstrap` | state account `stbbmtfstate<sfx>` (locked, Entra auth only); every resource group; provider registrations; GitHub OIDC apps `gh-bbm-*` and their roles; DNS parent zone and child zones; the $50/month BBM budget (subscription budget filtered to the BBM RGs, AKS node RGs included) |
+| `global`    | ACR `acrbbm<sfx>`, shared Log Analytics, shared Key Vault (no secrets), per-RG budgets                                                                                                                                                                                                 |
+| `data`      | per env: VNet, Postgres (not `test`), Key Vault, storage, identities, static ingress IP, DNS records, private zone                                                                                                                                                                     |
+| `compute`   | per env: AKS cluster, node pools, workload-identity federated credentials                                                                                                                                                                                                              |
+| platform    | per cluster (Helm, not Terraform): cert-manager and `bbm-platform` (Let's Encrypt issuers, wildcard certificate, Gateway `bbm` of gatewayClass `approuting-istio`)                                                                                                                     |
 
 Environments: `test` (CI-run and PR-preview namespaces), `staging` and `prod`. `up.sh` brings up
 `test` and `staging` by default; add `--prod` for prod.
@@ -80,43 +85,41 @@ Nothing else in the repo names a domain.
 restricted for the subscription in that env's region, and prints warnings for quota and versions;
 it can't raise quota. Check early, because quota requests can take time.
 
-Each env has its own region (ADR 0002 §8), each cluster on one 4 vCPU / 16 GiB node: test
-`canadacentral` on `Standard_B4ps_v2` (arm64), staging `denmarkeast` and prod `northcentralus` on
-`Standard_B4as_v2` (x86). On Azure for Students only northcentralus and denmarkeast offer an x86
-4 vCPU B-series size; canadacentral offers only arm64 (Bpsv2), francecentral lists no B-series sizes
-and belgiumcentral marks them `NotAvailableForSubscription`.
+All three envs run in one region ([ADR 0003](../adr/0003-shared-subscription-isolation.md) §4),
+each cluster on one 4 vCPU / 16 GiB B-series node (`system_vm_size` in
+`envs/<env>/compute.tfvars`). So that one region needs **about 12 B-series vCPUs** (more with a
+surge node for upgrades, or the prod `apps` pool) and PostgreSQL Flexible `Standard_B1ms` for
+staging and prod.
 
 ### vCPU quota
 
 ```sh
-for r in canadacentral denmarkeast northcentralus; do az vm list-usage -l "$r" -o table; done
+az vm list-usage -l <region> -o table
 ```
 
-| Row                         | Needed for                              | Rough need (per region)                                       |
-| --------------------------- | --------------------------------------- | ------------------------------------------------------------- |
-| Total Regional vCPUs        | everything                              | 4 for the env's one node (Azure for Students: 6)              |
-| Standard BASv2 Family vCPUs | `Standard_B4as_v2` (staging, prod)      | 4 (Azure for Students: 10)                                    |
-| Standard BPSv2 Family vCPUs | `Standard_B4ps_v2` (test, arm64)        | 4                                                             |
-| Standard DSv5 Family vCPUs  | Kata sandbox pool (disabled by default) | 0 until the sandbox is enabled (Azure for Students: 0)        |
+| Row                                   | Needed for                                                                    | Rough need (in the one region)                      |
+| ------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------- |
+| Total Regional vCPUs                  | everything                                                                    | 12 (three 4 vCPU nodes), +4 per surge node          |
+| Family of each env's `system_vm_size` | e.g. BASv2 for `Standard_B4as_v2` (x86), BPSv2 for `Standard_B4ps_v2` (arm64) | 4 per env on that family (12 if all three share it) |
+| Standard DSv5 Family vCPUs            | Kata sandbox pool (disabled by default)                                       | 0 until the sandbox is enabled                      |
 
 `up.sh` compares each region's free quota with the needs of the envs brought up there (clusters
 that already exist are already in the usage). New subscriptions often show a low regional limit
 (sometimes 4–10) and 0 for some families. To ask for more: **Portal → Quotas → Compute**, filter
 by the region, pick the family, **New quota request**. Small B-series increases are usually
 approved within minutes. To check that the node size is offered in a region:
-`az vm list-skus -l denmarkeast --size Standard_B4as_v2 -o table` (no `Restrictions`; test:
-`-l canadacentral --size Standard_B4ps_v2`).
+`az vm list-skus -l <region> --size <system_vm_size> -o table` (no `Restrictions`).
 
 ### PostgreSQL Flexible Server SKU
 
 ```sh
-az postgres flexible-server list-skus -l denmarkeast -o json \
+az postgres flexible-server list-skus -l <region> -o json \
   | jq -r '.[].supportedServerEditions[] | select(.name=="Burstable") | .supportedServerSkus[].name' \
   | grep -i b1ms
 ```
 
 If `Standard_B1ms` isn't listed, PG Flexible is restricted for this subscription in the region. Only
-staging (`denmarkeast`) and prod (`northcentralus`) use it (test runs Postgres in each namespace).
+staging and prod use it (test runs Postgres in each namespace).
 
 ### AKS versions
 
@@ -126,31 +129,28 @@ that env's region default when the committed one isn't offered there. To check b
 
 ### Regions
 
-Two kinds of region (ADR 0002 §7, §8):
+Two region settings (ADR 0002 §7, §8; ADR 0003 §4 puts every env in the home region):
 
 - **Home region:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars` (and
-  `global.tfvars`), default `northcentralus` / `ncus`: tfstate (`rg-bbm-tfstate-ncus`) and the
-  shared RG (`rg-bbm-shared-ncus`: ACR, shared Log Analytics and Key Vault, parent DNS zone).
+  `global.tfvars`): tfstate (`rg-bbm-tfstate-<abbr>`) and the shared RG (`rg-bbm-shared-<abbr>`:
+  ACR, shared Log Analytics and Key Vault, parent DNS zone).
 - **Env regions:** `location` / `location_abbr` in `envs/<env>/data.tfvars` and `compute.tfvars`,
-  copied into the `env_locations` map of `bootstrap.tfvars` and `global.tfvars`: test
-  `canadacentral` (`cac`), staging `denmarkeast` (`dke`), prod `northcentralus` (`ncus`). Env
-  names embed the env's code: `rg-bbm-staging-data-dke`, `aks-bbm-prod-ncus`, ...
+  copied into the `env_locations` map of `bootstrap.tfvars` and `global.tfvars`; the same region
+  for all three envs. Env names embed the code: `rg-bbm-staging-data-<abbr>`,
+  `aks-bbm-prod-<abbr>`, ...
 
-To change them, pass them to `up.sh`:
+To set them, pass them to `up.sh`:
 
 ```sh
-infra/up.sh --subscription <id> --location canadacentral          # home region: bootstrap/global tfvars + backend .hcl
-infra/up.sh --subscription <id> --env-location test=canadacentral --env-location staging=denmarkeast
-infra/up.sh --subscription <id> --env-location all=northcentralus  # every env in one region (bigger subscription)
+infra/up.sh --subscription <id> --location <region> --env-location all=<region> --prod   # home + every env
+infra/up.sh --subscription <id> --env-location staging=<region>                          # one env only
 ```
 
 `up.sh` takes the abbreviation from the map in `modules/naming/main.tf` (`northcentralus` → `ncus`,
 `canadacentral` → `cac`, `francecentral` → `frc`, `belgiumcentral` → `bec`, `denmarkeast` → `dke`,
 ...); for a region outside it pass `--location-abbr <code>` (home) or `--env-location
 <env>=<region>:<code>` too. It fails early when a region is not allowed by the subscription's
-"allowed locations" policy and lists the allowed ones. **Azure for Students** only allows
-`francecentral`, `belgiumcentral`, `denmarkeast`, `northcentralus` and `canadacentral`, with 6 vCPUs
-per region, which is why each env has its own.
+"allowed locations" policy and lists the allowed ones.
 
 Pick the regions **before** the first run: names embed them. Moving the home region means
 `down.sh --all` and a fresh `up.sh --location <region>` (`up.sh` refuses while the old state RG
@@ -372,12 +372,12 @@ also covers them.
 - [ ] `up.sh` ended with `done` and no warnings you haven't dealt with.
 - [ ] `dig +short NS <zone> @1.1.1.1` prints the four Azure name servers.
 - [ ] `az group list --query "[?tags.project=='bbm'].name" -o tsv` lists the tfstate and shared
-      RGs and `rg-bbm-test-{data,compute}-cac`, `rg-bbm-staging-{data,compute}-dke`,
-      `rg-bbm-prod-{data,compute}-ncus` (`infra/terraform/scripts/env-region.sh <env>` prints each
-      env's names).
+      RGs and `rg-bbm-{test,staging,prod}-{data,compute}-<abbr>`
+      (`infra/terraform/scripts/env-region.sh <env>` prints each env's names), and nothing that
+      isn't BBM's.
 - [ ] `az network dns zone list --query "[].name" -o tsv` lists `<zone>`, `test.<zone>`,
       `preview.<zone>`, `staging.<zone>` and `prod.<zone>`.
-- [ ] `az lock list -g rg-bbm-tfstate-ncus -o table` shows `lock-bbm-tfstate`.
+- [ ] `az lock list -g rg-bbm-tfstate-<abbr> -o table` shows `lock-bbm-tfstate`.
 - [ ] `infra/terraform/scripts/tf.sh bootstrap global plan` reports **No changes**.
 - [ ] `az ad app list --display-name gh-bbm- --query "[].displayName" -o tsv` lists `gh-bbm-plan`,
       `gh-bbm-ephemeral`, `gh-bbm-preview`, `gh-bbm-global`, `gh-bbm-test`, `gh-bbm-staging`,
@@ -420,6 +420,32 @@ kept ([switching-accounts.md](switching-accounts.md) section 2). `--envs` alone 
 Deleted Entra app registrations stay in the Entra recycle bin for 30 days.
 
 For pausing instead of deleting, use **Env power** ([env-lifecycle.md](env-lifecycle.md)).
+
+## Moving to another subscription
+
+The full runbook is [switching-accounts.md](switching-accounts.md); the cutover in short:
+
+1. **Down the old subscription:** `infra/down.sh --subscription <old> --all` (`--dry-run` first).
+   It also deletes the GitHub repo variables and Environments that `gh_setup_commands` created
+   (including reviewers added by hand), so Azure workflows skip green until step 2 recreates them.
+   With `--keep-github` they stay, pointing at the deleted resources, and Azure workflows fail
+   instead of skipping until step 2. Repo secrets (e.g. `DISCORD_WEBHOOK_URL`) are not touched.
+   Pause CD (`CD_ENABLED=false`) or avoid merging to `main` meanwhile. `--all` also resets the
+   per-tenant tfvars fields to placeholders; don't commit that reset on its own, step 2 rewrites
+   them.
+2. **Up the new one**, every env in one region:
+
+   ```sh
+   infra/up.sh --subscription <new> --location <region> --env-location all=<region> --prod
+   ```
+
+   Then re-add the Environment reviewers if `github_reviewer_ids` is empty (section 11).
+3. **Re-set the Key Vault secrets**, which never enter state: `llm-api-key` in each env vault
+   (section 10), `sepolia-rpc-url` and `sepolia-deployer-key` in the shared vault (section 12).
+4. **Commit the rewritten tfvars and backend files** and the bootstrap backend block (section 9)
+   in a PR.
+5. **Verify CD:** after the merge, the `main` build deploys to staging and waits for the prod
+   approval (section 13); run the verification checklist above.
 
 ## Appendix: the manual path
 
