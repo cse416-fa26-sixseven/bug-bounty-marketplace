@@ -4,7 +4,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 4.81, < 5.0" # 4.81: azurerm_container_registry.role_assignment_mode
+      version = ">= 4.81, < 5.13" # 4.81: azurerm_container_registry.role_assignment_mode
     }
   }
 }
