@@ -9,7 +9,8 @@ payout, and if it fails each finding falls back to Slither's own text.
 - `GET /health`: liveness.
 - `POST /analyze` `{contractId, source}`: stateless analysis, returns the
   findings (422 with the reason for an unsupported pragma or a compile error).
-- **Job poller:** when `DATABASE_URL` and `SOURCE_STORAGE_DIR` are set, a
+- **Job poller:** when `DATABASE_URL` and a source store (`SOURCE_STORAGE_DIR`
+  or `SOURCE_STORAGE_BLOB_CONTAINER_URL`) are set, a
   background thread claims jobs from the Postgres `jobs` table the API writes
   (`FOR UPDATE SKIP LOCKED`, leases, up to 3 attempts), analyses the stored
   source, and writes `Flagged` findings. Also runnable alone as
@@ -22,7 +23,9 @@ image pre-installs them. A pragma no version satisfies fails with
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `DATABASE_URL`, `SOURCE_STORAGE_DIR` | unset | Both set: run the job poller (same Postgres and storage as the API). |
+| `DATABASE_URL` | unset | With a source store: run the job poller (same Postgres as the API). |
+| `SOURCE_STORAGE_DIR` | unset | The directory the API's local-disk storage writes to (dev, compose). |
+| `SOURCE_STORAGE_BLOB_CONTAINER_URL` | unset | The Blob container the API writes to on AKS (`https://<account>.blob.core.windows.net/sources`), read with the ambient Azure identity (workload identity; `azure-identity` `DefaultAzureCredential`). Wins over `SOURCE_STORAGE_DIR`. |
 | `LLM_ENDPOINT`, `LLM_MODEL`, `LLM_API_KEY` | unset | OpenAI-compatible chat endpoint (e.g. Azure AI Foundry `https://<resource>.services.ai.azure.com/openai/v1`). Any unset: Slither text only. |
 | `LLM_TIMEOUT_SECONDS` | `90` | Per-attempt LLM timeout (one retry). Reasoning models take ~20-30 s per contract. |
 | `POLL_INTERVAL_SECONDS` | `1` | Wait between polls when the queue is empty. |

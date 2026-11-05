@@ -23,7 +23,7 @@ from .pgsafe import without_nul
 from .schema_base import to_iso_z
 from .slither_runner import SlitherError, run_slither
 from .solc import UnsupportedSolcError, pick_solc
-from .storage import read_source
+from .storage import SourceStore, open_store
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,11 @@ class JobOutcome:
     ok: bool
     reason: str | None = None
     retryable: bool = False
+
+
+NO_STORAGE = (
+    "No source storage configured (SOURCE_STORAGE_BLOB_CONTAINER_URL or SOURCE_STORAGE_DIR)"
+)
 
 
 def _final(reason: str) -> JobOutcome:
@@ -56,10 +61,12 @@ def run_analysis_job(
     settings: Settings,
     explainer: Explainer,
     slither: SlitherFn = run_slither,
+    store: SourceStore | None = None,
 ) -> JobOutcome:
     """Analyses one contract. On success, writes its findings and marks the job
     done in one transaction. On failure, returns the outcome for the caller
-    to record with jobs.fail(); nothing has been written."""
+    to record with jobs.fail(); nothing has been written. `store` defaults to
+    the one the settings select."""
     contract = conn.execute(
         "SELECT filename, source_hash, source_reference FROM contracts WHERE id = %s",
         (job.subject_id,),
@@ -69,12 +76,13 @@ def run_analysis_job(
     conn.commit()
     if contract is None:
         return _final(f"Contract {job.subject_id} not found")
-    if settings.source_storage_dir is None:
-        return JobOutcome(ok=False, reason="SOURCE_STORAGE_DIR is not set", retryable=True)
+    store = store if store is not None else open_store(settings)
+    if store is None:
+        return JobOutcome(ok=False, reason=NO_STORAGE, retryable=True)
 
     key = contract["source_reference"]
     try:
-        source = read_source(settings.source_storage_dir, key)
+        source = store.read(key)
     except FileNotFoundError:
         return _final(f"Source file not found: {key}")
     if hashlib.sha256(source).hexdigest() != contract["source_hash"]:
