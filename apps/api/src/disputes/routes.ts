@@ -27,7 +27,7 @@ export interface FindingLifecycleDeps {
     Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
   disputeResolution: Pick<DisputeResolutionPort, "getDispute">;
   auditorStaking: Pick<AuditorStakingPort, "stakeOf" | "reputation" | "activeSubmissions">;
-  /** Releases the auditor's claim lock once a dispute resolves. */
+  /** Releases the auditor's claim lock once a dispute goes against them. */
   chainActions?: Pick<ChainActions, "applyDisputeResolved">;
   arbiter: Address;
   auth: Auth;
