@@ -161,9 +161,11 @@ locals {
       }
     }
     azure = {
-      tenantId            = local.d.tenant_id
-      keyVaultName        = local.d.key_vault_name
-      chainKeyVaultName   = local.d.chain_key_vault_name
+      tenantId     = local.d.tenant_id
+      keyVaultName = local.d.key_vault_name
+      # try(): absent until the data stack is applied with the chain vault;
+      # Helm only requires it once chain.enabled is on.
+      chainKeyVaultName   = try(local.d.chain_key_vault_name, "")
       apiClientId         = local.d.uami.api.client_id
       workerClientId      = local.d.uami.worker.client_id
       migrationsClientId  = local.d.uami.api.client_id
