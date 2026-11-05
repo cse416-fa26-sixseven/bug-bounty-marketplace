@@ -383,7 +383,7 @@ jobs:
           test -s "$RUNNER_TEMP/values-infra.yaml" || { echo "::error::helm_values output is empty"; exit 1; }
 
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: v3.16.4
 
