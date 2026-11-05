@@ -121,6 +121,14 @@ analysis:
   # Slither + LLM worker and PoC runner (T18 pipeline tests run here).
   enabled: true
   topologySpread: false
+  # LLM for finding explanations (OpenAI-compatible). Test namespaces use plain
+  # secrets: the key comes from secrets.plain.llmApiKey (empty unless set with
+  # --set-string), not Key Vault; without it the worker uses Slither's text.
+  extraEnv:
+    - name: LLM_ENDPOINT
+      value: https://hi-6654-resource.services.ai.azure.com/openai/v1
+    - name: LLM_MODEL
+      value: grok-4.6
 sandbox:
   # Kubernetes Jobs on the Kata sandbox pool, in namespace <namespace>-sandbox.
   enabled: true

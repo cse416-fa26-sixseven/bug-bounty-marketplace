@@ -431,9 +431,10 @@ silently downgraded to runc.
 
 - **Blob storage adapter** for uploads. This replaces the Azure Files share and removes the API
   single-replica limit (see above).
-- **Wire the queue.** The API should enqueue analysis jobs and the worker should consume them.
-  Then set `keda_enabled = true` in the env's `compute.tfvars` (the add-on is off to save ~0.4 CPU
-  on the small pool) and enable the KEDA ScaledObject in the env values.
+- **Worker scaling.** The chart's KEDA ScaledObject scales on the Azure Storage queue
+  `analysis-jobs`, which nothing writes to: jobs flow through the Postgres `jobs` table. Keep
+  `analysis.keda.enabled` and `keda_enabled` (compute.tfvars) off, or scale on the `jobs` table
+  (e.g. a KEDA postgresql trigger) when one worker replica is not enough.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
 - **Remove the unused sandbox identity** (`id-bbm-<env>-sandbox`, its federated credential and
