@@ -703,7 +703,16 @@ bootstrap_use_remote_backend() {
 
 # Local-mode init: tf.sh would pass -backend-config (it greps versions.tf), so
 # call terraform directly.
+# .terraform/terraform.tfstate only records the last backend's settings (the
+# local state is stacks/bootstrap/terraform.tfstate). If it still names a
+# remote backend (e.g. another subscription's state account), `init
+# -reconfigure` keeps it and the next plan fails with "Backend initialization
+# required", so drop it first.
 bootstrap_init_local() {
+  local meta="$BOOTSTRAP_DIR/.terraform/terraform.tfstate"
+  if [[ -f "$meta" ]] && [[ "$(jq -r '.backend.type // empty' "$meta" 2>/dev/null)" == azurerm ]]; then
+    run rm -f "$meta"
+  fi
   run terraform -chdir="$BOOTSTRAP_DIR" init -input=false -reconfigure
 }
 
@@ -795,17 +804,36 @@ cf_remove_azure_ns() {
 
 # ---- public DNS -------------------------------------------------------------
 
-# public_ns <zone>: NS records as seen by 1.1.1.1 (dig, else nslookup, else DoH).
+# public_ns <zone>: NS records from a public resolver. Tries ${BBM_DNS_RESOLVERS:-1.1.1.1 8.8.8.8}
+# in turn, then the system resolver, then DNS-over-HTTPS: some networks (e.g.
+# campus ones) block port 53 to some public resolvers, and an unreachable
+# resolver must not read as "delegation not visible yet".
 public_ns() {
-  local z=$1
-  if have dig; then
-    dig +short NS "$z" @1.1.1.1 2>/dev/null | norm_ns
-  elif have nslookup; then
-    nslookup -type=NS "$z" 1.1.1.1 2>/dev/null | awk '/nameserver = / { print $NF }' | norm_ns
-  else
-    curl -sS -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$z&type=NS" 2>/dev/null |
-      jq -r '.Answer[]? | select(.type == 2) | .data' | norm_ns
-  fi
+  local z=$1 r out
+  for r in ${BBM_DNS_RESOLVERS:-1.1.1.1 8.8.8.8} system; do
+    out=""
+    if have dig; then
+      # dig exits non-zero when no server answers; on a partial success (first
+      # server times out, the next answers) it exits 0 and prints ";;" error
+      # lines next to the records, so keep only the non-comment lines.
+      if [[ "$r" == system ]]; then
+        out=$(dig +short +time=3 +tries=1 NS "$z" 2>/dev/null) || out=""
+      else
+        out=$(dig +short +time=3 +tries=1 NS "$z" "@$r" 2>/dev/null) || out=""
+      fi
+      out=$(printf '%s\n' "$out" | grep -v '^;' || true)
+    elif have nslookup; then
+      local srv=()
+      [[ "$r" == system ]] || srv=("$r")
+      out=$(nslookup -timeout=3 -retry=1 -type=NS "$z" ${srv[@]+"${srv[@]}"} 2>/dev/null | awk '/nameserver = / { print $NF }') || out=""
+    fi
+    if [[ -n "$out" ]]; then
+      printf '%s\n' "$out" | norm_ns
+      return 0
+    fi
+  done
+  curl -sS --max-time 10 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$z&type=NS" 2>/dev/null |
+    jq -r '.Answer[]? | select(.type == 2) | .data' | norm_ns
 }
 
 # wait_for_delegation <zone> <timeout-s> <ns...>: true once public NS == list.

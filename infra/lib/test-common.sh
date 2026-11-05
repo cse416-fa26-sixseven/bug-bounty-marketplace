@@ -199,6 +199,47 @@ else
   echo "  skip terraform fmt check (no terraform on PATH)"
 fi
 
+# public_ns: an unreachable resolver (campus networks block port 53 to some)
+# falls through to the next one instead of reading as "not delegated yet".
+ns_out=$(
+  dig() {
+    case "$*" in
+      *@1.1.1.1*) echo ";; communications error to 1.1.1.1#53: timed out"; return 9 ;;
+      *@8.8.8.8*) printf 'NS2-09.azure-dns.net.\nns1-09.azure-dns.com.\n' ;;
+      *) return 9 ;;
+    esac
+  }
+  public_ns bbm.example.com
+)
+eq "public_ns falls back to the next resolver" "$ns_out" "$(printf 'ns1-09.azure-dns.com.\nns2-09.azure-dns.net.\n' | norm_ns)"
+ns_out=$(
+  dig() { printf ';; communications error to 192.0.2.1#53: timed out\nns1-02.azure-dns.com.\n'; }
+  public_ns bbm.example.com
+)
+eq "public_ns keeps records from a partial dig success" "$ns_out" "$(echo 'ns1-02.azure-dns.com.' | norm_ns)"
+ns_out=$(
+  dig() { case "$*" in *@9.9.9.9*) echo 'ns1-03.azure-dns.com.' ;; *) return 9 ;; esac; }
+  BBM_DNS_RESOLVERS=9.9.9.9 public_ns bbm.example.com
+)
+eq "public_ns honours BBM_DNS_RESOLVERS" "$ns_out" "$(echo 'ns1-03.azure-dns.com.' | norm_ns)"
+ns_out=$(
+  dig() { case "$*" in *@*) return 9 ;; *) echo 'ns1-01.azure-dns.com.' ;; esac; }
+  public_ns bbm.example.com
+)
+eq "public_ns falls back to the system resolver" "$ns_out" "$(echo 'ns1-01.azure-dns.com.' | norm_ns)"
+
+# bootstrap_init_local drops a stale remote-backend record (another
+# subscription's state account) before `init -reconfigure`, and keeps a local one.
+BD="$T/bootdir"
+mkdir -p "$BD/.terraform"
+echo '{"backend":{"type":"azurerm","config":{"storage_account_name":"stbbmtfstateold1"}}}' >"$BD/.terraform/terraform.tfstate"
+init_out=$(BOOTSTRAP_DIR="$BD" DRY_RUN=1 bootstrap_init_local 2>&1)
+has_in() { if grep -qF -- "$3" <<<"$2"; then ok_ "$1"; else bad "$1 (missing: $3)"; fi; }
+has_in "bootstrap_init_local drops a stale azurerm backend record" "$init_out" "rm -f $BD/.terraform/terraform.tfstate"
+echo '{"backend":{"type":"local"}}' >"$BD/.terraform/terraform.tfstate"
+init_out=$(BOOTSTRAP_DIR="$BD" DRY_RUN=1 bootstrap_init_local 2>&1)
+if grep -qF 'rm -f' <<<"$init_out"; then bad "bootstrap_init_local keeps a local backend record"; else ok_ "bootstrap_init_local keeps a local backend record"; fi
+
 # reset_tenant_fields (down.sh --all / up.sh on a subscription mismatch)
 RT="$T/tree-reset"
 make_tree "$RT"
@@ -460,7 +501,12 @@ case "$1 $2" in
   "vm list-usage")
     def='[{"name":{"value":"cores"},"currentValue":0,"limit":10},{"name":{"value":"standardBASv2Family"},"currentValue":0,"limit":2}]'
     echo "${BBM_TEST_USAGE:-$def}" ;;
-  "postgres flexible-server") echo '[{"supportedServerEditions":[{"name":"Burstable","supportedServerSkus":[{"name":"Standard_B1ms"}]}]}]' ;;
+  "postgres flexible-server")
+    if [[ -n "${BBM_TEST_PG_REASON:-}" ]]; then
+      echo '[{"reason":"Subscriptions are restricted from provisioning in this region.","supportedServerVersions":[],"supportedServerEditions":[{"name":"Burstable","supportedServerSkus":[{"name":"Standard_B1ms"}]}]}]'
+    else
+      echo '[{"supportedServerEditions":[{"name":"Burstable","supportedServerSkus":[{"name":"Standard_B1ms"}]}]}]'
+    fi ;;
   "aks get-versions") echo '{"values":[{"version":"1.32","isPreview":null},{"version":"1.33","isPreview":null,"isDefault":true},{"version":"1.35","isPreview":true}]}' ;;
   "keyvault list-deleted") printf 'kv-bbm-stg-ab12\tnorthcentralus\nkv-bbm-shared-ab12\tnorthcentralus\nkv-bbm-stg-zz99\tnorthcentralus\nkv-bbm-prd-ab12\tnorthcentralus\n' ;;
   *) exit 1 ;;
@@ -791,6 +837,14 @@ has "up: unknown state account offers the reset" 'storage_account_name = "stbbmt
 if RUN_TREE="$TREE9" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then :; fi
 hasnt_out() { if grep -qF -- "$2" "$T/out"; then bad "$1"; else ok_ "$1"; fi; }
 hasnt_out "up: existing state account is not a switch" "points at state account"
+if BBM_TEST_PG_REASON=1 run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  bad "up: PostgreSQL restricted in the env region dies"
+else
+  ok_ "up: PostgreSQL restricted in the env region dies"
+fi
+out=$(cat "$T/out")
+has "up: PostgreSQL restriction explained" 'PostgreSQL Flexible Server cannot be created in'
+has "up: PostgreSQL restriction names every env in the region" 'Move env(s) staging with --env-location staging=<region>'
 check_fails "up: bad env name" run_script up.sh --subscription "$SUB" --envs dev --dry-run
 check "up: --help" run_script up.sh --help
 if grep -qi 'one-command' "$T/out"; then ok_ "up: --help prints usage"; else bad "up: --help prints usage"; fi
