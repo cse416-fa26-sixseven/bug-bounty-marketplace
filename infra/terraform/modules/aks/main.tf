@@ -172,7 +172,12 @@ resource "azurerm_kubernetes_cluster" "this" {
   # it is off while the analysis worker is disabled (var.keda_enabled).
   # Rendered only when KEDA is on: with every flag false Azure returns no
   # profile at all, and a literal block would then show up as a change on
-  # every plan (and re-trigger the Gateway API patch below).
+  # every plan (and re-trigger the Gateway API update below). Omitting the
+  # block still turns KEDA off (the provider sends keda.enabled=false on the
+  # change). The mirror case: once KEDA has been on, Azure keeps returning
+  # keda.enabled=false, and the absent block becomes the perpetual diff. If
+  # an env ever turns KEDA on and off again, switch this back to a literal
+  # block (or a tri-state variable).
   dynamic "workload_autoscaler_profile" {
     for_each = var.keda_enabled ? [1] : []
     content {
@@ -252,8 +257,8 @@ resource "azapi_update_resource" "app_routing_gateway_api" {
     replace_triggered_by = [azurerm_kubernetes_cluster.this]
   }
 
-  # The cluster is busy while a node pool is being created; a PATCH in the
-  # same apply would fail with a conflict, so wait for the pools first.
+  # The cluster is busy while a node pool is being created; the azapi update
+  # in the same apply would fail with a conflict, so wait for the pools first.
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.apps,
     azurerm_kubernetes_cluster_node_pool.sandbox,

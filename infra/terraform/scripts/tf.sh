@@ -157,6 +157,22 @@ fi
 
 extra_args=("$@")
 
+# One checkout serves every env, and `init` for a second env silently keeps
+# the first env's backend unless it is re-run with -reconfigure: a plan would
+# then compare this env's config with the OTHER env's state and propose
+# replacing its cluster. Refuse every command but init while the initialised
+# backend's state key is not this env's.
+check_backend_key() {
+  local f="$stack_dir/.terraform/terraform.tfstate" have
+  [[ -f "$f" ]] || return 0
+  have=$(sed -n 's/.*"key": *"\([^"]*\)".*/\1/p' "$f" | head -n 1)
+  [[ -z "$have" || "$have" == "$state_key" ]] ||
+    die "stacks/$stack is initialised for state key '$have', not '$state_key': run 'tf.sh $stack $env init -reconfigure' first"
+}
+if [[ "$cmd" != "init" && "$cmd" != "validate" ]] && uses_remote_backend; then
+  check_backend_key
+fi
+
 case "$cmd" in
   init)
     # -migrate-state / -reconfigure may need to ask before copying state;
