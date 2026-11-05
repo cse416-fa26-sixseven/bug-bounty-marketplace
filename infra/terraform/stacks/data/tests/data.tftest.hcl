@@ -191,8 +191,8 @@ run "plan_names_and_settings" {
   }
 
   assert {
-    condition     = length(module.identity.role_assignment_ids) == 9
-    error_message = "expected 9 role assignments (api 3, worker 4, aks 1, certmgr 1, sandbox 0)"
+    condition     = length(module.identity.role_assignment_ids) == 10
+    error_message = "expected 10 role assignments (api 4 incl. the chain vault, worker 4, aks 1, certmgr 1, sandbox 0)"
   }
 
   assert {
@@ -220,6 +220,24 @@ run "plan_names_and_settings" {
   assert {
     condition     = toset(module.keyvault.secret_names) == toset(["database-url", "pg-admin-password"])
     error_message = "env KV secrets wrong"
+  }
+
+  # ADR 0003: the operator key lives in a vault only the api identity reads;
+  # Terraform generates only session-secret there.
+  assert {
+    condition = (
+      module.chain_keyvault.name == "kv-bbm-stgc-a1b2" &&
+      toset(module.chain_keyvault.secret_names) == toset(["session-secret"])
+    )
+    error_message = "chain KV name or secrets wrong"
+  }
+
+  assert {
+    condition = (
+      contains(keys(module.identity.role_assignment_ids), "api-chain-kv-secrets-user") &&
+      length([for k in keys(module.identity.role_assignment_ids) : k if strcontains(k, "chain")]) == 1
+    )
+    error_message = "only the api identity may read the chain KV"
   }
 }
 
@@ -363,7 +381,7 @@ run "test_env_without_postgres" {
   assert {
     condition = (
       toset(keys(module.identity.role_assignment_ids)) == toset([
-        "api-kv-secrets-user", "api-sources-blob-contributor", "api-queue-sender",
+        "api-kv-secrets-user", "api-chain-kv-secrets-user", "api-sources-blob-contributor", "api-queue-sender",
         "worker-kv-secrets-user", "worker-queue-processor", "worker-queue-reader", "worker-sources-blob-reader",
         "aks-network-contributor", "certmgr-dns-test", "certmgr-dns-preview",
       ])

@@ -104,6 +104,35 @@ module "keyvault" {
   tags = local.tags
 }
 
+# Chain vault (ADR 0003): the operator key and the rest of the API's chain
+# settings. Separate from the env vault because the worker identity reads that
+# one and sits next to the PoC sandbox; only the api identity gets this one.
+# Terraform generates session-secret (the API's sign-in cookie key). Set the
+# others out of band, never through Terraform:
+#   operator-private-key  az keyvault secret set (docs/devops/azure-bootstrap.md)
+#   chain-rpc-url         az keyvault secret set
+#   chain-deployment      written by contracts-deploy.yml after a broadcast
+# infra/up.sh seeds placeholders for those three so the CSI mount never hangs.
+resource "random_password" "session_secret" {
+  length  = 48
+  special = false
+}
+
+module "chain_keyvault" {
+  source = "../../modules/keyvault"
+
+  name                           = local.n.chain_key_vault
+  resource_group_name            = local.rg
+  location                       = var.location
+  tenant_id                      = data.azurerm_client_config.current.tenant_id
+  secret_officer_sp_object_ids   = var.secret_officer_sp_object_ids
+  secret_officer_user_object_ids = var.secret_officer_user_object_ids
+  secrets = {
+    "session-secret" = random_password.session_secret.result
+  }
+  tags = local.tags
+}
+
 module "storage" {
   source = "../../modules/storage"
 

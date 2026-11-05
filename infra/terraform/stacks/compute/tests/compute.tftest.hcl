@@ -71,6 +71,7 @@ override_data {
       location               = "northcentralus"
       tenant_id              = "11111111-1111-1111-1111-111111111111"
       key_vault_name         = "kv-bbm-stg-a1b2"
+      chain_key_vault_name   = "kv-bbm-stgc-a1b2"
       key_vault_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2"
       pg_fqdn                = "psql-bbm-staging-ncus.postgres.database.azure.com"
       pg_server_name         = "psql-bbm-staging-ncus"
@@ -188,6 +189,7 @@ run "staging_plan" {
       yamldecode(output.helm_values).global.image.registry == "acrbbma1b2.azurecr.io",
       yamldecode(output.helm_values).azure.tenantId != "",
       yamldecode(output.helm_values).azure.keyVaultName == "kv-bbm-stg-a1b2",
+      yamldecode(output.helm_values).azure.chainKeyVaultName == "kv-bbm-stgc-a1b2",
       yamldecode(output.helm_values).azure.apiClientId == "a0000000-0000-0000-0000-000000000002",
       yamldecode(output.helm_values).azure.workerClientId == "a0000000-0000-0000-0000-000000000003",
       yamldecode(output.helm_values).azure.migrationsClientId == "a0000000-0000-0000-0000-000000000002",
@@ -217,7 +219,7 @@ run "staging_plan" {
       keys(yamldecode(output.helm_values).platform) == ["certManagerClientId", "dnsResourceGroup", "subscriptionId"],
       alltrue([for v in values(yamldecode(output.helm_values).platform) : v != null && v != ""]),
       keys(yamldecode(output.helm_values).global) == ["image"],
-      length(keys(yamldecode(output.helm_values).azure)) == 9,
+      length(keys(yamldecode(output.helm_values).azure)) == 10,
       length(keys(yamldecode(output.helm_values).ingress)) == 4,
       keys(yamldecode(output.helm_values).networkPolicy) == ["postgresCidr"],
       alltrue([for v in values(yamldecode(output.helm_values).azure) : v != null && v != ""]),
@@ -309,6 +311,7 @@ run "test_env" {
         location               = "northcentralus"
         tenant_id              = "11111111-1111-1111-1111-111111111111"
         key_vault_name         = "kv-bbm-tst-a1b2"
+        chain_key_vault_name   = "kv-bbm-tstc-a1b2"
         key_vault_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-test-data-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-tst-a1b2"
         pg_fqdn                = null
         pg_server_name         = null

@@ -62,7 +62,7 @@ run "staging_names" {
   }
 
   assert {
-    condition     = output.env.key_vault == "kv-bbm-stg-a1b2" && output.env.storage_account == "stbbmstga1b2"
+    condition     = output.env.key_vault == "kv-bbm-stg-a1b2" && output.env.chain_key_vault == "kv-bbm-stgc-a1b2" && output.env.storage_account == "stbbmstga1b2"
     error_message = "unexpected staging KV/storage names"
   }
 
@@ -146,7 +146,7 @@ run "length_limits" {
 
   assert {
     condition = alltrue([
-      for n in [output.global.shared_key_vault, output.env.key_vault] :
+      for n in [output.global.shared_key_vault, output.env.key_vault, output.env.chain_key_vault] :
       length(n) >= 3 && length(n) <= 24 && can(regex("^[a-z][a-z0-9-]*[a-z0-9]$", n)) && !strcontains(n, "--")
     ])
     error_message = "Key Vault names must be 3-24 chars, start with a letter, no consecutive hyphens"
