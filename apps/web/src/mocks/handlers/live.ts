@@ -14,6 +14,8 @@ export const LIVE_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }
   { method: "GET", path: "/api/contracts/:id" },
   { method: "GET", path: "/api/contracts/:id/findings" },
   { method: "GET", path: "/api/contracts/:id/analysis" },
+  // The terms the developer funds on-chain: the mock DB does not know real contracts.
+  { method: "GET", path: "/api/contracts/:id/bounty" },
   { method: "GET", path: "/api/findings/:id/raw" },
   { method: "GET", path: "/api/auditor/queue" },
   { method: "POST", path: "/api/auditor/claim" },
