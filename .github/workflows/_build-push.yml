@@ -25,9 +25,44 @@ name: Build and push images
 #
 # The caller job must grant `id-token: write` and `contents: read`.
 # Skips cleanly (every job skipped) while vars.ACR_NAME is unset.
+#
+# Manual builds (workflow_dispatch) exist so a branch can be tried on a
+# long-lived env before it merges, e.g. images the PR preview does not build
+# (analysis, sandbox) for a hand-run `helm upgrade` of staging. They are
+# pinned to the `preview` environment, so they land under bbm-preview/* and
+# can never overwrite the bbm/*:sha-* tags CD promotes:
+#   gh workflow run _build-push.yml --ref <branch> -f tag=pr-<n>-sha-<7> \
+#     -f services='["analysis"]'
 # ---------------------------------------------------------------------
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag, e.g. pr-42-sha-abc1234.
+        required: true
+        type: string
+      services:
+        description: JSON array of services to build (subset of api, web, analysis, sandbox, contracts).
+        required: false
+        type: string
+        default: '["api","web","analysis","sandbox","contracts"]'
+      web-mocked:
+        description: Also build web with NEXT_PUBLIC_API_MOCKING=enabled, tagged <tag>-mocked.
+        required: false
+        type: boolean
+        default: false
+      environment:
+        description: Only `preview` may be used by hand (pushes bbm-preview/*).
+        required: true
+        type: choice
+        options: [preview]
+        default: preview
+      repository-prefix:
+        description: ACR repository namespace (bbm-preview is the only one the preview identity may push).
+        required: false
+        type: string
+        default: bbm-preview
   workflow_call:
     inputs:
       tag:

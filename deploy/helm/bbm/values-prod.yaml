@@ -41,11 +41,11 @@ web:
       memory: 512Mi
 
 api:
-  # !!! IMPORTANT: the api MUST stay at exactly 1 replica until the Blob
-  # !!! storage adapter lands. Uploaded sources are written to the shared
-  # !!! Azure Files claim below (SOURCE_STORAGE_DIR), an interim way to hand
-  # !!! them to the analysis worker that is not validated for concurrent
-  # !!! writers. Once uploads go to Blob storage, raise to minReplicas 2 /
+  # !!! IMPORTANT: the api MUST stay at exactly 1 replica while uploads are
+  # !!! on the shared Azure Files claim below (SOURCE_STORAGE_DIR), an
+  # !!! interim way to hand them to the analysis worker that is not
+  # !!! validated for concurrent writers. Once prod follows staging onto
+  # !!! Blob storage (api.sourceStorage.blob), raise to minReplicas 2 /
   # !!! maxReplicas 5 and enable the PDB.
   hpa:
     enabled: true
@@ -85,6 +85,13 @@ analysis:
   # Slither + LLM worker (DATABASE_URL and llm-api-key from Key Vault via
   # bbm-kv-analysis) and PoC runner. KEDA stays off: the worker polls Postgres.
   enabled: true
+  # LLM for finding explanations (OpenAI-compatible). The key comes from Key
+  # Vault (llm-api-key); without it the worker falls back to Slither's text.
+  extraEnv:
+    - name: LLM_ENDPOINT
+      value: https://hi-6654-resource.services.ai.azure.com/openai/v1
+    - name: LLM_MODEL
+      value: grok-4.6
 sandbox:
   # PoC Jobs on the Kata sandbox pool (terraform sandbox_pool_enabled), in
   # namespace bbm-sandbox (<release namespace>-sandbox).

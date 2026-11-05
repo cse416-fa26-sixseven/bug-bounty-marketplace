@@ -44,7 +44,7 @@ not part of this API yet; the web app still mocks them.
 Storage is pluggable. Contracts use a `ContractRepository` and findings, PoCs
 and jobs a `PipelineRepository` (in-memory, or Postgres via `DATABASE_URL`).
 In-memory jobs are never processed; the worker needs Postgres. Source bytes use a `SourceStorage` (in-memory,
-or local disk via `SOURCE_STORAGE_DIR`). For a local Postgres, run
+local disk via `SOURCE_STORAGE_DIR`, or Azure Blob via `SOURCE_STORAGE_BLOB_CONTAINER_URL`). For a local Postgres, run
 `docker compose up -d db` and set
 `DATABASE_URL=postgres://bbm:bbm@localhost:5432/bbm`.
 
@@ -92,7 +92,8 @@ is on.
 | `PG_POOL_MAX`               | `5`                                      | Maximum connections in the Postgres pool.                                                                                        |
 | `MIGRATION_LOCK_TIMEOUT_MS` | `60000`                                  | How long a migration run waits for the advisory lock (via `lock_timeout`) before failing.                                        |
 | `MIGRATIONS_DIR`            | `migrations/` next to the running module | Directory of `*.sql` migrations. Resolves to `src/db/migrations` under `dev` and `dist/migrations` in the build.                 |
-| `SOURCE_STORAGE_DIR`        | unset                                    | Unset: uploaded `.sol` and `.t.sol` bytes are held in memory. Set: written under this directory (shared with the worker).        |
+| `SOURCE_STORAGE_BLOB_CONTAINER_URL` | unset                            | `https://<account>.blob.core.windows.net/<container>`: uploaded `.sol` and `.t.sol` bytes are stored as block blobs, authenticated with the ambient Azure identity (`@azure/identity` `DefaultAzureCredential`; workload identity on AKS). Wins over `SOURCE_STORAGE_DIR`. |
+| `SOURCE_STORAGE_DIR`        | unset                                    | Written under this directory (shared with the worker). Unset, with no container URL: bytes are held in memory.                   |
 | `CLAIM_WINDOW_SECONDS`      | `600`                                    | How long an auditor's exclusive claim on a contract lasts.                                                                       |
 | `RATE_LIMIT_ENABLED`        | `true`                                   | Per-client-IP rate limits. `false` turns them off (the compose stack and ephemeral test namespaces do).                          |
 | `RATE_LIMIT_MAX`            | `3000`                                   | Requests per minute to any route without its own limit. `/health` is never limited.                                              |
@@ -150,5 +151,6 @@ docker run --rm -e DATABASE_URL=postgres://... bbm-api node dist/migrate-cli.js
 The runtime stage holds only `dist/` plus the production `node_modules` from
 `pnpm deploy --prod`, runs as `node`, and listens on `PORT` (default `3001`).
 `SOURCE_STORAGE_DIR` defaults to `/data/sources`, the only writable directory;
-mount a volume there to keep uploaded sources. The healthcheck calls
+mount a volume there to keep uploaded sources, or set
+`SOURCE_STORAGE_BLOB_CONTAINER_URL` to use Blob storage instead. The healthcheck calls
 `GET /health`.

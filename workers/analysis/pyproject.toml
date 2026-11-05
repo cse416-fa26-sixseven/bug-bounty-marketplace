@@ -16,6 +16,8 @@ dependencies = [
     "solc-select>=1.0",
     "kubernetes>=31",
     "pyyaml>=6.0",
+    "azure-storage-blob>=12.26",
+    "azure-identity>=1.21",
 ]
 
 [project.scripts]

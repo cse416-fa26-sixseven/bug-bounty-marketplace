@@ -38,18 +38,22 @@ web:
 
 api:
   hpa:
-    # Pinned to exactly one replica until the Blob storage adapter lands.
-    # Uploads sit on the shared Azure Files claim below (an interim
-    # arrangement for the analysis worker, not a multi-replica design).
+    # One replica is plenty for staging. With uploads in Blob storage the
+    # api is stateless, so this may be raised.
     enabled: true
     minReplicas: 1
     maxReplicas: 1
   pdb:
     enabled: false
   sourceStorage:
-    # ReadWriteMany Azure Files share: api writes uploads, analysis reads them.
-    persistentVolumeClaim:
+    # Uploads go to the env storage account's `sources` container
+    # (values-infra.yaml carries the endpoint): the api writes, the analysis
+    # worker reads, both with workload identity. The Azure Files claim that
+    # shared them before is off (and deleted with its share on upgrade).
+    blob:
       enabled: true
+    persistentVolumeClaim:
+      enabled: false
 
 migrations:
   # Run migrations as a hook Job; the api starts with MIGRATE_ON_BOOT=false.
@@ -70,6 +74,13 @@ analysis:
   # Slither + LLM worker (DATABASE_URL and llm-api-key from Key Vault via
   # bbm-kv-analysis) and PoC runner. KEDA stays off: the worker polls Postgres.
   enabled: true
+  # LLM for finding explanations (OpenAI-compatible). The key comes from Key
+  # Vault (llm-api-key); without it the worker falls back to Slither's text.
+  extraEnv:
+    - name: LLM_ENDPOINT
+      value: https://hi-6654-resource.services.ai.azure.com/openai/v1
+    - name: LLM_MODEL
+      value: grok-4.6
 sandbox:
   # PoC Jobs on the Kata sandbox pool (terraform sandbox_pool_enabled), in
   # namespace bbm-sandbox (<release namespace>-sandbox).

@@ -13,8 +13,10 @@ cluster (`values-test.yaml`). It contains:
   NetworkPolicies.
 - The `analysis` worker (Slither + LLM, and the PoC runner) with its
   per-release `sandbox` namespace where auditors' PoCs run as Kata-isolated
-  Jobs, and a ReadWriteMany `sources` claim shared by api and analysis. Off
-  in `values.yaml`, on in every env file (see "Analysis and the PoC
+  Jobs, and shared upload storage for api and analysis: the env Blob
+  container (`api.sourceStorage.blob`, staging) or a ReadWriteMany
+  `sources` claim (`api.sourceStorage.persistentVolumeClaim`, prod/test).
+  Off in `values.yaml`, on in every env file (see "Analysis and the PoC
   sandbox").
 - Off by default: KEDA scaling of the worker and a throwaway in-cluster
   Postgres (`postgres.inCluster`, test namespaces only).
@@ -73,21 +75,26 @@ SecretProviderClass or HTTPRoute.
 | file | used by | highlights |
 |---|---|---|
 | `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot, analysis/sandbox/sources claim off (emptyDir uploads) |
-| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1, analysis + sandbox + sources claim |
+| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api 1 replica, analysis + sandbox, uploads in the Blob `sources` container |
 | `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1, analysis + sandbox + sources claim |
 | `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown, analysis + sandbox (`<ns>-sandbox`) + sources claim |
 | `values-ci.yaml` | `ct install`, kind smoke tests | plain Secret with dummy `DATABASE_URL`, everything optional off |
 
-> **API replicas.** Uploaded sources are written to
-> `SOURCE_STORAGE_DIR=/data/sources`: a per-pod `emptyDir` by default, or the
-> shared `bbm-sources` claim when `api.sourceStorage.persistentVolumeClaim`
-> is enabled (every env file). The claim is an interim way to hand uploads to
-> the analysis worker, not a multi-replica design, so the api must stay at
-> exactly one replica in every environment until a Blob storage adapter
-> lands. Both env files pin the api HPA to `min 1 / max 1`. While at most one
-> replica can run, the Deployment uses `RollingUpdate` with `maxSurge 0` /
-> `maxUnavailable 1` (replace in place, brief downtime on rollout).
-> `api.strategy` overrides it.
+> **Uploaded sources and API replicas.** With `api.sourceStorage.blob.enabled`
+> (staging) uploads are block blobs in the env storage account's container
+> (`azure.storageBlobEndpoint` from values-infra + `azure.storageContainerName`,
+> default `sources`): the api writes and the analysis worker reads through
+> `SOURCE_STORAGE_BLOB_CONTAINER_URL` with their workload identities, no
+> volume is mounted, and the api may run several replicas. Otherwise they
+> are written to `SOURCE_STORAGE_DIR=/data/sources`: a per-pod `emptyDir` by
+> default, or the shared `bbm-sources` claim when
+> `api.sourceStorage.persistentVolumeClaim` is enabled (prod, test). The
+> claim is an interim way to hand uploads to the analysis worker, not a
+> multi-replica design, so there the api stays at exactly one replica
+> (`min 1 / max 1`). While at most one replica can run, the Deployment uses
+> `RollingUpdate` with `maxSurge 0` / `maxUnavailable 1` (replace in place,
+> brief downtime on rollout). `api.strategy` overrides it. Turning Blob on
+> for an env that had the claim deletes the claim and its share.
 
 > **Staging node placement.** `values-staging.yaml` leaves
 > `global.nodeSelector` empty on purpose. The staging apps pool is disabled
@@ -122,9 +129,12 @@ ServiceAccount `bbm-analysis`). It serves `/analyze` and polls the Postgres
 `jobs` table the api writes, so it gets `DATABASE_URL` from the same Secret
 as the api (with `csi`, `bbm-kv-analysis` syncs `database-url` and
 `llm-api-key` into `bbm-secrets-analysis`), `JOB_LEASE_SECONDS`
-(`analysis.jobLeaseSeconds`, 900) and, when the sources claim is enabled,
-`SOURCE_STORAGE_DIR` with the claim mounted read-only. Its egress policy
-allows Postgres and HTTPS (the LLM endpoint and the Kubernetes API server).
+(`analysis.jobLeaseSeconds`, 900) and the sources: with
+`api.sourceStorage.blob` the container URL (`SOURCE_STORAGE_BLOB_CONTAINER_URL`,
+read as the worker identity, Storage Blob Data Reader), else, when the
+sources claim is enabled, `SOURCE_STORAGE_DIR` with the claim mounted
+read-only. Its egress policy allows Postgres and HTTPS (Blob, the LLM
+endpoint and the Kubernetes API server).
 `LLM_ENDPOINT` / `LLM_MODEL` go in `analysis.extraEnv`; without them the
 worker keeps Slither's own explanations.
 

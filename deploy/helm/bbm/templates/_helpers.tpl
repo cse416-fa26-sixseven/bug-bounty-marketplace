@@ -94,7 +94,7 @@ hook-managed copy; "existing" is pre-created and used directly.
 {{- end -}}
 {{- end -}}
 
-{{/* Secret that the analysis worker reads LLM_API_KEY from. */}}
+{{/* Secret that the analysis worker reads DATABASE_URL and LLM_API_KEY from. */}}
 {{- define "bbm.analysisSecretName" -}}
 {{- if eq .Values.secrets.provider "csi" -}}
 {{- printf "%s-analysis" .Values.secrets.name -}}
@@ -284,9 +284,25 @@ set, else the chart-rendered <fullname>-sources.
 {{- .Values.api.sourceStorage.persistentVolumeClaim.existingClaim | default (include "bbm.componentName" (dict "root" . "component" "sources")) -}}
 {{- end -}}
 
-{{/* Is the shared sources claim in use (vs. the api's per-pod emptyDir)? */}}
+{{/* Are uploaded sources kept in the Blob container (api.sourceStorage.blob)? */}}
+{{- define "bbm.blobSources" -}}
+{{- if .Values.api.sourceStorage.blob.enabled }}true{{ end -}}
+{{- end -}}
+
+{{/*
+SOURCE_STORAGE_BLOB_CONTAINER_URL for the api and the analysis worker:
+<azure.storageBlobEndpoint>/<azure.storageContainerName>. The endpoint
+comes from values-infra.yaml, so it is required at deploy time.
+*/}}
+{{- define "bbm.sourceContainerUrl" -}}
+{{- $_ := include "bbm.requireInfra" (dict "root" . "key" "azure.storageBlobEndpoint" "value" .Values.azure.storageBlobEndpoint) -}}
+{{- printf "%s/%s" (trimSuffix "/" .Values.azure.storageBlobEndpoint) .Values.azure.storageContainerName -}}
+{{- end -}}
+
+{{/* Is the shared sources claim in use (vs. Blob storage or the api's
+per-pod emptyDir)? Blob storage wins over the claim. */}}
 {{- define "bbm.sourcesClaim" -}}
-{{- if .Values.api.sourceStorage.persistentVolumeClaim.enabled }}true{{ end -}}
+{{- if and .Values.api.sourceStorage.persistentVolumeClaim.enabled (not .Values.api.sourceStorage.blob.enabled) }}true{{ end -}}
 {{- end -}}
 
 {{/*

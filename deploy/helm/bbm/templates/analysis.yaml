@@ -2,7 +2,8 @@
 Analysis worker: Slither + LLM on uploads, and (sandbox.enabled) the PoC
 runner that creates Jobs in the sandbox namespace through the Kubernetes
 API. It reads DATABASE_URL from the same Secret as the api, uploads from the
-shared sources claim (read-only) and, with sandbox.enabled, the Job template
+Blob container (api.sourceStorage.blob, workload identity) or the shared
+sources claim (read-only) and, with sandbox.enabled, the Job template
 ConfigMap at /etc/bbm/sandbox/job.yaml with its ServiceAccount token mounted
 (in-cluster config; the ServiceAccount itself keeps
 automountServiceAccountToken false, the pod-level field wins).
@@ -13,6 +14,7 @@ automountServiceAccountToken false, the pod-level field wins).
 {{- $csi := include "bbm.csi" . -}}
 {{- $sandbox := .Values.sandbox.enabled -}}
 {{- $sources := include "bbm.sourcesClaim" . -}}
+{{- $blob := include "bbm.blobSources" . -}}
 {{- /* The worker waits activeDeadlineSeconds + 60 s for a Job, plus up to
 60 s to delete a leftover Job first. A lease shorter than that lets another
 worker re-claim the job and run the PoC twice. */}}
@@ -80,14 +82,17 @@ spec:
                   name: {{ include "bbm.analysisSecretName" . }}
                   key: llm-api-key
             {{- /* The worker polls the jobs table only with DATABASE_URL and
-            SOURCE_STORAGE_DIR both set; without the shared claim it serves
-            /analyze only. */}}
+            a source store (the Blob container URL or SOURCE_STORAGE_DIR on
+            the shared claim); with neither it serves /analyze only. */}}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "bbm.analysisSecretName" . }}
                   key: database-url
-            {{- if $sources }}
+            {{- if $blob }}
+            - name: SOURCE_STORAGE_BLOB_CONTAINER_URL
+              value: {{ include "bbm.sourceContainerUrl" . | quote }}
+            {{- else if $sources }}
             - name: SOURCE_STORAGE_DIR
               value: {{ .Values.api.sourceStorage.path | quote }}
             {{- end }}

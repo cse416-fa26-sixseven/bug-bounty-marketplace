@@ -2,6 +2,7 @@
 {{- $name := include "bbm.componentName" (dict "root" $ "component" "api") -}}
 {{- $csi := include "bbm.csi" . -}}
 {{- $sources := include "bbm.sourcesClaim" . -}}
+{{- $blob := include "bbm.blobSources" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -74,8 +75,14 @@ spec:
               value: {{ ternary "false" (toString $v.migrateOnBoot) .Values.migrations.enabled | quote }}
             - name: PG_POOL_MAX
               value: {{ $v.pgPoolMax | quote }}
+            {{- /* The api image sets SOURCE_STORAGE_DIR; the container URL wins over it. */}}
+            {{- if $blob }}
+            - name: SOURCE_STORAGE_BLOB_CONTAINER_URL
+              value: {{ include "bbm.sourceContainerUrl" . | quote }}
+            {{- else }}
             - name: SOURCE_STORAGE_DIR
               value: {{ $v.sourceStorage.path | quote }}
+            {{- end }}
             {{- /* Behind the Gateway without its pod CIDR the api would see
             only the Envoy pods' IPs, so every user would share one limit:
             leave limiting off until values-infra carries the CIDR. */}}
@@ -179,8 +186,10 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if not $blob }}
             - name: sources
               mountPath: {{ $v.sourceStorage.path }}
+            {{- end }}
             {{- if $csi }}
             - name: secrets-store
               mountPath: {{ .Values.secrets.csi.mountPath }}
@@ -189,6 +198,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if not $blob }}
         - name: sources
           {{- if $sources }}
           persistentVolumeClaim:
@@ -197,6 +207,7 @@ spec:
           emptyDir:
             sizeLimit: {{ $v.sourceStorage.sizeLimit }}
           {{- end }}
+        {{- end }}
         {{- if $csi }}
         {{- include "bbm.csiVolume" (dict "spc" .Values.secrets.csi.secretProviderClassName) | nindent 8 }}
         {{- end }}

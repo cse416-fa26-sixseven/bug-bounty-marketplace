@@ -2,9 +2,10 @@
 
 - `GET /health`: liveness.
 - `POST /analyze`: stateless Slither + LLM analysis of one source file.
-- When `DATABASE_URL` is set, a background thread also runs the job poller
-  (see worker.py), which analyses contracts the API has queued and writes
-  their findings to Postgres.
+- When `DATABASE_URL` and a source store (`SOURCE_STORAGE_BLOB_CONTAINER_URL`
+  or `SOURCE_STORAGE_DIR`) are set, a background thread also runs the job
+  poller (see worker.py), which analyses contracts the API has queued and
+  writes their findings to Postgres.
 """
 
 import logging
@@ -25,6 +26,7 @@ from analysis.llm import explanations_for, make_explainer
 from analysis.pgsafe import without_nul
 from analysis.slither_runner import SlitherError, run_slither
 from analysis.solc import UnsupportedSolcError, pick_solc
+from analysis.storage import open_store
 from analysis.worker import load_dotenv
 from analysis.worker import run as run_worker
 
@@ -54,16 +56,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.explainer = make_explainer(settings)
     app.state.worker = None
     stop = threading.Event()
-    if settings.database_url and settings.source_storage_dir:
+    if settings.database_url and settings.source_storage_configured:
+        # Opened here, not in the thread: a bad container URL then fails
+        # start-up (the pod restarts) instead of ending the poller silently.
+        store = open_store(settings)
         app.state.worker = threading.Thread(
             target=run_worker,
-            args=(settings, stop, app.state.explainer),
+            args=(settings, stop, app.state.explainer, store),
             name="job-poller",
             daemon=True,
         )
         app.state.worker.start()
     else:
-        log.info("job poller off: set DATABASE_URL and SOURCE_STORAGE_DIR to enable it")
+        log.info(
+            "job poller off: set DATABASE_URL and SOURCE_STORAGE_BLOB_CONTAINER_URL"
+            " (or SOURCE_STORAGE_DIR) to enable it"
+        )
     try:
         yield
     finally:
