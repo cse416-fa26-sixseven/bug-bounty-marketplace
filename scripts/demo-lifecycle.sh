@@ -174,4 +174,34 @@ cast_rpc send --private-key "$AUD_KEY" "$STAKING" "withdraw(uint256)" "$STAKE_AF
 [ "$(stake_of)" = "0" ] || die "stake not withdrawn"
 echo "withdrew $STAKE_AFTER wei of stake"
 
+# Lapse: a third bounty is disputed and the arbiter never rules. Anvil's clock
+# is moved past DisputeResolution's 3-day ruling window; the API's payout
+# keeper then lapses the dispute (in the auditor's favour) and pays out.
+RULING_WINDOW=$((3 * 24 * 60 * 60))
+step "Lapse: a third bounty, disputed, never ruled, lapsed by the keeper and paid"
+cast_rpc send --private-key "$AUD_KEY" --value "$REQUIRED_STAKE" "$STAKING" "stake()" >/dev/null \
+  || die "stake failed"
+OUT=$(funded_contract) || exit 1
+read -r C3 F3 <<<"$OUT"
+echo "contract $C3, reentrancy finding $F3"
+claim_and_prove "$C3" "$F3"
+C3_ID=$(cast_in keccak "$C3") || die "keccak failed"
+F3_ID=$(cast_in keccak "$F3") || die "keccak failed"
+cast_rpc send --private-key "$DEV_KEY" "$DISPUTES" "openDispute(bytes32,bytes32,string)" \
+  "$C3_ID" "$F3_ID" "Nobody will rule on this" >/dev/null || die "openDispute failed"
+api -b "$WORK/dev" -H 'content-type: application/json' -d '{"reason":"Nobody will rule on this"}' \
+  "$API/api/findings/$F3/dispute" >/dev/null || die "dispute route failed"
+wait_status "$C3" "$F3" Disputed 30
+cast_rpc rpc evm_increaseTime "$((RULING_WINDOW + 1))" >/dev/null || die "evm_increaseTime failed"
+cast_rpc rpc evm_mine >/dev/null || die "evm_mine failed"
+echo "chain clock moved past the ${RULING_WINDOW}s ruling window"
+wait_status "$C3" "$F3" Verified 60
+echo "dispute lapsed, finding Verified again"
+PENDING_BEFORE=$(pending_payout) || die "reading the profile failed"
+wait_status "$C3" "$F3" Paid $((WINDOW + 60))
+PENDING=$(pending_payout) || die "reading the profile failed"
+[ "$((PENDING - PENDING_BEFORE))" = "$ONE_ETH" ] || die "pending payout went $PENDING_BEFORE -> $PENDING, expected +1 ETH"
+cast_rpc send --private-key "$AUD_KEY" "$ESCROW" "withdrawPayout()" >/dev/null || die "withdraw failed"
+echo "finding Paid after the lapse, $(cast_in from-wei "$PENDING") ETH withdrawn"
+
 printf '\nLIFECYCLE OK\n'
