@@ -4,7 +4,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = "~> 5.12"
     }
     # App routing Gateway API (modules/aks), which azurerm cannot configure.
     azapi = {
