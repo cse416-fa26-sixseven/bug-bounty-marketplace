@@ -38,6 +38,8 @@ function dispute(source: "slither" | "auditor"): ArbiterDisputeView {
       source,
       title: auditor ? "Unprotected sweep()" : null,
       reportedByAuditorId: auditor ? "0xauditor" : null,
+      developerNote: null,
+      developerNoteUpdatedAt: null,
     },
     pocSubmission: null,
   };

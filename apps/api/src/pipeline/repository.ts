@@ -44,6 +44,9 @@ export interface FindingRecord {
   /** Set (with reportedByAuditorId) only for auditor-reported findings. */
   title: string | null;
   reportedByAuditorId: string | null;
+  /** The developer's note; null (with its timestamp) when there is none. */
+  developerNote: string | null;
+  developerNoteUpdatedAt: string | null;
 }
 
 export interface NewAuditorFindingRecord {
@@ -93,6 +96,9 @@ export interface PipelineRepository {
   /** Flagged → Rejected with isFalsePositive, atomically. "not_flagged" when
    * the finding has moved on, "not_found" when it does not exist. */
   markFalsePositive(findingId: string, changedAt: string): Promise<"ok" | "not_flagged" | "not_found">;
+  /** Sets the developer's note on a finding (null clears it, and its
+   * timestamp). Returns false when the finding does not exist. */
+  setDeveloperNote(findingId: string, note: string | null, updatedAt: string): Promise<boolean>;
   /** The finding's most recent PoC submission, or null. */
   findLatestPoc(findingId: string): Promise<PoCSubmission | null>;
 }

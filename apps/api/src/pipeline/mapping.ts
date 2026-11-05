@@ -38,6 +38,8 @@ export function toFinding(record: FindingRecord, claim: ActiveClaim | null): Fin
     source: record.source,
     title: record.title,
     reportedByAuditorId: record.reportedByAuditorId,
+    developerNote: record.developerNote,
+    developerNoteUpdatedAt: record.developerNoteUpdatedAt,
   };
 }
 

@@ -1,4 +1,10 @@
-import type { Contract, ContractStatus, Finding, FindingSeverity } from "@bbm/shared";
+import {
+  DeveloperNoteInputSchema,
+  type Contract,
+  type ContractStatus,
+  type Finding,
+  type FindingSeverity,
+} from "@bbm/shared";
 import { MOCK_ADDRESSES } from "../../lib/addresses";
 import { ethToWei } from "../../lib/money";
 import { db } from "./store";
@@ -60,6 +66,8 @@ function newFindingShell(contractId: string, pick: (typeof DETECTOR_POOL)[number
     source: "slither",
     title: null,
     reportedByAuditorId: null,
+    developerNote: null,
+    developerNoteUpdatedAt: null,
     challengeWindowExpiresAt: null,
   };
 }
@@ -217,6 +225,24 @@ export function disputeFinding(findingId: string, _developerId: string): Finding
   cancelChallengeWindow(findingId);
   finding.status = "Disputed";
   finding.statusHistory.push({ status: "Disputed", changedAt: timestamp(0) });
+  return finding;
+}
+
+/** PUT /api/findings/:id/note: only the contract's developer may write; a
+ * blank or null note clears it. */
+export function setFindingNote(findingId: string, developerId: string, note: unknown): Finding {
+  const parsed = DeveloperNoteInputSchema.safeParse({ note });
+  if (!parsed.success) {
+    throw new MockApiError(400, parsed.error.issues.map((i) => i.message).join("; "));
+  }
+  const finding = findFindingById(findingId);
+  if (!finding) throw new MockApiError(404, "Not found");
+  const contract = findContractById(finding.contractId);
+  if (contract?.developerAddress.toLowerCase() !== developerId.toLowerCase()) {
+    throw new MockApiError(403, "Only the contract's developer can edit this note");
+  }
+  finding.developerNote = parsed.data.note;
+  finding.developerNoteUpdatedAt = parsed.data.note === null ? null : timestamp(0);
   return finding;
 }
 

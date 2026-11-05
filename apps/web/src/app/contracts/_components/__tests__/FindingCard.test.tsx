@@ -45,6 +45,8 @@ describe("FindingCard", () => {
       source: "slither" as const,
       title: null,
       reportedByAuditorId: null,
+      developerNote: null,
+      developerNoteUpdatedAt: null,
       challengeWindowExpiresAt: null,
     };
 
@@ -97,6 +99,8 @@ describe("FindingCard", () => {
       source: "slither" as const,
       title: null,
       reportedByAuditorId: null,
+      developerNote: null,
+      developerNoteUpdatedAt: null,
     });
     expect(screen.getByText("Slither + AI")).toBeInTheDocument();
     expect(screen.getByText(/AI explanation/)).toBeInTheDocument();
@@ -119,6 +123,8 @@ describe("FindingCard", () => {
       source: "auditor" as const,
       title: "Unprotected sweep()",
       reportedByAuditorId: "auditor_1",
+      developerNote: null,
+      developerNoteUpdatedAt: null,
     });
     expect(screen.getByText("Auditor-reported")).toBeInTheDocument();
     expect(screen.getByText("Unprotected sweep()")).toBeInTheDocument();
@@ -143,6 +149,8 @@ describe("FindingCard", () => {
       source: "slither" as const,
       title: null,
       reportedByAuditorId: null,
+      developerNote: null,
+      developerNoteUpdatedAt: null,
       challengeWindowExpiresAt: null,
     });
     fireEvent.click(screen.getByText("Show raw Slither output"));

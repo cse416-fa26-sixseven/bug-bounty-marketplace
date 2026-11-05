@@ -81,6 +81,8 @@ export function makeFinding(
     source: "slither",
     title: null,
     reportedByAuditorId: null,
+    developerNote: null,
+    developerNoteUpdatedAt: null,
     ...overrides,
   };
 }
@@ -480,6 +482,35 @@ export function describeRepositories(
       expect(
         (await h.pipeline.listUnappliedVerdicts(100)).filter((v) => v.pocId === poc.id),
       ).toEqual([{ pocId: poc.id, findingId: finding.id, verdict: "Passed" }]);
+    });
+
+    it("setDeveloperNote sets, replaces and clears a finding's note", async () => {
+      const { contract } = await insert();
+      const finding = makeFinding(contract.id);
+      await h.seedFinding(finding);
+      const note = async () => {
+        const found = await h.pipeline.findFinding(finding.id, T0);
+        return { note: found?.developerNote, at: found?.developerNoteUpdatedAt };
+      };
+      expect(await note()).toEqual({ note: null, at: null });
+
+      expect(await h.pipeline.setDeveloperNote(finding.id, "Known issue", minutes(1).toISOString())).toBe(true);
+      expect(await note()).toEqual({ note: "Known issue", at: minutes(1).toISOString() });
+
+      await h.pipeline.setDeveloperNote(finding.id, "Fixed in v2", minutes(2).toISOString());
+      expect(await note()).toEqual({ note: "Fixed in v2", at: minutes(2).toISOString() });
+      expect((await h.pipeline.listFindings(contract.id, T0))[0]?.developerNote).toBe("Fixed in v2");
+
+      await h.pipeline.setDeveloperNote(finding.id, null, minutes(3).toISOString());
+      expect(await note()).toEqual({ note: null, at: null });
+      // The note is an annotation: status and history are untouched.
+      expect((await h.pipeline.findFinding(finding.id, T0))?.statusHistory).toEqual(
+        finding.statusHistory,
+      );
+    });
+
+    it("setDeveloperNote on an unknown finding is false", async () => {
+      expect(await h.pipeline.setDeveloperNote("finding_missing", "x", T0.toISOString())).toBe(false);
     });
 
     it("a Slither finding reads back with source slither and no title", async () => {

@@ -239,6 +239,8 @@ export function reportFinding(
     source: "auditor",
     title: report.title,
     reportedByAuditorId: auditorId,
+    developerNote: null,
+    developerNoteUpdatedAt: null,
   };
   db.findings.push(finding);
 

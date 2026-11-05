@@ -72,6 +72,9 @@ def _to_shared(row) -> dict:
         "source": row["source"],
         "title": row["title"],
         "reportedByAuditorId": row["reported_by_auditor_id"],
+        # Migration 0010; a new finding has no developer note.
+        "developerNote": row["developer_note"],
+        "developerNoteUpdatedAt": row["developer_note_updated_at"],
     }
 
 
