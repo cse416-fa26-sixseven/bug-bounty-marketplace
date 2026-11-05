@@ -68,6 +68,9 @@ azure:
   storageAccountName: ""
   # -- Blob endpoint, e.g. https://stbbmstgxxxx.blob.core.windows.net/
   storageBlobEndpoint: ""
+  # -- Blob container holding uploaded sources (api.sourceStorage.blob).
+  # Fixed by infra/terraform/modules/naming (not part of helm_values).
+  storageContainerName: sources
   # -- Storage queue consumed by the analysis worker.
   queueName: analysis-jobs
 
@@ -163,9 +166,9 @@ web:
   topologySpread: true
 
 api:
-  # -- Replica count when api.hpa.enabled is false. Keep at 1 until the Blob
-  # storage adapter lands (uploads live on a per-pod emptyDir, or on the
-  # shared sources claim below, which is still an interim arrangement).
+  # -- Replica count when api.hpa.enabled is false. Keep at 1 unless uploads
+  # go to Blob storage (sourceStorage.blob): on a per-pod emptyDir, or on the
+  # shared sources claim (an interim arrangement), a second replica is unsafe.
   replicaCount: 1
   image:
     repository: bbm/api
@@ -191,11 +194,14 @@ api:
     # Counters are per pod. Forced off behind the Gateway while
     # ingress.trustedProxyCidr is empty.
     enabled: true
-  # -- SOURCE_STORAGE_DIR of the api (uploads) and of the analysis worker,
-  # which reads them. Backed by the shared claim below when it is enabled,
-  # else by a per-pod emptyDir (Compose, kind, CI; the analysis pod then has
-  # no sources volume and SOURCE_STORAGE_DIR unset).
+  # -- Where the api keeps uploaded sources (and auditors' PoCs) and the
+  # analysis worker reads them. In order of precedence: the Blob container
+  # (blob.enabled; staging), the shared claim (persistentVolumeClaim.enabled;
+  # an interim arrangement), else a per-pod emptyDir at `path` (Compose,
+  # kind, CI; the analysis pod then has no sources and its poller stays off).
   sourceStorage:
+    # -- SOURCE_STORAGE_DIR of the api and the worker with the claim or the
+    # emptyDir. Unused with Blob storage.
     path: /data/sources
     # -- sizeLimit of the emptyDir when the claim is disabled.
     sizeLimit: 1Gi
@@ -211,6 +217,16 @@ api:
       accessModes:
         - ReadWriteMany
       size: 5Gi
+    blob:
+      # -- Store uploads as block blobs in the env storage account's
+      # container (azure.storageBlobEndpoint from values-infra +
+      # azure.storageContainerName): SOURCE_STORAGE_BLOB_CONTAINER_URL on the
+      # api (writes) and the analysis worker (reads), each with its workload
+      # identity (Storage Blob Data Contributor / Reader on the container,
+      # granted by the terraform data stack; shared keys are disabled). Wins
+      # over the claim, which is then neither rendered nor mounted. The api
+      # is stateless with it and may run several replicas.
+      enabled: false
   resources:
     requests:
       cpu: 100m
@@ -261,9 +277,9 @@ analysis:
   # -- Deploy the Python analysis worker (port 8000, /health): Slither + LLM
   # on uploaded contracts, and (with sandbox.enabled) the auditors' PoCs as
   # Kubernetes Jobs. It polls the Postgres `jobs` table (DATABASE_URL from
-  # the same Secret as the api) and reads uploads from the shared sources
-  # claim (api.sourceStorage.persistentVolumeClaim). true on
-  # test/staging/prod.
+  # the same Secret as the api) and reads uploads from Blob storage
+  # (api.sourceStorage.blob) or the shared sources claim
+  # (api.sourceStorage.persistentVolumeClaim). true on test/staging/prod.
   enabled: false
   replicaCount: 1
   image:

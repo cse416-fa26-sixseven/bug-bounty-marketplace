@@ -5,9 +5,11 @@ Components:
   web       {{ include "bbm.fullname" . }}-web:{{ .Values.web.port }}   (/healthz)
   api       {{ include "bbm.fullname" . }}-api:{{ .Values.api.port }}   (/health)
 {{- if .Values.analysis.enabled }}
-  analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}{{ if not (include "bbm.sourcesClaim" .) }}; no shared sources claim, so it serves /analyze only{{ end }}
+  analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}{{ if not (or (include "bbm.sourcesClaim" .) (include "bbm.blobSources" .)) }}; no shared sources, so it serves /analyze only{{ end }}
 {{- end }}
-{{- if include "bbm.sourcesClaim" . }}
+{{- if include "bbm.blobSources" . }}
+  sources   Blob container {{ include "bbm.sourceContainerUrl" . }} (api writes, analysis reads; workload identity)
+{{- else if include "bbm.sourcesClaim" . }}
   sources   PVC {{ include "bbm.sourcesClaimName" . }} at {{ .Values.api.sourceStorage.path }} (api rw, analysis ro)
 {{- end }}
 {{- if .Values.postgres.inCluster.enabled }}

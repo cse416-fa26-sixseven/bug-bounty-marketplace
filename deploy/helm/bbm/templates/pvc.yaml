@@ -5,11 +5,12 @@ them, so on AKS both mount one ReadWriteMany Azure Files share
 (storageClassName azurefile-csi, dynamically provisioned: an ephemeral test
 namespace gets its own share and loses it with the namespace). With
 existingClaim set, a pre-created claim is mounted instead and nothing is
-rendered here. Disabled (Compose, kind, CI): the api keeps a per-pod emptyDir
-and the analysis pod has no sources volume.
+rendered here. Disabled (Compose, kind, CI), or superseded by Blob storage
+(api.sourceStorage.blob): the api keeps a per-pod emptyDir or writes to the
+container, and the analysis pod has no sources volume.
 */ -}}
 {{- $pvc := .Values.api.sourceStorage.persistentVolumeClaim -}}
-{{- if and $pvc.enabled (not $pvc.existingClaim) }}
+{{- if and (include "bbm.sourcesClaim" .) (not $pvc.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

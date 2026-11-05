@@ -104,6 +104,10 @@
         },
         "queueName": {
           "type": "string"
+        },
+        "storageContainerName": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -519,6 +523,19 @@
                 "size": {
                   "type": "string",
                   "minLength": 1
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
+            },
+            "blob": {
+              "type": "object",
+              "description": "Uploads in the env storage account's Blob container (api writes, analysis reads, workload identity); wins over the claim.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
                 }
               },
               "required": [

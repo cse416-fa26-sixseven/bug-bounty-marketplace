@@ -41,11 +41,11 @@ web:
       memory: 512Mi
 
 api:
-  # !!! IMPORTANT: the api MUST stay at exactly 1 replica until the Blob
-  # !!! storage adapter lands. Uploaded sources are written to the shared
-  # !!! Azure Files claim below (SOURCE_STORAGE_DIR), an interim way to hand
-  # !!! them to the analysis worker that is not validated for concurrent
-  # !!! writers. Once uploads go to Blob storage, raise to minReplicas 2 /
+  # !!! IMPORTANT: the api MUST stay at exactly 1 replica while uploads are
+  # !!! on the shared Azure Files claim below (SOURCE_STORAGE_DIR), an
+  # !!! interim way to hand them to the analysis worker that is not
+  # !!! validated for concurrent writers. Once prod follows staging onto
+  # !!! Blob storage (api.sourceStorage.blob), raise to minReplicas 2 /
   # !!! maxReplicas 5 and enable the PDB.
   hpa:
     enabled: true
