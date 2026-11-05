@@ -25,7 +25,8 @@ import {DisputeResolution} from "../src/DisputeResolution.sol";
 ///   ARBITER               dispute arbiter. Defaults to the broadcaster.
 ///   CHALLENGE_WINDOW      seconds before a verified finding can be paid. Default 3 days.
 ///   REFUND_DELAY          seconds after the deadline before a refund. Default 3 hours.
-///   WRITE_DEPLOYMENTS     write deployments/<chainid>.json after a real
+///   WRITE_DEPLOYMENTS     write deployments/<chainid>.json (addresses, settings
+///                         and deployBlock) after a real
 ///                         broadcast (`--broadcast`). Default true. Dry runs
 ///                         and tests never write.
 contract Deploy is Script {
@@ -96,6 +97,9 @@ contract Deploy is Script {
     function writeDeployment(Config memory cfg, Deployment memory d) internal {
         string memory key = "deployment";
         vm.serializeUint(key, "chainId", block.chainid);
+        // The fork's head while the script ran: the deploy transactions land at
+        // or after it, so the API's event indexer can start here (testnets).
+        vm.serializeUint(key, "deployBlock", block.number);
         vm.serializeAddress(key, "operator", cfg.operator);
         vm.serializeAddress(key, "arbiter", cfg.arbiter);
         vm.serializeUint(key, "challengeWindow", cfg.challengeWindow);

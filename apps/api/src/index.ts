@@ -146,6 +146,7 @@ async function start(): Promise<void> {
     const db = pool;
     indexer = startEventIndexer({
       config: chainConfig,
+      startBlock: chainConfig.startBlock,
       repository: new PgIndexerRepository(db),
       findingStatus: new PgChainActionStore(db, {
         challengeWindowSeconds: chainConfig.challengeWindowSeconds,

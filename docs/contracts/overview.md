@@ -62,11 +62,16 @@ After a broadcast, `deployments/<chainid>.json` looks like:
   "bountyEscrow": "0x...",
   "chainId": 31337,
   "challengeWindow": 259200,
+  "deployBlock": 0,
   "disputeResolution": "0x...",
   "operator": "0x...",
   "refundDelay": 10800
 }
 ```
+
+`deployBlock` is the chain head when the script ran; the deploy transactions
+land at or after it. The API starts its event indexer there (see
+[Sepolia](sepolia.md)), so it doesn't scan a testnet from block 0.
 
 The file is written while forge executes the script, before the transactions
 are sent. If the broadcast itself fails, forge exits non-zero and the file may

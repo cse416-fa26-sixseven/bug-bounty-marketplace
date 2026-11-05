@@ -121,6 +121,25 @@ describe("loadChainConfig", () => {
     chainId: 31337,
   };
 
+  it("reads a Sepolia deployments file and starts the indexer at its deploy block", () => {
+    const env = { ...FILE_ENV, CHAIN_ID: "11155111", CHAIN_RPC_URL: "https://rpc.invalid" };
+    const file = JSON.stringify({ ...GOOD_FILE, chainId: 11155111, deployBlock: 9_100_000 });
+    expect(loadChainConfig(env, () => file)).toMatchObject({ chainId: 11155111, startBlock: 9_100_000n });
+    expect(loadChainConfig({ ...env, INDEXER_START_BLOCK: "9200000" }, () => file)?.startBlock).toBe(9_200_000n);
+  });
+
+  it("leaves the start block unset without deployBlock or INDEXER_START_BLOCK", () => {
+    expect(loadChainConfig(FILE_ENV, () => JSON.stringify(GOOD_FILE))?.startBlock).toBeUndefined();
+    expect(loadChainConfig({ ...VALID_ENV, INDEXER_START_BLOCK: "42" })?.startBlock).toBe(42n);
+  });
+
+  it("rejects a malformed start block", () => {
+    expect(() => loadChainConfig({ ...VALID_ENV, INDEXER_START_BLOCK: "-1" })).toThrow(/INDEXER_START_BLOCK/);
+    expect(() =>
+      loadChainConfig(FILE_ENV, () => JSON.stringify({ ...GOOD_FILE, deployBlock: "x" })),
+    ).toThrow(/deployBlock/);
+  });
+
   it("rejects a deployments file that is not JSON", () => {
     expect(() => loadChainConfig(FILE_ENV, () => "not json")).toThrow(/not valid JSON/);
   });
