@@ -54,6 +54,12 @@ export function postStake(input: { auditorId: string; amount: string }): Promise
   return postJson("/api/auditor/stake", input, AuditorProfileSchema);
 }
 
+/** POST /api/auditor/stake/withdraw - takes stake back (mock mode only; with
+ * a chain the auditor calls AuditorStaking.withdraw from their wallet). */
+export function withdrawStake(input: { auditorId: string; amount: string }): Promise<AuditorProfile> {
+  return postJson("/api/auditor/stake/withdraw", input, AuditorProfileSchema);
+}
+
 export interface SubmitPocInput {
   findingId: string;
   auditorId: string;

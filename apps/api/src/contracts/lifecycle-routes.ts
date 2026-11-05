@@ -18,11 +18,8 @@ export interface ContractLifecycleDeps {
   auth: Auth;
   now: () => Date;
   /** Releases an auditor's claim lock on a closed bounty. */
-  chainActions?: Pick<ChainActions, "releaseExpiredLocks">;
+  chainActions?: Pick<ChainActions, "releaseClaimLock">;
 }
-
-/** Later than any claim expiry: lets the expiry sweep release a lock now. */
-const END_OF_TIME = new Date(8.64e15);
 
 /**
  * Developer actions whose transaction the developer signs in their own wallet
@@ -86,9 +83,11 @@ export function registerContractLifecycleRoutes(
       }
       // The bounty is closed, so an auditor's claim on it is moot: release the
       // stake lock first, or it would stay locked once the claim is cleared.
+      // Even a finding still awaiting its verdict cannot be verified or paid
+      // any more, so its lock goes too (the expiry sweep would keep it).
       if (deps.chainActions) {
         try {
-          await deps.chainActions.releaseExpiredLocks(END_OF_TIME, contract.id);
+          await deps.chainActions.releaseClaimLock(contract.id);
         } catch (err) {
           request.log.error({ err, contractId: contract.id }, "releasing the claim lock failed");
           return reply

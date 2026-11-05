@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { auditorApi, developerApi } from "@/lib/api";
 import { StakeGate } from "./StakeGate";
+import { StakeWithdraw } from "./StakeWithdraw";
 import { weiToEth } from "@/lib/money";
 import { useChainCalls } from "@/lib/chain/use-chain";
 
@@ -89,6 +90,17 @@ export function ProfileSummary({ auditorId }: { auditorId: string }) {
             )}
           </div>
         </div>
+        {profile.stake !== "0" ? (
+          <div className="mt-4 border-t border-slate-800 pt-4">
+            <StakeWithdraw
+              profile={profile}
+              auditorId={auditorId}
+              onWithdrawn={() =>
+                void queryClient.invalidateQueries({ queryKey: ["auditor-profile", auditorId] })
+              }
+            />
+          </div>
+        ) : null}
       </section>
       <StakeGate
         profile={profile}

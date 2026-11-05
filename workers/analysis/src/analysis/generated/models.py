@@ -41,6 +41,7 @@ class AuditorProfile(BaseModel):
     reputation: float
     claimedContractIds: list[ClaimedContractId]
     pendingPayout: Annotated[str | None, Field(pattern="^(0|[1-9]\\d{0,77})$")] = None
+    activeSubmissions: Annotated[int | None, Field(ge=0, le=9007199254740991)] = None
 
 
 class Bounty(BaseModel):

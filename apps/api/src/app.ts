@@ -63,7 +63,7 @@ export interface AppOptions {
   /** DisputeResolution reads for disputes and rulings (chain mode). */
   disputeResolution?: Pick<DisputeResolutionPort, "getDispute">;
   /** AuditorStaking reads for the auditor profile (chain mode). */
-  auditorStaking?: Pick<AuditorStakingPort, "stakeOf" | "reputation">;
+  auditorStaking?: Pick<AuditorStakingPort, "stakeOf" | "reputation" | "activeSubmissions">;
   /** Defaults to an in-memory store. */
   disputes?: DisputeRepository;
   /** Guarded finding status writes (the chain action store). Defaults to an
