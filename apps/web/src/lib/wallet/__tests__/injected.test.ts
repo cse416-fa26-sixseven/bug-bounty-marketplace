@@ -166,6 +166,16 @@ describe("restoreInjected", () => {
     auth.session = SEPOLIA.arbiter;
     await restoreInjected(SEPOLIA);
     expect(useInjectedStore.getState()).toMatchObject({ address: null, error: null });
+    // Pages must not keep reading as the other account.
+    expect(auth.session).toBeNull();
+  });
+
+  it("signs out a leftover session when the wallet shares no account", async () => {
+    wallet({ chainId: SEPOLIA.chainId });
+    const auth = fakeAuth();
+    auth.session = SEPOLIA.arbiter;
+    await restoreInjected(SEPOLIA);
+    expect(auth.session).toBeNull();
   });
 
   it("reports a wallet on the wrong network", async () => {
@@ -188,9 +198,22 @@ describe("restoreInjected", () => {
 });
 
 describe("watchInjected", () => {
+  it("signs out when the wallet disconnects", async () => {
+    const fake = wallet({ chainId: SEPOLIA.chainId });
+    const auth = fakeAuth();
+    await connectInjected(SEPOLIA);
+    const onIdentityChange = vi.fn();
+    const stop = watchInjected(SEPOLIA, onIdentityChange);
+    fake.emit("accountsChanged", []);
+    await vi.waitFor(() => expect(onIdentityChange).toHaveBeenCalledOnce());
+    expect(auth.session).toBeNull();
+    expect(useInjectedStore.getState()).toMatchObject({ address: null, error: null });
+    stop();
+  });
+
   it("follows chainChanged and drops the connection on accountsChanged", async () => {
     const fake = wallet({ chainId: SEPOLIA.chainId });
-    fakeAuth();
+    const auth = fakeAuth();
     await connectInjected(SEPOLIA);
     const onIdentityChange = vi.fn();
     const stop = watchInjected(SEPOLIA, onIdentityChange);
@@ -202,7 +225,9 @@ describe("watchInjected", () => {
 
     fake.emit("accountsChanged", [SEPOLIA.arbiter.toLowerCase()]);
     expect(useInjectedStore.getState()).toMatchObject({ address: null, error: ACCOUNT_CHANGED });
-    expect(onIdentityChange).toHaveBeenCalledOnce();
+    // The old account's cookie is cleared before pages refetch.
+    await vi.waitFor(() => expect(onIdentityChange).toHaveBeenCalledOnce());
+    expect(auth.session).toBeNull();
 
     stop();
     fake.emit("chainChanged", "0x1");
@@ -250,6 +275,15 @@ describe("injectedTxClient", () => {
       encodeFunctionData({ abi: auditorStakingAbi as Abi, functionName: "withdraw", args: [50000000000000000n] }),
     );
     expect(BigInt(tx.value ?? "0x0")).toBe(0n);
+  });
+
+  it("refuses to read through a wallet on another chain", async () => {
+    const fake = wallet({ chainId: 1 });
+    const client = injectedTxClient(SEPOLIA, null, fake.provider);
+    await expect(chainCalls(SEPOLIA, client).isFunded("contract_1")).rejects.toThrow(
+      wrongNetwork(SEPOLIA.chainId),
+    );
+    expect(fake.state.calls.map((c) => c.method)).not.toContain("eth_call");
   });
 
   it("explains a rejected transaction and a missing connection", async () => {

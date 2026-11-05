@@ -169,16 +169,21 @@ export async function restoreInjected(info: ConfiguredChainInfo): Promise<void> 
   if (!provider) return;
   const [first] = await provider.request({ method: "eth_accounts" });
   const chainId = Number(await provider.request({ method: "eth_chainId" }));
-  const session = first ? await sessionAddress() : null;
+  const session = await sessionAddress();
   // A Connect click while this was waiting wins: keep what it set.
   const current = useInjectedStore.getState();
   if (current.connecting || current.address) return;
   const address = first && session && session.toLowerCase() === first.toLowerCase() ? getAddress(first) : null;
+  // A session for an account the wallet isn't sharing would keep pages
+  // reading as that account: clear it.
+  if (session && !address) await signOut();
   useInjectedStore.setState({ address, chainId, error: chainId === info.chainId ? null : wrongNetwork(info.chainId) });
 }
 
-/** Follows accountsChanged and chainChanged. A new account must connect (sign
- * in) again, since the API session is the old one's. Returns an unsubscribe. */
+/** Follows accountsChanged and chainChanged. On an account change or a
+ * disconnect it signs out (the API session is the old account's), then
+ * calls onIdentityChange so pages refetch; a new account must connect (sign
+ * in) again. Returns an unsubscribe. */
 export function watchInjected(info: ConfiguredChainInfo, onIdentityChange: () => void): () => void {
   const provider = injectedProvider();
   if (!provider) return () => undefined;
@@ -187,7 +192,9 @@ export function watchInjected(info: ConfiguredChainInfo, onIdentityChange: () =>
     const { address } = useInjectedStore.getState();
     if (next === address) return;
     useInjectedStore.setState({ address: null, error: next && address ? ACCOUNT_CHANGED : null });
-    onIdentityChange();
+    void signOut()
+      .catch((err: unknown) => console.error("sign-out failed", err))
+      .finally(onIdentityChange);
   };
   const onChain = (hex: string) => {
     const chainId = Number(hex);
@@ -228,8 +235,13 @@ export function injectedTxClient(
   const chain = chainFor(info);
   const transport = info.rpcUrl ? http(info.rpcUrl) : provider ? custom(provider) : null;
   const publicClient = transport ? createPublicClient({ chain, transport }) : null;
-  const reader = () => {
+  // Reads through the wallet follow its current chain, so check it first
+  // (without prompting a switch); the API's RPC URL is always the API's chain.
+  const reader = async () => {
     if (!publicClient) throw new ChainTxError(NO_WALLET);
+    if (!info.rpcUrl && provider && Number(await provider.request({ method: "eth_chainId" })) !== info.chainId) {
+      throw new ChainTxError(wrongNetwork(info.chainId));
+    }
     return publicClient;
   };
   const sender = () => {
@@ -241,7 +253,7 @@ export function injectedTxClient(
     async simulate(request) {
       const { account } = sender();
       try {
-        await reader().simulateContract({ ...request, account } as never);
+        await (await reader()).simulateContract({ ...request, account } as never);
       } catch (err) {
         throw new ChainTxError(reasonOf(err));
       }
@@ -257,11 +269,11 @@ export function injectedTxClient(
       }
     },
     async waitForSuccess(hash) {
-      const receipt = await reader().waitForTransactionReceipt({ hash });
+      const receipt = await (await reader()).waitForTransactionReceipt({ hash });
       return receipt.status === "success";
     },
     async read(request) {
-      return reader().readContract(request as never);
+      return (await reader()).readContract(request as never);
     },
   };
 }

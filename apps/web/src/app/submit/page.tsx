@@ -7,9 +7,10 @@ import { useMutation } from "@tanstack/react-query";
 import { CONTRACT_SOURCE_MAX_BYTES, type Contract } from "@bbm/shared";
 import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
-import { ethToWei } from "@/lib/money";
+import { ethToWei, weiToEth } from "@/lib/money";
+import { networkName } from "@/lib/chain/networks";
 import { useChainCalls } from "@/lib/chain/use-chain";
-import { isOnChain, useChainInfo } from "@/lib/chain/config";
+import { isInjectedChain, isLocalChain, isOnChain, useChainInfo } from "@/lib/chain/config";
 
 function validateFile(file: File | null): string | null {
   if (!file) return "Choose a .sol file to submit.";
@@ -29,6 +30,9 @@ export default function SubmitPage() {
   const chain = useChainCalls();
   const chainInfo = useChainInfo();
   const windowSeconds = isOnChain(chainInfo) ? chainInfo.challengeWindowSeconds : null;
+  const stakeEth = isOnChain(chainInfo) ? weiToEth(chainInfo.requiredStakeWei) : null;
+  const local = isLocalChain(chainInfo);
+  const testnet = isInjectedChain(chainInfo) ? networkName(chainInfo.chainId) : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -262,8 +266,8 @@ export default function SubmitPage() {
           <p>
             <strong className="text-emerald-300">02 · Independent review</strong>
             <br />
-            {chain
-              ? "An auditor stakes 0.1 ETH, claims the contract and submits a Foundry proof of concept."
+            {stakeEth !== null
+              ? `An auditor stakes ${stakeEth} ETH, claims the contract and submits a Foundry proof of concept.`
               : "An auditor claims the contract and submits a Foundry proof of concept."}
           </p>
           <p>
@@ -276,9 +280,11 @@ export default function SubmitPage() {
           <hr />
           <h2>Demo bounty</h2>
           <p>
-            {chain
+            {local
               ? "Your bounty is locked in the BountyEscrow contract on a local Anvil chain, using a dev account. No real funds are involved."
-              : "Funds and wallet actions are simulated. No real tokens are required. This session resets when you reload the page."}
+              : testnet
+                ? `Your bounty is locked in the BountyEscrow contract on the ${testnet} testnet, paid from your own wallet. Use test ETH only.`
+                : "Funds and wallet actions are simulated. No real tokens are required. This session resets when you reload the page."}
           </p>
         </aside>
       </div>

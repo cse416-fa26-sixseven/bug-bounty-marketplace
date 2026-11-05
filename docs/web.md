@@ -39,10 +39,12 @@ change:
 on that chain and the API session is still this account's, signing in again
 if not. It is then simulated (a revert shows its reason and nothing is sent),
 sent with `eth_sendTransaction` and awaited. Reads use the API's browser RPC
-URL when it publishes one, else the wallet. On reload, an account the wallet
-already shares counts as connected without a prompt while the session cookie
-is still its own. `accountsChanged` drops the connection, so the new account
-must connect (sign in) again. `chainChanged` to another chain shows "Wrong
+URL when it publishes one. Otherwise they go through the wallet, and fail
+with "Wrong network" while it is on another chain. On reload, an account the
+wallet already shares counts as connected without a prompt while the session
+cookie is still its own; a session for any other account is signed out.
+`accountsChanged` (another account, or none) signs out and refetches, so the
+new account must connect (sign in) again. `chainChanged` to another chain shows "Wrong
 network". A missing wallet, a rejected prompt (4001) or a wallet left on the
 wrong chain shows a readable message next to the wallet button.
 
