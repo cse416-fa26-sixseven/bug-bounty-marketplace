@@ -4,7 +4,7 @@ import type { FindingStatus, SandboxStatus } from "@bbm/shared";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemoryPipelineRepository, MemoryStore } from "../pipeline/memory-repository.js";
 import { makeContract, makeFinding } from "../testing/repository-suite.js";
-import { createChainActions, type ChainActions } from "./actions.js";
+import { VerdictDeferredError, createChainActions, type ChainActions } from "./actions.js";
 import type { BountyEscrowPort, OnchainBounty } from "./bounty-escrow.js";
 import { MemoryChainActionStore } from "./memory-action-store.js";
 import { runVerdictsOnce } from "./verdict-loop.js";
@@ -63,7 +63,7 @@ describe("runVerdictsOnce", () => {
 
     const summary = await runVerdictsOnce({ pipeline, chainActions });
 
-    expect(summary).toEqual({ applied: 1, failed: 0 });
+    expect(summary).toEqual({ applied: 1, failed: 0, deferred: 0 });
     expect(chainActions.applyVerdict).toHaveBeenCalledWith(findingId, "Passed");
     expect(await pipeline.listUnappliedVerdicts(10)).toEqual([]);
     expect(pocId).toBeDefined();
@@ -80,11 +80,33 @@ describe("runVerdictsOnce", () => {
 
     const summary = await runVerdictsOnce({ pipeline, chainActions, onError: () => {} });
 
-    expect(summary).toEqual({ applied: 1, failed: 1 });
+    expect(summary).toEqual({ applied: 1, failed: 1, deferred: 0 });
     expect(await pipeline.listUnappliedVerdicts(10)).toEqual([
       { pocId: first.pocId, findingId: first.findingId, verdict: "Failed" },
     ]);
     expect(second.pocId).toBeDefined();
+  });
+
+  it("leaves a deferred verdict unmarked without reporting an error, and applies it on a later pass", async () => {
+    const { pipeline, seed } = setup();
+    const { pocId, findingId } = await seed("Passed");
+    const chainActions = fakeActions();
+    chainActions.applyVerdict.mockImplementationOnce(async () => {
+      throw new VerdictDeferredError(findingId, `0x${"cd".repeat(32)}`);
+    });
+    const onError = vi.fn();
+
+    const first = await runVerdictsOnce({ pipeline, chainActions, onError });
+
+    expect(first).toEqual({ applied: 0, failed: 0, deferred: 1 });
+    expect(onError).not.toHaveBeenCalled();
+    expect(await pipeline.listUnappliedVerdicts(10)).toEqual([{ pocId, findingId, verdict: "Passed" }]);
+
+    const second = await runVerdictsOnce({ pipeline, chainActions, onError });
+
+    expect(second).toEqual({ applied: 1, failed: 0, deferred: 0 });
+    expect(onError).not.toHaveBeenCalled();
+    expect(await pipeline.listUnappliedVerdicts(10)).toEqual([]);
   });
 
   it("does not list Pending PoCs or findings that already moved", async () => {
@@ -141,8 +163,8 @@ describe("runVerdictsOnce", () => {
     const second = await runVerdictsOnce({ pipeline, chainActions, onError: () => {} });
 
     // The finding already moved, so nothing is left to apply: no second send.
-    expect(first).toEqual({ applied: 0, failed: 1 });
-    expect(second).toEqual({ applied: 0, failed: 0 });
+    expect(first).toEqual({ applied: 0, failed: 1, deferred: 0 });
+    expect(second).toEqual({ applied: 0, failed: 0, deferred: 0 });
     expect(bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
     expect(store.findings.get(findingId)?.status).toBe("Verified");
     expect(flaky).toHaveBeenCalledTimes(1);
@@ -194,8 +216,8 @@ describe("runVerdictsOnce", () => {
     const first = await runVerdictsOnce({ pipeline, chainActions, onError: () => {} });
     const second = await runVerdictsOnce({ pipeline, chainActions, onError: () => {} });
 
-    expect(first).toEqual({ applied: 0, failed: 1 });
-    expect(second).toEqual({ applied: 1, failed: 0 });
+    expect(first).toEqual({ applied: 0, failed: 1, deferred: 0 });
+    expect(second).toEqual({ applied: 1, failed: 0, deferred: 0 });
     expect(bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
     expect(bountyEscrow.recordSubmission).toHaveBeenCalledTimes(1);
     expect(store.findings.get(findingId)?.status).toBe("Verified");
@@ -237,7 +259,7 @@ describe("runVerdictsOnce racing the indexer", () => {
     } satisfies BountyEscrowPort;
     const chainActions = createChainActions({ store: chainStore, bountyEscrow, claimLockEnabled: false, onError: () => {} });
 
-    expect(await runVerdictsOnce({ pipeline, chainActions, onError: () => {} })).toEqual({ applied: 1, failed: 0 });
+    expect(await runVerdictsOnce({ pipeline, chainActions, onError: () => {} })).toEqual({ applied: 1, failed: 0, deferred: 0 });
     expect(store.findings.get(findingId)?.statusHistory.filter((h) => h.status === "Verified")).toHaveLength(1);
   });
 });

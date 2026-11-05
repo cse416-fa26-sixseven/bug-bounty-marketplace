@@ -102,6 +102,10 @@ describeRepositories(
           ],
         );
       },
+      setFindingStatus: async (findingId, status) => {
+        const result = await db.query("UPDATE findings SET status = $2 WHERE id = $1", [findingId, status]);
+        if (result.rowCount !== 1) throw new Error(`no finding ${findingId}`);
+      },
       setJobStatus: async (jobId: string, status: JobStatus, lastError?: string) => {
         await db.query("UPDATE jobs SET status = $2, last_error = $3 WHERE id = $1", [
           jobId,

@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { FindingSchema, type Bounty, type Contract, type PoCSubmission } from "@bbm/shared";
+import {
+  FindingSchema,
+  type Bounty,
+  type Contract,
+  type FindingStatus,
+  type PoCSubmission,
+} from "@bbm/shared";
 import type { ContractRepository } from "../contracts/repository.js";
 import type {
   FindingRecord,
@@ -16,6 +22,8 @@ export interface RepositoryHarness {
   contracts: ContractRepository;
   pipeline: PipelineRepository;
   seedFinding(record: FindingRecord): Promise<void>;
+  /** Moves a finding's status directly, as the chain actions and indexer do. */
+  setFindingStatus(findingId: string, status: FindingStatus): Promise<void>;
   setJobStatus(jobId: string, status: JobStatus, lastError?: string): Promise<void>;
   /** Queues another analysis job for the contract, as a re-run would. */
   addAnalysisJob(job: { id: string; subjectId: string; createdAt: string; status: JobStatus }): Promise<void>;
@@ -502,6 +510,48 @@ export function describeRepositories(
       await h.pipeline.markVerdictApplied(poc.id, minutes(2));
       await h.pipeline.markVerdictApplied(poc.id, minutes(3));
       expect(await mine()).toEqual([]);
+    });
+
+    it("leaves out Passed verdicts while another finding on the contract is Verified or Disputed", async () => {
+      // Submitted before every other test's PoC, so they head the batch.
+      const early = (seconds: number) => new Date(Date.UTC(2000, 0, 1) + seconds * 1000).toISOString();
+      const blockedContract = await insert();
+      const verified = makeFinding(blockedContract.contract.id, { status: "Verified" });
+      await h.seedFinding(verified);
+      await h.contracts.claimContract(blockedContract.contract.id, "auditor_1", minutes(10), T0);
+      async function submit(contractId: string, auditorId: string, at: string, verdict: "Passed" | "Failed") {
+        const finding = makeAuditorFinding(contractId, auditorId);
+        const { poc, job } = makePoc(finding.id);
+        const submitted = { ...poc, auditorId, submittedAt: at };
+        expect(
+          await h.pipeline.submitAuditorFinding({ finding, poc: submitted, job, now: minutes(1).toISOString() }),
+        ).toBe("ok");
+        await h.pipeline.recordVerdict(poc.id, verdict);
+        return { pocId: poc.id, findingId: finding.id, verdict };
+      }
+      const blocked = [];
+      for (let i = 0; i < 25; i += 1) {
+        blocked.push(await submit(blockedContract.contract.id, "auditor_1", early(i), "Passed"));
+      }
+      const failed = await submit(blockedContract.contract.id, "auditor_1", early(30), "Failed");
+      const otherContract = await insert();
+      await h.contracts.claimContract(otherContract.contract.id, "auditor_2", minutes(10), T0);
+      const applicable = await submit(otherContract.contract.id, "auditor_2", early(40), "Passed");
+      const ours = new Set([...blocked, failed, applicable].map((v) => v.pocId));
+      const listed = async (limit: number) =>
+        (await h.pipeline.listUnappliedVerdicts(limit)).filter((v) => ours.has(v.pocId));
+
+      // 25 blocked verdicts do not hide the newer applicable ones; a Failed
+      // verdict on the blocked contract is still applied.
+      expect(await listed(20)).toEqual([failed, applicable]);
+      await h.setFindingStatus(verified.id, "Disputed");
+      expect(await listed(20)).toEqual([failed, applicable]);
+
+      // Settled either way, the blocked verdicts are listed again.
+      await h.setFindingStatus(verified.id, "Rejected");
+      expect(await listed(100)).toEqual([...blocked, failed, applicable]);
+      await h.setFindingStatus(verified.id, "Paid");
+      expect(await listed(100)).toEqual([...blocked, failed, applicable]);
     });
 
     it("a second submitPoc on the same finding is not_flagged and writes nothing", async () => {

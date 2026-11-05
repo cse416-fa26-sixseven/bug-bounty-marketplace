@@ -19,6 +19,11 @@ describeRepositories(
       seedFinding: async (record) => {
         store.findings.set(record.id, structuredClone(record));
       },
+      setFindingStatus: async (findingId, status) => {
+        const record = store.findings.get(findingId);
+        if (!record) throw new Error(`no finding ${findingId}`);
+        record.status = status;
+      },
       setJobStatus: async (jobId, status, lastError) => {
         const job = store.jobs.get(jobId);
         if (!job) throw new Error(`no job ${jobId}`);

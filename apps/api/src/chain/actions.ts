@@ -1,13 +1,37 @@
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 import type { FindingStatus } from "@bbm/shared";
 import { PENDING_FINDING_STATUSES, type ChainActionStore, type PayoutDue } from "./action-store.js";
 import type { AuditorStakingPort } from "./auditor-staking.js";
-import { BOUNTY_STATE_PAID, type BountyEscrowPort } from "./bounty-escrow.js";
+import {
+  BOUNTY_STATE_CLOSED,
+  BOUNTY_STATE_PAID,
+  type BountyEscrowPort,
+  type OnchainBounty,
+} from "./bounty-escrow.js";
 import { onchainId } from "./ids.js";
 import { FindingNotFoundError, applyFindingTransition } from "../status/finding-writer.js";
 import { transitionFinding } from "../status/transitions.js";
 
 export type Verdict = "Passed" | "Failed";
+
+const ZERO_FINDING: Hex = `0x${"0".repeat(64)}`;
+
+/**
+ * A Passed verdict that cannot be applied yet: the bounty is open but another
+ * finding is verified on it, and BountyEscrow pays only the first verified
+ * finding (R10). Nothing was sent and the finding stays Submitted. It is not a
+ * failure: the verdict is retried later, and applies if that verification is
+ * cleared (a lost dispute) or is rejected once the bounty is paid.
+ */
+export class VerdictDeferredError extends Error {
+  constructor(
+    readonly findingId: string,
+    readonly verifiedFinding: Hex,
+  ) {
+    super(`Verdict for finding ${findingId} deferred: bounty already verified finding ${verifiedFinding}`);
+    this.name = "VerdictDeferredError";
+  }
+}
 
 export interface ChainActionsDeps {
   store: ChainActionStore;
@@ -56,7 +80,11 @@ export interface ChainActions {
   /**
    * Applies a sandbox verdict to a Submitted finding.
    * Passed: records the submission (once per contract) and the verification
-   * on BountyEscrow, then moves the finding to Verified.
+   * on BountyEscrow, then moves the finding to Verified. BountyEscrow takes one
+   * verified finding per bounty, so when it already holds another: if the
+   * bounty is settled (Paid or Closed) the finding can never be paid and is
+   * handled as Failed (returns Rejected); if it is still open, nothing is sent
+   * and VerdictDeferredError is thrown, so the verdict is retried later.
    * Failed: unlocks the auditor's claim lock, then moves the finding to Rejected.
    * Chain steps run first. If one throws, the finding status is unchanged and
    * the call can be retried.
@@ -245,6 +273,20 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
     }
   }
 
+  /** What a Passed verdict can do on this bounty: 'record' when the bounty
+   * takes (or already holds) this finding's verification, 'settled' when it
+   * is Paid or Closed without it, 'deferred' when it is open with another
+   * finding verified. */
+  function passedOutcome(bounty: OnchainBounty, finding: Hex): "record" | "settled" | "deferred" {
+    const verified = bounty.verifiedFinding.toLowerCase();
+    if (verified === finding.toLowerCase()) return "record";
+    // None (not funded on-chain) is not settled: it may still be funded, and
+    // the claim queue lists funded contracts only. It goes on as before.
+    if (bounty.state === BOUNTY_STATE_PAID || bounty.state === BOUNTY_STATE_CLOSED) return "settled";
+    if (verified !== ZERO_FINDING) return "deferred";
+    return "record";
+  }
+
   /** Sends recordSubmission only while the bounty counts no submission. */
   async function ensureSubmissionRecorded(port: BountyEscrowPort, contractId: string): Promise<void> {
     const key = onchainId(contractId);
@@ -368,6 +410,16 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
 
       if (verdict === "Passed") {
         if (bountyEscrow && !ref.verificationRecorded) {
+          // Read before any send: recordSubmission and recordVerification
+          // revert once the bounty is settled or holds another verification.
+          const bounty = await bountyEscrow.readBounty(onchainId(ref.contractId));
+          const outcome = passedOutcome(bounty, onchainId(findingId));
+          if (outcome === "deferred") throw new VerdictDeferredError(findingId, bounty.verifiedFinding);
+          if (outcome === "settled") {
+            // Never verifiable or payable: settled as a Failed verdict is.
+            await unlock(ref.contractId, { auditorId: ref.auditorId, settling: findingId });
+            return applyFindingTransition(store, findingId, "Rejected", now().toISOString());
+          }
           if (!(await store.isSubmissionRecorded(ref.contractId))) {
             await ensureSubmissionRecorded(bountyEscrow, ref.contractId);
             await store.markSubmissionRecorded(ref.contractId, now());

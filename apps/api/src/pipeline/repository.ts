@@ -89,7 +89,10 @@ export interface PipelineRepository {
   /** Stores a sandbox verdict on a submitted PoC. Throws if the PoC is unknown. */
   recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void>;
   /** Decided PoCs (Passed/Failed) whose verdict the API has not applied yet
-   * and whose finding is still Submitted, oldest first. */
+   * and whose finding is still Submitted, oldest first. Leaves out a Passed
+   * verdict while another finding on its contract is Verified or Disputed:
+   * BountyEscrow holds that one's verification, so the verdict could only be
+   * deferred, and listing it would let such verdicts fill every batch. */
   listUnappliedVerdicts(limit: number): Promise<UnappliedVerdict[]>;
   /** Marks a PoC's verdict as applied through chain actions. */
   markVerdictApplied(pocId: string, at: Date): Promise<void>;

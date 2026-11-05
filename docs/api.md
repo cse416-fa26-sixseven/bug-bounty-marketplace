@@ -28,7 +28,10 @@ finding is keyed by `onchainId(findingId)` like any other, so
 `recordSubmission`/`recordVerification` need no change. The reporting auditor
 chooses an auditor-reported finding's `severity`; like a Slither finding's,
 it is advisory (ordering and display only). Payout never depends on it: the
-first verified PoC is paid the bounty, whatever its severity.
+first verified PoC is paid the bounty, whatever its severity. Only that first
+verified finding is paid (R10): a second PoC that passes on the same bounty
+stays `Submitted` while another finding is `Verified` or `Disputed`, and
+becomes `Rejected` once the bounty is paid or closed.
 
 Developer notes (R16) are `developerNote` / `developerNoteUpdatedAt` on the
 `Finding` (both `null` when there is none). Only the contract's developer
