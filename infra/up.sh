@@ -51,7 +51,8 @@
 #    7 GitHub               run the generated gh_setup_commands (unless --skip-github)
 #    8 DNS delegation       print NS; upsert in Cloudflare if CLOUDFLARE_API_TOKEN is set
 #    9 global               apply; mirror postgres/curl images into ACR
-#   10 per env              data, llm-api-key placeholder, compute, platform install
+#   10 per env              data, llm-api-key and chain secret placeholders, compute,
+#                           platform install
 #   11 summary              URLs, next steps, tfvars to commit
 #
 # Environment (optional):
@@ -733,24 +734,26 @@ mirror docker.io/curlimages/curl:8.10.1 mirror/curl 8.10.1
 # ---- 10. per env ------------------------------------------------------------
 step 10 "Environments: ${ENVS[*]}"
 
-ensure_llm_key() { # ensure_llm_key <vault>
-  local kv=$1 out i
+# Out-of-band secrets the CSI mount lists must exist, or pods hang in
+# ContainerCreating. Seed a placeholder once; never overwrite a real value.
+ensure_placeholder() { # ensure_placeholder <vault> <secret>
+  local kv=$1 name=$2 out i
   [[ "$DRY_RUN" == 1 ]] && {
-    run az keyvault secret set --vault-name "$kv" -n llm-api-key --value placeholder-set-me -o none
+    run az keyvault secret set --vault-name "$kv" -n "$name" --value placeholder-set-me -o none
     return 0
   }
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    if out=$(az keyvault secret show --vault-name "$kv" -n llm-api-key --query name -o tsv 2>&1); then
-      info "$kv: llm-api-key already set (left unchanged)"
+    if out=$(az keyvault secret show --vault-name "$kv" -n "$name" --query name -o tsv 2>&1); then
+      info "$kv: $name already set (left unchanged)"
       return 0
     fi
     if [[ "$out" == *SecretNotFound* || "$out" == *"was not found"* ]]; then
-      retry 10 30 run az keyvault secret set --vault-name "$kv" -n llm-api-key --value placeholder-set-me -o none ||
-        die "$kv: could not set llm-api-key"
-      warn "$kv: llm-api-key set to placeholder-set-me; replace it with the real key later"
+      retry 10 30 run az keyvault secret set --vault-name "$kv" -n "$name" --value placeholder-set-me -o none ||
+        die "$kv: could not set $name"
+      warn "$kv: $name set to placeholder-set-me; replace it with the real value later"
       return 0
     fi
-    warn "$kv: cannot read llm-api-key yet ($(echo "$out" | head -n1)); retry $i/10 in 30s"
+    warn "$kv: cannot read $name yet ($(echo "$out" | head -n1)); retry $i/10 in 30s"
     sleep 30
   done
   die "$kv: no access to secrets (are you in secret_officer_user_object_ids of this env's data.tfvars?)"
@@ -779,7 +782,12 @@ for e in "${ENVS[@]}"; do
     sleep 60
     tf_plan_apply data "$e" || die "data/$e apply failed"
   fi
-  ensure_llm_key "$(tf_out data "$e" key_vault_name)"
+  ensure_placeholder "$(tf_out data "$e" key_vault_name)" llm-api-key
+  # Chain vault (ADR 0005): chain-deployment is written by contracts-deploy.yml.
+  chain_kv=$(tf_out data "$e" chain_key_vault_name)
+  for secret in operator-private-key chain-rpc-url chain-deployment; do
+    ensure_placeholder "$chain_kv" "$secret"
+  done
 
   retry 3 30 run "$TF_SH" compute "$e" init -reconfigure || die "compute/$e init failed"
   if ! tf_plan_apply compute "$e"; then
@@ -836,7 +844,8 @@ Next steps:
   - Deploy the app: Actions -> deploy (image_tag=sha-<7> from a green CI run), or env-power <env> up.
   - Pause when idle: Actions -> env-power <env> pause (nightly auto-pause also runs).
   - Replace the llm-api-key placeholder: az keyvault secret set --vault-name <kv> -n llm-api-key --value <key>
-  - Shared secrets (sepolia-rpc-url, sepolia-deployer-key): docs/devops/azure-bootstrap.md §12.
+  - Chain (staging/prod): set operator-private-key and chain-rpc-url in the chain vault, fund the
+    operator from a Sepolia faucet, then run Actions -> Contracts deploy: docs/devops/azure-bootstrap.md §12.
   - kubectl: az aks get-credentials -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr> && kubelogin convert-kubeconfig -l azurecli
     (<abbr>: test $(envval ENV_ABBR test), staging $(envval ENV_ABBR staging), prod $(envval ENV_ABBR prod); infra/terraform/scripts/env-region.sh <env>)
 

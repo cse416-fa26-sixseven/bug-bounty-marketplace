@@ -23,7 +23,8 @@
 # with --all: global, Cloudflare NS, GitHub, bootstrap (its state is pulled
 # back to local first, because it lives in the account being deleted).
 # Afterwards the soft-deleted Key Vaults of the envs destroyed in this run
-# (kv-bbm-<tst|stg|prd>-<suffix>, plus kv-bbm-shared-<suffix> with --all) are
+# (kv-bbm-<tst|stg|prd>-<suffix> and the chain vault kv-bbm-<tst|stg|prd>c-<suffix>,
+# plus kv-bbm-shared-<suffix> with --all) are
 # purged so the names can be reused at once; other soft-deleted vaults are
 # left alone.
 #
@@ -180,22 +181,28 @@ step 3 "Environments: ${ENVS[*]}"
 # kv-bbm-<short>-<suffix> with the suffix from the env's tfvars.
 PURGE_VAULTS=()
 env_short() { case "$1" in test) echo tst ;; staging) echo stg ;; prod) echo prd ;; global) echo shared ;; esac; }
-note_vault() { # note_vault <stack> <env>
-  local s=$1 e=$2 out=key_vault_name vars kv="" sfx
+note_vault() { # note_vault <stack> <env> [chain]
+  # chain: the data stack's api-only chain vault (ADR 0005), kv-bbm-<short>c-<suffix>.
+  local s=$1 e=$2 kind=${3:-} out=key_vault_name infix vars kv="" sfx
+  infix=$(env_short "$e")
   if [[ "$s" == global ]]; then
     out=shared_key_vault_name
     vars="$ENVS_DIR/global/global.tfvars"
   else
     vars="$ENVS_DIR/$e/data.tfvars"
   fi
+  if [[ "$kind" == chain ]]; then
+    out=chain_key_vault_name
+    infix="${infix}c"
+  fi
   if [[ -n "$TFSTATE_ACCOUNT" ]]; then
     kv=$("$TF_SH" "$s" "$e" output -raw "$out" 2>/dev/null) || kv=""
   fi
   if [[ ! "$kv" =~ ^kv-bbm-[a-z0-9-]+$ ]]; then
     sfx=$(tfvars_get_string "$vars" suffix 2>/dev/null || true)
-    kv="kv-bbm-$(env_short "$e")-$sfx"
+    kv="kv-bbm-$infix-$sfx"
     [[ "$sfx" =~ ^[a-z0-9]{4}$ ]] || {
-      warn "$s/$e: no key_vault_name output and no suffix in ${vars#"$BBM_REPO_ROOT/"}; its soft-deleted vault is not purged"
+      warn "$s/$e: no $out output and no suffix in ${vars#"$BBM_REPO_ROOT/"}; its soft-deleted vault is not purged"
       return 0
     }
   fi
@@ -210,6 +217,7 @@ destroy_stack() { # destroy_stack <stack> <env>
   fi
   retry 3 20 run "$TF_SH" "$s" "$e" init -reconfigure || die "$s/$e init failed"
   [[ "$s" == data || "$s" == global ]] && note_vault "$s" "$e"
+  [[ "$s" == data ]] && note_vault "$s" "$e" chain
   if [[ "$DRY_RUN" == 0 && -z "$("$TF_SH" "$s" "$e" state list 2>/dev/null)" ]]; then
     info "$s/$e: state is empty; nothing to destroy"
     return 0

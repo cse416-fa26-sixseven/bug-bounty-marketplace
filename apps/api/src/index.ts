@@ -4,7 +4,9 @@ import {
   createAuditorStakingFromConfig,
   createBountyEscrowFromConfig,
   createDisputeResolutionFromConfig,
+  createOperatorBalanceReader,
 } from "./chain/clients.js";
+import { startOperatorBalanceMonitor } from "./chain/operator-balance.js";
 import { PgDisputeRepository } from "./disputes/pg-repository.js";
 import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
 import { createChainActions, type ChainActions } from "./chain/actions.js";
@@ -87,6 +89,16 @@ const chainActions: ChainActions | undefined =
       })
     : undefined;
 
+// The operator pays gas for verdicts, payouts and lapses; /health warns when
+// its balance drops below 0.05 ETH. Read in the background, never per probe.
+const operatorBalance = chainConfig
+  ? startOperatorBalanceMonitor({
+      readBalance: createOperatorBalanceReader(chainConfig),
+      intervalMs: parseIntEnv(process.env.OPERATOR_BALANCE_INTERVAL_SECONDS, 300) * 1000,
+      onError: (err) => console.error("@bbm/api operator balance read failed", err),
+    })
+  : undefined;
+
 const contractRepository = pool ? new PgContractRepository(pool) : undefined;
 const pipelineRepository = pool ? new PgPipelineRepository(pool) : undefined;
 const disputeRepository = pool ? new PgDisputeRepository(pool) : undefined;
@@ -118,6 +130,7 @@ const app = buildApp({
   auditorStaking: stakingPort ?? undefined,
   disputes: disputeRepository,
   findingStatus: actionStore,
+  operatorBalanceLow: operatorBalance ? () => operatorBalance.isLow() : undefined,
 });
 
 /** Runs the payout keeper only when a chain is configured. */
@@ -157,6 +170,9 @@ async function start(): Promise<void> {
       listFindingIds: () => listFindingIds(db),
       lock: new PgIndexerLock(db),
       pollIntervalMs: parseIntEnv(process.env.INDEXER_POLL_MS, 5000),
+      // RPC providers cap the getLogs block range (Alchemy and Infura's free
+      // tiers well below the indexer's default of 1000).
+      batchSize: BigInt(parseIntEnv(process.env.INDEXER_BATCH_SIZE, 500)),
       // A payout or a resolved dispute releases the auditor's claim lock once;
       // a dispute that ended on-chain is recorded, and a lost one ends the claim.
       onStatusApplied: composeStatusHooks(
@@ -216,6 +232,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
   try {
+    operatorBalance?.stop();
     await indexer?.stop();
     await verdictLoop?.stop();
     await payoutKeeper?.stop();

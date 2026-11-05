@@ -513,7 +513,7 @@ case "$1 $2" in
       echo '[{"supportedServerEditions":[{"name":"Burstable","supportedServerSkus":[{"name":"Standard_B1ms"}]}]}]'
     fi ;;
   "aks get-versions") echo '{"values":[{"version":"1.32","isPreview":null},{"version":"1.33","isPreview":null,"isDefault":true},{"version":"1.35","isPreview":true}]}' ;;
-  "keyvault list-deleted") printf 'kv-bbm-stg-ab12\tnorthcentralus\nkv-bbm-shared-ab12\tnorthcentralus\nkv-bbm-stg-zz99\tnorthcentralus\nkv-bbm-prd-ab12\tnorthcentralus\n' ;;
+  "keyvault list-deleted") printf 'kv-bbm-stg-ab12\tnorthcentralus\nkv-bbm-stgc-ab12\tnorthcentralus\nkv-bbm-shared-ab12\tnorthcentralus\nkv-bbm-stg-zz99\tnorthcentralus\nkv-bbm-prd-ab12\tnorthcentralus\n' ;;
   *) exit 1 ;;
 esac
 EOF
@@ -620,6 +620,9 @@ has "up: acr import postgres" 'mirror/postgres:16-alpine'
 has "up: acr import curl" 'mirror/curl:8.10.1'
 has "up: prod env included" 'data prod init -reconfigure'
 has "up: llm-api-key placeholder" 'llm-api-key --value placeholder-set-me'
+has "up: operator key placeholder in the chain vault" 'operator-private-key --value placeholder-set-me'
+has "up: chain RPC placeholder" 'chain-rpc-url --value placeholder-set-me'
+has "up: chain deployment placeholder" 'chain-deployment --value placeholder-set-me'
 has "up: platform install" 'install.sh test --values'
 has "up: github_repo follows gh repo view" 'github_repo = "neworg/bbm-renamed"'
 has "up: gh admin check uses the new repo" 'gh: admin on neworg/bbm-renamed'
@@ -941,6 +944,7 @@ else
 fi
 out=$(cat "$T/out")
 has "down --envs staging: purges its vault" 'az keyvault purge -n kv-bbm-stg-ab12 -l northcentralus'
+has "down --envs staging: purges its chain vault" 'az keyvault purge -n kv-bbm-stgc-ab12 -l northcentralus'
 hasnt "down --envs staging: keeps the shared vault" 'purge -n kv-bbm-shared-ab12'
 hasnt "down --envs staging: keeps prod's vault" 'purge -n kv-bbm-prd-ab12'
 hasnt "down --envs staging: keeps other suffixes" 'purge -n kv-bbm-stg-zz99'

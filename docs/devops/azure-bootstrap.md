@@ -361,20 +361,66 @@ EOF
 Repeat for `infra-global`. For `contracts-sepolia`, which isn't branch-restricted, send
 `"deployment_branch_policy": null`. Re-running the script keeps reviewers added by hand.
 
-## 12. Set the shared Key Vault secrets
+## 12. Chain secrets and contracts (staging, prod)
 
-Terraform creates only the vault. Set the Sepolia secrets with `az`, so they never enter state:
+Each of staging and prod has its own Sepolia contracts and its own **operator key**
+([ADR 0005](../adr/0005-operator-key-trust-model.md)). They live in the env's **chain vault**
+(`kv-bbm-<stg|prd>c-<sfx>`), which the `api` identity reads and the worker and sandbox don't (ADR
+0005 lists every principal that can read it). Terraform creates the vault
+and `session-secret`; `up.sh` seeds `placeholder-set-me` for the other three so the CSI mount
+never hangs. Chain mode stays **off** (`chain.enabled: false` in `values-<env>.yaml`) until they
+are real: with it on, the API refuses a placeholder key or deployment and does not start. The test
+env has no chain (its chain vault exists but is unused).
 
-```sh
-KV=$(infra/terraform/scripts/tf.sh global global output -raw shared_key_vault_name)
-az keyvault secret set --vault-name "$KV" --name sepolia-rpc-url      --value "https://..."
-az keyvault secret set --vault-name "$KV" --name sepolia-deployer-key --file ./deployer.key
-az keyvault secret set --vault-name "$KV" --name etherscan-api-key    --value "..."   # optional
-```
+0. **Apply the data stack locally first** (`infra/terraform/scripts/tf.sh data <env> apply`, or
+   `infra/up.sh`), as a subscription Owner. It creates the chain vault and gives the users in
+   `secret_officer_user_object_ids` *Secrets Officer* on it, and CI's role-assignment rights only
+   cover service principals, so a `terraform.yml` apply of this change fails. Apply compute after
+   data so its Helm values carry `azure.chainKeyVaultName` (before that it is empty, which is fine
+   while chain mode is off).
 
-Use `--file` for the deployer key so it doesn't land in shell history, then delete the file. A 403
-(`ForbiddenByRbac`) means you aren't in `secret_officer_user_object_ids` in `global.tfvars`
-(`up.sh` adds you), or the assignment hasn't propagated yet.
+1. **Generate the operator key** (also the deployer, since the deploy script requires it). Keep it
+   out of shell history and delete the file afterwards:
+
+   ```sh
+   cast wallet new --json | jq -r '.[0].private_key' > ./operator.key
+   cast wallet address --private-key "$(cat ./operator.key)"   # the operator address
+   ```
+
+2. **Set the chain secrets** (one RPC URL per env is fine; a provider URL carries an API key, so
+   it is a secret):
+
+   ```sh
+   KV=$(infra/terraform/scripts/tf.sh data staging output -raw chain_key_vault_name)   # repeat for prod
+   az keyvault secret set --vault-name "$KV" --name operator-private-key --file ./operator.key
+   az keyvault secret set --vault-name "$KV" --name chain-rpc-url --value "https://eth-sepolia.g.alchemy.com/v2/..."
+   rm ./operator.key
+   ```
+
+3. **Fund the operator** from a Sepolia faucet. It pays gas for the deployment and then for every
+   verification, payout and dispute lapse. 0.2 ETH is plenty; the API's `/health` reports
+   `operatorBalanceLow` below 0.05 ETH.
+
+4. **Pick the arbiter**: a team member's own wallet (MetaMask). It must differ from the operator;
+   the arbiter key is never stored on the platform.
+
+5. **Deploy**: Actions → **Contracts deploy** with `env`, `arbiter`, first `broadcast=false` (a dry
+   run against live Sepolia), then `broadcast=true`. The run stores the deployments file (addresses
+   and `deployBlock`) in the chain vault as `chain-deployment`. A second deploy needs
+   `replace_existing`, because it orphans the API's state on the old contracts (a dry run only
+   warns). Prod runs need the prod reviewer. The `staging` and `prod` Environments only accept
+   runs from `main`, so dispatch the workflow from `main`. If the run broadcast but failed to
+   store the file, download `deployments/11155111.json` from the run's artifact and set it by hand:
+   `az keyvault secret set --vault-name "$KV" --name chain-deployment --file 11155111.json --encoding utf-8`.
+
+6. **Turn chain mode on**: set `chain.enabled: true` in `deploy/helm/bbm/values-<env>.yaml` and
+   roll the API (Deploy (AKS) or CD), so the pod mounts the chain vault. Later secret changes
+   (a new deployment, a rotated RPC URL) only need another roll.
+
+A 403 (`ForbiddenByRbac`) when setting a secret means you aren't in
+`secret_officer_user_object_ids` in the env's `data.tfvars` (`up.sh` adds you), or the assignment
+hasn't propagated yet. The shared vault's `sepolia-rpc-url` and `sepolia-deployer-key` are no
+longer used by the deploy workflow; `etherscan-api-key` (optional) still lives there.
 
 ## 13. First app deploy
 
@@ -414,8 +460,8 @@ also covers them.
 - [ ] Per cluster: `kubectl get certificate -n bbm-platform bbm-wildcard` shows `READY True`.
 - [ ] `az acr repository show -n <acr> --repository mirror/postgres` and
       `--repository mirror/curl` succeed.
-- [ ] The shared vault lists `sepolia-rpc-url` and `sepolia-deployer-key`; each env vault has a real
-      `llm-api-key`.
+- [ ] Each env vault has a real `llm-api-key`; the staging and prod chain vaults have a real
+      `operator-private-key`, `chain-rpc-url` and (after Contracts deploy) `chain-deployment`.
 - [ ] Dispatch `terraform.yml` with a `plan` of `global`. It logs in through OIDC and reports no
       changes.
 

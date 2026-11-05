@@ -85,4 +85,16 @@ contract DeployTest is Test {
         vm.expectRevert(bytes("Deploy: OPERATOR must equal the broadcaster (bindDisputeResolution is onlyOperator)"));
         script.deploy(cfg);
     }
+
+    function test_requireDistinctArbiter_revertsWhenArbiterIsOperator() public {
+        Deploy.Config memory cfg = _config();
+        cfg.arbiter = operator;
+
+        vm.expectRevert(bytes("Deploy: ARBITER must differ from OPERATOR"));
+        script.requireDistinctArbiter(cfg);
+    }
+
+    function test_requireDistinctArbiter_passesWithASeparateArbiter() public view {
+        script.requireDistinctArbiter(_config());
+    }
 }

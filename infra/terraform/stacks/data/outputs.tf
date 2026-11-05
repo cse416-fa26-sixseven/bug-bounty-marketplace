@@ -26,6 +26,16 @@ output "key_vault_id" {
   value       = module.keyvault.id
 }
 
+output "chain_key_vault_name" {
+  description = "Chain Key Vault name (operator key, RPC URL, deployment, session secret; api only)."
+  value       = module.chain_keyvault.name
+}
+
+output "chain_key_vault_id" {
+  description = "Chain Key Vault resource ID."
+  value       = module.chain_keyvault.id
+}
+
 output "postgres_enabled" {
   description = "Whether this env has a PostgreSQL Flexible Server (false for test)."
   value       = var.postgres_enabled

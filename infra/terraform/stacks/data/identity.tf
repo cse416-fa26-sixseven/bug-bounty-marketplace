@@ -39,6 +39,13 @@ module "identity" {
       scope    = module.keyvault.id
       role     = "Key Vault Secrets User"
     }
+    # Chain vault: operator key, RPC URL, deployment, session secret. The
+    # worker gets no grant here (ADR 0005).
+    api-chain-kv-secrets-user = {
+      identity = "api"
+      scope    = module.chain_keyvault.id
+      role     = "Key Vault Secrets User"
+    }
     api-sources-blob-contributor = {
       identity = "api"
       scope    = module.storage.container_id

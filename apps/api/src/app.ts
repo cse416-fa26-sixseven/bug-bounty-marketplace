@@ -83,6 +83,9 @@ export interface AppOptions {
    * working out the client IP (TRUST_PROXY, see parseTrustProxy). Default
    * false: the client is the socket peer. */
   trustProxy?: false | string[];
+  /** Whether the operator's balance is below 0.05 ETH (null: unknown). /health
+   * reports it; see chain/operator-balance.ts. */
+  operatorBalanceLow?: () => boolean | null;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -100,7 +103,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 function registerRoutes(app: FastifyInstance, options: AppOptions): void {
   // Probes must never be throttled.
   app.get("/health", { config: { rateLimit: false } }, async () => {
-    return { status: "ok" };
+    // Added only when low, so a healthy env answers exactly { status: "ok" };
+    // a low balance is a warning, not a failed probe.
+    return options.operatorBalanceLow?.() === true ? { status: "ok", operatorBalanceLow: true } : { status: "ok" };
   });
 
   const store = new MemoryStore();

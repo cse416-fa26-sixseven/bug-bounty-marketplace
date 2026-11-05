@@ -20,6 +20,7 @@ shows it on the repo front page. Contributor conventions are in
 - [adr/](adr/): architecture decision records.
   - [ADR 0001: Azure environment topology](adr/0001-azure-environment-topology.md): AKS per env, data/compute split, OIDC, pinned stack interfaces (its ACA ephemeral envs are superseded by ADR 0002).
   - [ADR 0002: AKS for every environment, Azure DNS and one-command bring-up](adr/0002-aks-everywhere-and-azure-dns.md): test cluster with CI/preview namespaces, DNS zones, cert-manager TLS, `infra/up.sh` / `infra/down.sh`.
+  - [ADR 0005: Operator key trust model](adr/0005-operator-key-trust-model.md): what the platform's operator key can and cannot do, per-env Sepolia deployments, the api-only chain vault, and the recovery path.
 - [devops/](devops/README.md): Azure infrastructure, deployment and operations.
   - [Architecture](devops/architecture.md): diagrams of the layers, identity flow and request path.
   - [Environment lifecycle](devops/env-lifecycle.md): powering test, staging and prod on and off; CI and preview namespaces.

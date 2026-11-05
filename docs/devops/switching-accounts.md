@@ -13,13 +13,13 @@ Nothing in the repo hardcodes a subscription or a domain. The subscription ID is
 
 A switch recreates everything. Before you start, save anything you need:
 
-| Lost                              | Notes                                                                                                            |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Postgres data (staging, prod)     | dump it first (`pg_dump` through a pod in the cluster) if it matters                                             |
-| Uploaded sources, queue messages  | in the env storage accounts                                                                                      |
-| Key Vault secrets you set by hand | `llm-api-key`, `sepolia-rpc-url`, `sepolia-deployer-key`, `etherscan-api-key`: keep the values to set them again |
-| ACR images                        | CI rebuilds them; the first deploy needs a new green `integration-azure.yml` run                                 |
-| Terraform state                   | the old state account is deleted with bootstrap                                                                  |
+| Lost                              | Notes                                                                                                                                                                                                                                                                                        |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres data (staging, prod)     | dump it first (`pg_dump` through a pod in the cluster) if it matters                                                                                                                                                                                                                         |
+| Uploaded sources, queue messages  | in the env storage accounts                                                                                                                                                                                                                                                                  |
+| Key Vault secrets you set by hand | `llm-api-key`, `operator-private-key`, `chain-rpc-url`, `etherscan-api-key`: keep the values to set them again. The contracts are on Sepolia, not Azure, and survive; re-store each env's deployments file as `chain-deployment` (from the Contracts deploy artifact) instead of redeploying |
+| ACR images                        | CI rebuilds them; the first deploy needs a new green `integration-azure.yml` run                                                                                                                                                                                                             |
+| Terraform state                   | the old state account is deleted with bootstrap                                                                                                                                                                                                                                              |
 
 ## 1. Tear down the old subscription
 

@@ -70,6 +70,41 @@ azure:
   storageBlobEndpoint: ""
   # -- Storage queue consumed by the analysis worker.
   queueName: analysis-jobs
+  # -- Chain Key Vault (kv-bbm-<env>c-<sfx>, ADR 0005): operator key, RPC URL,
+  # deployment, session secret. Only the api identity can read it.
+  chainKeyVaultName: ""
+
+# On-chain mode for the API (ADR 0005): wallet sign-in, the indexer, verdicts
+# and payouts on the escrow contracts. Off by default (kind/CI have no chain).
+chain:
+  # -- Run the API against a chain. Needs Secret chain.secretName with keys
+  # operator-private-key, chain-rpc-url, session-secret and chain-deployment
+  # (the deploy script's deployments JSON). With secrets.provider=csi it is
+  # synced from azure.chainKeyVaultName by SecretProviderClass bbm-kv-chain;
+  # otherwise it must already exist.
+  enabled: false
+  # -- CHAIN_ID; must match the deployments file (Sepolia: 11155111).
+  chainId: 11155111
+  # -- PUBLIC_CHAIN_RPC_URL the browser may use. Empty = not published (a
+  # provider URL carries its API key); MetaMask then uses its own RPC.
+  publicRpcUrl: ""
+  # -- CLAIM_LOCK_ENABLED: lock the auditor's stake on-chain while they hold a claim.
+  claimLockEnabled: true
+  indexer:
+    # -- INDEXER_BATCH_SIZE: blocks per eth_getLogs call (RPC providers cap the range).
+    batchSize: 500
+    # -- INDEXER_CONFIRMATIONS: blocks behind head before an event is applied.
+    confirmations: 2
+  # -- Kubernetes Secret the api reads the chain secrets from.
+  secretName: bbm-chain-secrets
+  # -- Where the chain secret files are mounted (CHAIN_DEPLOYMENTS_FILE lives here).
+  mountPath: /mnt/chain
+  # -- Key Vault object names in the chain vault (match the terraform data stack).
+  objects:
+    operatorPrivateKey: operator-private-key
+    rpcUrl: chain-rpc-url
+    sessionSecret: session-secret
+    deployment: chain-deployment
 
 # Non-secret runtime config rendered into ConfigMap bbm-config and loaded
 # with envFrom by every workload.

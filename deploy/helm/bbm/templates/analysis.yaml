@@ -107,6 +107,11 @@ spec:
             - name: SANDBOX_JOB_TEMPLATE
               value: /etc/bbm/sandbox/job.yaml
             {{- end }}
+            {{- if .Values.chain.enabled }}
+            # The API applies sandbox verdicts on-chain; the worker only records them.
+            - name: CHAIN_ENABLED
+              value: "true"
+            {{- end }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
