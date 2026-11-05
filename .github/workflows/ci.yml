@@ -348,7 +348,7 @@ jobs:
         run: forge script script/Deploy.s.sol
 
       - name: Slither static analysis
-        uses: crytic/slither-action@v0.4.0
+        uses: crytic/slither-action@v0.4.2
         with:
           target: 'contracts/'
           # Findings are advisory in this product (explained by the LLM,
