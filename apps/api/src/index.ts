@@ -24,6 +24,7 @@ import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
 import { runMigrations } from "./db/migrate.js";
 import { parseBoolEnv, parseIntEnv } from "./env.js";
+import { loadRateLimitConfig, parseTrustProxy } from "./http/rate-limit.js";
 
 // DATABASE_URL selects Postgres. Without it the API keeps contracts in memory,
 // which is fine for local UI work and tests. MIGRATE_ON_BOOT (default true)
@@ -80,7 +81,19 @@ const contractRepository = pool ? new PgContractRepository(pool) : undefined;
 const pipelineRepository = pool ? new PgPipelineRepository(pool) : undefined;
 const disputeRepository = pool ? new PgDisputeRepository(pool) : undefined;
 
+// Per-client-IP rate limits (RATE_LIMIT_*), on by default. TRUST_PROXY lists
+// the proxies (CIDRs) whose X-Forwarded-For is believed; behind the k8s
+// Gateway it is the pod CIDR. Without it every request seems to come from the
+// proxy, so all clients share one limit.
+const rateLimit = loadRateLimitConfig(process.env);
+const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+if (rateLimit.enabled && !trustProxy) {
+  console.warn("@bbm/api TRUST_PROXY is unset: rate limits key on the socket peer, so clients behind one proxy share a limit");
+}
+
 const app = buildApp({
+  rateLimit,
+  trustProxy,
   repository: contractRepository,
   pipeline: pipelineRepository,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),

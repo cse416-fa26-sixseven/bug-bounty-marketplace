@@ -53,7 +53,10 @@ jobs:
   #   - the Azure repo variables are not configured yet (fresh repo /
   #     subscription not bootstrapped), or
   #   - the PR comes from a fork: forks get no OIDC token and no access
-  #     to environment variables, so they could never deploy anyway.
+  #     to environment variables, so they could never deploy anyway, or
+  #   - Dependabot opened it: a weekly batch of dependency PRs would each
+  #     get their own namespace. CI still runs on them. Checked on the PR
+  #     author, not the actor, so a human closing one skips teardown too.
   # `code` is false for docs-only PRs (every changed file is under docs/
   # or a *.md), which skips build/deploy; it is not computed on `closed`,
   # so teardown never depends on it.
@@ -65,7 +68,8 @@ jobs:
       vars.ACR_NAME != '' &&
       vars.AZURE_LOCATION != '' &&
       vars.AZURE_LOCATION_ABBR != '' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       # paths-filter lists the PR's changed files through the API.
@@ -172,7 +176,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: 'pnpm'
 
       - name: Install dependencies

@@ -71,6 +71,10 @@ web:
 
 api:
   replicaCount: 1
+  # System tests (integration-azure) send many uploads and sign-ins from one
+  # runner in a few minutes; the limits are unit-tested in apps/api.
+  rateLimit:
+    enabled: false
   # No hook Job: the pre-install hook would run before the in-cluster
   # Postgres exists. The api migrates on boot and restarts until Postgres
   # is ready.

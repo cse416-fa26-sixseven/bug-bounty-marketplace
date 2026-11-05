@@ -177,6 +177,9 @@ locals {
       host                  = local.d.dns_zone_names[0]
       publicIpName          = local.d.ingress_pip_name
       publicIpResourceGroup = local.d.resource_group_name
+      # The Gateway's Envoy pods run in the pod CIDR; the api trusts the
+      # client IP they append to X-Forwarded-For (rate limits).
+      trustedProxyCidr = module.aks.pod_cidr
     }
     networkPolicy = {
       postgresCidr = local.d.psql_subnet_cidr

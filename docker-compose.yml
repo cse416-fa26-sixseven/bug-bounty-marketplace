@@ -38,6 +38,9 @@ services:
     environment:
       DATABASE_URL: postgres://bbm:bbm@db:5432/bbm
       SOURCE_STORAGE_DIR: /data/sources
+      # Off locally: the browser reaches the api through the web proxy, so
+      # every client looks the same, and the system tests send bursts.
+      RATE_LIMIT_ENABLED: "false"
     ports:
       - "3001:3001"
     volumes:

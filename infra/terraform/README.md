@@ -233,6 +233,7 @@ ingress:
   host: <env>.<zone> # test: test.<zone>
   publicIpName: pip-bbm-<env>-ingress
   publicIpResourceGroup: rg-bbm-<env>-data-<abbr> # the env's region code
+  trustedProxyCidr: <AKS pod CIDR> # the api's TRUST_PROXY (rate limits)
 networkPolicy:
   postgresCidr: <snet-psql CIDR>
 dns:

@@ -345,7 +345,7 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         uses: azure/setup-helm@v4
         with:
-          version: v3.16.2
+          version: v3.16.4
 
       - name: Setup kubelogin
         if: steps.gate.outputs.go == 'true'
@@ -512,7 +512,7 @@ jobs:
         if: steps.gate.outputs.go == 'true' && inputs.smoke
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: 'pnpm'
 
       # Read-only by default; the create+read round-trip is opt-in

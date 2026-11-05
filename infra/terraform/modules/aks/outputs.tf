@@ -91,3 +91,8 @@ output "upgrades" {
     maintenance_window_node_os      = length(azurerm_kubernetes_cluster.this.maintenance_window_node_os)
   }
 }
+
+output "pod_cidr" {
+  description = "Overlay pod CIDR. In-cluster proxies (the Gateway's Envoy pods) connect to the apps from it."
+  value       = var.pod_cidr
+}
