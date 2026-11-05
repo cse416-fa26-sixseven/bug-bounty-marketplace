@@ -1,9 +1,8 @@
 # stacks/data for staging — persistent data layer (VNet, PG, KV, storage, UAMIs, PIP, LAW).
-subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
-env             = "staging"
-location        = "denmarkeast" # this env's region: infra/up.sh --env-location staging=<region>
-location_abbr   = "dke"
-suffix          = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
+env           = "staging"
+location      = "denmarkeast" # this env's region: infra/up.sh --env-location staging=<region>
+location_abbr = "dke"
+suffix        = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.20.0.0/16"
 subnet_cidrs = {

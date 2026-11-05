@@ -2,12 +2,6 @@
 # Exercises for_each keys, ABAC conditions and the gh_setup_commands output.
 
 mock_provider "azurerm" {
-  mock_data "azurerm_subscription" {
-    defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000"
-    }
-  }
-
   mock_data "azurerm_client_config" {
     defaults = {
       tenant_id = "11111111-1111-1111-1111-111111111111"
@@ -113,11 +107,17 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      length(local.oidc_identities["gh-bbm-plan"].role_assignments) == 2 &&
-      local.oidc_identities["gh-bbm-plan"].role_assignments[0].role_definition_name == "Reader" &&
-      local.oidc_identities["gh-bbm-plan"].role_assignments[1] == local.state_role.plan
+      length(local.oidc_identities["gh-bbm-plan"].role_assignments) == 9 &&
+      alltrue([for ra in slice(local.oidc_identities["gh-bbm-plan"].role_assignments, 0, 8) : ra.role_definition_name == "Reader"]) &&
+      toset([for ra in slice(local.oidc_identities["gh-bbm-plan"].role_assignments, 0, 8) : ra.key]) == toset([
+        "tfstate-reader", "shared-reader",
+        "test-data-reader", "test-compute-reader",
+        "staging-data-reader", "staging-compute-reader",
+        "prod-data-reader", "prod-compute-reader",
+      ]) &&
+      local.oidc_identities["gh-bbm-plan"].role_assignments[8] == local.state_role.plan
     )
-    error_message = "plan identity must have only Reader + the (conditioned) BBM tfstate reader"
+    error_message = "plan identity must have only Reader on each BBM RG + the (conditioned) BBM tfstate reader"
   }
 
   # ---- state ABAC --------------------------------------------------------------
@@ -442,6 +442,60 @@ run "apply_with_mocks" {
 # Without github_reviewer_ids, reviewer-gated envs must not send `reviewers`
 # (a re-run would otherwise wipe reviewers added by hand); unattended envs
 # still send an explicit empty list.
+# ADR 0003: the subscription is shared, so nothing BBM-owned is granted or
+# billed at subscription scope.
+run "shared_subscription_isolation" {
+  command = apply
+
+  assert {
+    condition = alltrue(flatten([
+      for id in local.oidc_identities : [
+        for ra in id.role_assignments : !can(regex("^/subscriptions/[^/]+$", ra.scope))
+      ]
+    ]))
+    error_message = "no CI identity may hold a role at subscription scope"
+  }
+
+  assert {
+    condition = alltrue([
+      for ra in concat(
+        values(azurerm_role_assignment.admin_aks),
+        values(azurerm_role_assignment.admin_acr),
+        values(azurerm_role_assignment.power_operator),
+        values(azurerm_role_assignment.tfstate_humans),
+      ) : strcontains(ra.scope, "/resourceGroups/")
+    ])
+    error_message = "admin and power-operator grants to people must stay on BBM resource groups"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_role_definition.power_operator.assignable_scopes) == 6 &&
+      alltrue([for s in azurerm_role_definition.power_operator.assignable_scopes : strcontains(s, "/resourceGroups/")]) &&
+      strcontains(azurerm_role_definition.power_operator.scope, "/resourceGroups/")
+    )
+    error_message = "BBM Power Operator must be defined at and assignable only on the env RGs"
+  }
+
+  assert {
+    condition = length([
+      for ra in local.oidc_identities["gh-bbm-global"].role_assignments : ra
+      if endswith(ra.key, "-cost-mgmt")
+    ]) == 6
+    error_message = "gh-bbm-global gets Cost Management Contributor on the six env RGs only"
+  }
+
+  assert {
+    condition = (
+      length(module.subscription_budget.filter_resource_group_names) == 11 &&
+      contains(module.subscription_budget.filter_resource_group_names, "rg-bbm-prod-aksnodes-ncus") &&
+      contains(module.subscription_budget.filter_resource_group_names, "rg-bbm-tfstate-ncus") &&
+      contains(module.subscription_budget.filter_resource_group_names, "rg-bbm-shared-ncus")
+    )
+    error_message = "the BBM budget must count only BBM RGs, including the AKS node RGs"
+  }
+}
+
 run "no_reviewer_ids" {
   command = plan
 

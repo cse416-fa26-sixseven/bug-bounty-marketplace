@@ -1,7 +1,5 @@
 data "azurerm_client_config" "current" {}
 
-data "azurerm_subscription" "current" {}
-
 resource "random_string" "suffix" {
   length  = 4
   upper   = false
@@ -45,8 +43,6 @@ locals {
       location_abbr = var.location_abbr
     })
   }
-
-  subscription_scope = data.azurerm_subscription.current.id
 
   resource_providers = toset([
     "Microsoft.ContainerService",
@@ -130,15 +126,26 @@ resource "azurerm_resource_group" "env_compute" {
   tags     = each.value.tags_by_layer.compute
 }
 
-# ---- subscription budget ----------------------------------------------------
+# ---- BBM budget -------------------------------------------------------------
+# The subscription is shared with unrelated workloads (ADR 0003), so the budget
+# counts only BBM's RGs, including the AKS-managed node RGs (named by
+# modules/naming, created by AKS outside Terraform).
 module "subscription_budget" {
   source = "../../modules/budget"
 
   name            = "budget-bbm-subscription"
   subscription_id = var.subscription_id
-  amount          = var.subscription_budget_amount
-  start_date      = var.budget_start_date
-  alert_emails    = var.alert_emails
+  filter_resource_group_names = concat(
+    [azurerm_resource_group.tfstate.name, azurerm_resource_group.shared.name],
+    flatten([for env, n in module.naming_env : [
+      n.env.data_resource_group,
+      n.env.compute_resource_group,
+      n.env.aks_node_resource_group,
+    ]]),
+  )
+  amount       = var.subscription_budget_amount
+  start_date   = var.budget_start_date
+  alert_emails = var.alert_emails
 
   depends_on = [azurerm_resource_provider_registration.this]
 }

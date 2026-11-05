@@ -88,7 +88,6 @@ output "dns_child_zones" {
 output "global_tfvars_hint" {
   description = "Values for the bootstrap-hint block of envs/global/global.tfvars."
   value       = <<-EOT
-    subscription_id              = "${var.subscription_id}"
     suffix                       = "${random_string.suffix.result}"
     ephemeral_ci_principal_id    = "${module.github_oidc.principal_ids["gh-bbm-ephemeral"]}"
     preview_ci_principal_id      = "${module.github_oidc.principal_ids["gh-bbm-preview"]}"

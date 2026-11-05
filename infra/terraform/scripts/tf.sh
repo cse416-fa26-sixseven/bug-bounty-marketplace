@@ -18,6 +18,12 @@
 # TF_VAR_tfstate_account (unless already set) for terraform_remote_state.
 # Other TF_VAR_* env vars pass through to terraform untouched.
 #
+# The subscription ID is never committed (public repo, ADR 0003). It comes from
+# $TF_VAR_subscription_id (CI: vars.AZURE_SUBSCRIPTION_ID), else
+# $ARM_SUBSCRIPTION_ID, else the signed-in `az account show` subscription, but
+# only if it matches the one infra/up.sh last brought this checkout up on
+# (gitignored envs/global/.last-subscription); otherwise tf.sh refuses.
+#
 # `apply <planfile>` applies a saved plan without -var-file (terraform rejects
 # both together). `init -migrate-state` / `-reconfigure` run interactively so
 # terraform can ask before copying state (or pass -force-copy yourself).
@@ -77,6 +83,32 @@ if [[ -n "${TFSTATE_RG:-}" && -z "${TF_VAR_tfstate_resource_group:-}" ]]; then
 fi
 if [[ -n "${TFSTATE_ACCOUNT:-}" && -z "${TF_VAR_tfstate_account:-}" ]]; then
   export TF_VAR_tfstate_account="$TFSTATE_ACCOUNT"
+fi
+
+lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; } # bash 3.2 has no ${x,,}
+
+# Subscription for the providers and the azurerm backend (see header).
+if [[ "$cmd" != "validate" && "$cmd" != "fmt" ]]; then
+  if [[ -n "${TF_VAR_subscription_id:-}" && -n "${ARM_SUBSCRIPTION_ID:-}" &&
+    "$(lc "${TF_VAR_subscription_id}")" != "$(lc "${ARM_SUBSCRIPTION_ID}")" ]]; then
+    die "TF_VAR_subscription_id ($TF_VAR_subscription_id) and ARM_SUBSCRIPTION_ID ($ARM_SUBSCRIPTION_ID) differ"
+  fi
+  if [[ -z "${TF_VAR_subscription_id:-}" ]]; then
+    TF_VAR_subscription_id=${ARM_SUBSCRIPTION_ID:-}
+    if [[ -z "$TF_VAR_subscription_id" ]]; then
+      last_sub_file="$tf_root/envs/global/.last-subscription"
+      [[ -f "$last_sub_file" ]] ||
+        die "no subscription: export TF_VAR_subscription_id=<guid> (this checkout has no envs/global/.last-subscription from infra/up.sh)"
+      last_sub=$(tr -d '[:space:]' <"$last_sub_file")
+      TF_VAR_subscription_id=$(az account show --query id -o tsv 2>/dev/null) ||
+        die "no subscription: az login, or export TF_VAR_subscription_id=<guid>"
+      [[ "$(lc "${TF_VAR_subscription_id}")" == "$(lc "${last_sub}")" ]] ||
+        die "the az CLI is on subscription $TF_VAR_subscription_id but this checkout was brought up on $last_sub: az account set -s $last_sub, or export TF_VAR_subscription_id"
+      echo "tf.sh: using subscription $TF_VAR_subscription_id (az CLI, matches envs/global/.last-subscription)" >&2
+    fi
+    export TF_VAR_subscription_id
+  fi
+  export ARM_SUBSCRIPTION_ID=${ARM_SUBSCRIPTION_ID:-$TF_VAR_subscription_id}
 fi
 
 tf() {

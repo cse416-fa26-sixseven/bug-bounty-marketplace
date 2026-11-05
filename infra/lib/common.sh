@@ -571,6 +571,7 @@ reset_tenant_fields() {
     tfvars_set_if_present "$f" subscription_id "$(hcl_quote "$PLACEHOLDER_GUID")"
     tfvars_set_if_present "$f" suffix "$(hcl_quote "$PLACEHOLDER_SUFFIX")"
   done < <(find "$envs" -name '*.tfvars' | sort)
+  [[ "$DRY_RUN" == 1 ]] || rm -f "$envs/global/.last-subscription"
   tfvars_set_if_present "$glob" ephemeral_ci_principal_id null
   tfvars_set_if_present "$glob" preview_ci_principal_id null
   tfvars_set_if_present "$glob" secret_officer_sp_object_ids "$empty"

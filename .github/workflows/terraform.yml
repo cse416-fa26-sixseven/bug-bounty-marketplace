@@ -161,6 +161,13 @@ jobs:
           # Raw exit codes / stdout so -detailed-exitcode and tee work.
           terraform_wrapper: false
 
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
+
       - name: Azure login (OIDC, plan identity)
         uses: azure/login@v2
         with:
@@ -209,6 +216,11 @@ jobs:
             -lock=false $PLAN_FLAGS -no-color -detailed-exitcode -out=tfplan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
           code=${PIPESTATUS[0]}
           set -e
+          # Masking covers the log only: scrub the ID from the text that goes
+          # into the public PR comment and step summary.
+          if [[ -n "${ARM_SUBSCRIPTION_ID:-}" ]]; then
+            sed -i "s/$ARM_SUBSCRIPTION_ID/<subscription>/g" "$RUNNER_TEMP/plan.txt"
+          fi
           case "$code" in
             0) echo "result=no changes" >> "$GITHUB_OUTPUT" ;;
             2) echo "result=changes" >> "$GITHUB_OUTPUT" ;;
@@ -408,6 +420,13 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
 
       - name: Azure login (OIDC)
         uses: azure/login@v2

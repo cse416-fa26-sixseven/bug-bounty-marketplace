@@ -66,6 +66,13 @@ jobs:
           # Keep in sync with ci.yml and contracts/Dockerfile.
           version: v1.3.5
 
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:

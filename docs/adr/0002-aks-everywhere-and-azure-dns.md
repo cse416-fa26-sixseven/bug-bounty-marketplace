@@ -16,6 +16,9 @@
   `northcentralus`; section 7 now describes the home region.
 - **Amended:** 2026-10-25, continuous deployment (section 9): green `main` builds deploy to staging
   automatically, then to prod with the same tag after the `prod` reviewer approves.
+- **Amended by:** [ADR 0003](0003-shared-subscription-isolation.md) (2026-11-04): the deployment
+  moves to a shared subscription isolated by resource group, and every env runs in one region
+  (sections 7 and 8).
 - **Supersedes:** parts of [ADR 0001](0001-azure-environment-topology.md): §1 (ephemeral envs on
   ACA), §6 ingress host and AKS tier, the `aca-ephemeral` stack and the ACA rows of the pinned
   interfaces, and its region (`eastus2` / `eus2`, fallback `centralus`). Everything else in 0001
@@ -272,7 +275,9 @@ HTTPRoute hostname and `ingress.trustedProxyCidr` for the api, and ignores the o
   `compute` and installs the platform. It ends by printing the URLs and the tfvars files to commit.
   Every step is idempotent, so a failed run is resumed by running it again. If `bootstrap.tfvars`
   already holds a different (non-placeholder) `subscription_id`, it warns and offers to reset the
-  per-tenant fields first (`--yes` resets).
+  per-tenant fields first (`--yes` resets). _(Amended by ADR 0003: `subscription_id` is no longer
+  committed; `up.sh` compares against the gitignored `envs/global/.last-subscription`, or, on a
+  fresh clone, checks that the committed state account exists in the target subscription.)_
 - **`infra/down.sh --subscription <id> (--envs test,staging,prod | --all) [--keep-github] [--yes]
   [--yes-really-destroy-prod] [--dry-run]`** destroys in reverse (`compute`, `data` per env; with
   `--all` also `global` and `bootstrap`, pulling bootstrap state back to local first), purges the
@@ -287,9 +292,15 @@ HTTPRoute hostname and `ingress.trustedProxyCidr` for the api, and ignores the o
   officer object id lists, the global hint block's principal ids, the backend `.hcl` state account)
   to their placeholders, and keeps `dns_zone_name`, `alert_emails`, `github_reviewer_ids` and the
   regions (home and per env, section 8: user choices, not per-tenant values; when the next
-  subscription needs others, `up.sh --location` / `--env-location` rewrites them).
+  subscription needs others, `up.sh --location` / `--env-location` rewrites them). _(Amended by
+  ADR 0003: no committed tfvars holds `subscription_id` any more, so the reset leaves it out (it
+  still clears it in an older checkout) and removes `envs/global/.last-subscription` instead.)_
 
 ### 7. Region (home region; per-env regions in section 8)
+
+> **Amended by [ADR 0003](0003-shared-subscription-isolation.md) §4:** the home region keeps its
+> role (tfstate, shared RG), but the "Why `northcentralus`" rationale below no longer applies:
+> the region is chosen at bring-up, and every env runs in it too.
 
 - **Home region:** `location` / `location_abbr` in `envs/global/bootstrap.tfvars` (and the same
   in `global.tfvars`): tfstate, the shared RG (ACR, shared Log Analytics and Key Vault, parent DNS
@@ -322,6 +333,13 @@ HTTPRoute hostname and `ingress.trustedProxyCidr` for the api, and ignores the o
   blocked; the team chose `northcentralus`, the only allowed US region.
 
 ### 8. One region per environment
+
+> **Amended by [ADR 0003](0003-shared-subscription-isolation.md) §4:** all envs now run in one
+> region (`up.sh --env-location all=<region>`). The split below was a workaround for the old
+> subscription's per-region quota; the region mechanism it describes (`env_locations`,
+> Environment-level `AZURE_LOCATION*`, `env-region.sh`) is unchanged. The node layout below
+> (B-series, one node, arm64 test, upgrades off) is also replaced: every cluster runs autoscaled
+> `Standard_D4as_v7` nodes with automatic upgrades back on (ADR 0003 §4).
 
 - **Finding.** The first bring-up put all three clusters in `northcentralus` on one
   `Standard_B2als_v2` node each (2 vCPU / 4 GiB, 6 of the region's 6 vCPUs). It failed: the managed
@@ -500,7 +518,7 @@ HTTPRoute hostname and `ingress.trustedProxyCidr` for the api, and ignores the o
   footprint (static PIP and load balancer while paused). Updated in `docs/devops/cost.md`.
 - **Quota:** each cluster's one 4 vCPU node (B4ps_v2 in test, B4as_v2 in staging and prod) uses 4
   of its region's 6 vCPUs (section 8); `up.sh` checks each region's quota against that region's
-  needs.
+  needs. _(Amended by ADR 0003 §4: 28 Dasv7 vCPUs in one region at max scale.)_
 - **CI latency:** the first Azure CI run after a nightly pause waits for the test cluster to start
   (~5–10 min).
 - **Account or domain switch:** `down.sh --all` on the old subscription, `up.sh` on the new one,

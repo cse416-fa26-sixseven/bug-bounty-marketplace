@@ -46,3 +46,4 @@ tests/e2e/test-results/
 
 # Terraform ignores lock files in called modules; only stacks commit one.
 infra/terraform/modules/**/.terraform.lock.hcl
+infra/terraform/envs/global/.last-subscription

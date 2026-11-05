@@ -4,8 +4,9 @@ How to move the deployment to another Azure subscription, another tenant, or ano
 scripts make this a teardown on the old side and a fresh bring-up on the new side. Background:
 [ADR 0002](../adr/0002-aks-everywhere-and-azure-dns.md) section 6.
 
-Nothing in the repo hardcodes a subscription or a domain. The subscription lives in the tfvars that
-`up.sh` writes, and the domain is only `dns_zone_name` in
+Nothing in the repo hardcodes a subscription or a domain. The subscription ID is not committed:
+`up.sh` / `down.sh` take it from `--subscription`, and `scripts/tf.sh` from `TF_VAR_subscription_id`
+/ `ARM_SUBSCRIPTION_ID` (ADR 0003). The domain is only `dns_zone_name` in
 `infra/terraform/envs/global/bootstrap.tfvars`.
 
 ## What is lost
@@ -52,9 +53,9 @@ that don't exist there.
 
 | File                           | Reset                                                                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `envs/global/bootstrap.tfvars` | `subscription_id`, `admin_object_ids`, `power_operator_object_ids`, `preregistered_resource_providers`                                |
-| `envs/global/global.tfvars`    | hint block `subscription_id`, `suffix`, `ephemeral_ci_principal_id`, `preview_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
-| `envs/<env>/*.tfvars`          | `subscription_id`, `suffix`, and `secret_officer_user_object_ids` in `data.tfvars`                                                    |
+| `envs/global/bootstrap.tfvars` | `admin_object_ids`, `power_operator_object_ids`, `preregistered_resource_providers`                                |
+| `envs/global/global.tfvars`    | hint block `suffix`, `ephemeral_ci_principal_id`, `preview_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
+| `envs/<env>/*.tfvars`          | `suffix`, and `secret_officer_user_object_ids` in `data.tfvars`                                                    |
 | `envs/**/backend*.hcl`         | `resource_group_name`, `storage_account_name` (`stbbmtfstate0000`)                                                                    |
 
 Kept, because they survive an account switch: `dns_zone_name`, `alert_emails`,
@@ -66,8 +67,9 @@ in `env_locations`). Regions are a user choice, not a per-tenant value. To chang
 file and fails early, listing the allowed regions, when the subscription's policy forbids a
 choice.
 
-If you skipped step 1 (the old account is gone), `up.sh` notices: when `bootstrap.tfvars` holds a
-non-placeholder `subscription_id` that differs from `--subscription`, it warns and offers to do the
+If you skipped step 1 (the old account is gone), `up.sh` notices: when the subscription it last
+used (gitignored `envs/global/.last-subscription`, or `subscription_id` in an older
+`bootstrap.tfvars`) differs from `--subscription`, it warns and offers to do the
 same reset first (`--yes` resets without asking; with no terminal and no `--yes` it stops).
 
 Also check `alert_emails` in `bootstrap.tfvars` and `global.tfvars`. `up.sh` only asks for it while
@@ -77,46 +79,36 @@ If you committed the uncommented `backend "azurerm" {}` block in
 `stacks/bootstrap/versions.tf`, leave it: `up.sh` writes a local-backend override for the first
 apply on the new subscription.
 
-## 3. Undo the quota workarounds (account with more vCPUs)
+## 3. Check quota and the remaining sizing switches
 
-The current settings fit **Azure for Students** ([ADR 0002 §8](../adr/0002-aks-everywhere-and-azure-dns.md)):
-6 vCPUs per region and only five allowed regions. Of those regions, only northcentralus and
-denmarkeast offer an x86 4 vCPU B-series size, and canadacentral offers ARM only. So each env sits
-in its own region on one pinned node, with upgrades and KEDA off. These are config, not code. On a
-subscription with normal quota, check it first, then set the standard sizing:
+The old subscription's quota workarounds (one region per env, one pinned B-series node, an arm64 test
+cluster, upgrades off; [ADR 0002 §8](../adr/0002-aks-everywhere-and-azure-dns.md)) are gone: the
+committed defaults now put every env in one region on autoscaled `Standard_D4as_v7` nodes with
+automatic upgrades on ([ADR 0003 §4](../adr/0003-shared-subscription-isolation.md)). Check that the
+new subscription offers the size and has the quota (28 vCPUs at max scale, see
+[azure-bootstrap.md](azure-bootstrap.md) section 4):
 
 ```sh
-az vm list-usage -l <region> -o table        # "Total Regional vCPUs" and "Standard BASv2 Family vCPUs"
-az vm list-skus -l <region> --size Standard_B4as_v2 -o table   # must be listed with no restrictions
+az vm list-usage -l <region> -o table        # "Total Regional vCPUs" and the Dasv7 family row
+az vm list-skus -l <region> --size Standard_D4as_v7 -o table   # must be listed with no restrictions
 ```
 
-Everything fits in one region once that region has about 16+ vCPUs: three clusters at 1 to 3
-nodes, prod's apps pool, and one surge node per upgrade.
+If it does not, pick another size in `system_vm_size` (`envs/<env>/compute.tfvars`) or lower
+`system_max_count`. A few switches are still off for cost and can be turned on with more load:
 
-| Setting (file)                                                     | Student-quota value (now)                                  | Standard value                                    |
-| ------------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------- |
-| Env regions (`up.sh --env-location`)                               | test canadacentral, staging denmarkeast, prod northcentralus | one region for all: `--env-location all=<region>` |
-| `system_vm_size` (`envs/<env>/compute.tfvars`)                     | `Standard_B4as_v2`; test `Standard_B4ps_v2` (arm64)        | `Standard_B4as_v2` everywhere (x86)               |
-| `system_min_count` / `system_max_count`                            | `1` / `1`                                                  | `1` / `3`                                         |
-| prod `system_only_critical_addons`, `apps_pool_enabled`            | `false`, `false`                                           | `true`, `true` (apps `1`–`3` nodes)               |
-| prod `global.nodeSelector` (`deploy/helm/bbm/values-prod.yaml`)    | `{}`                                                       | `{ bbm.io/pool: apps }`                           |
-| `automatic_upgrade_channel` / `node_os_upgrade_channel`            | `"none"` / `"None"`                                        | `"patch"` / `"NodeImage"`                         |
-| `keda_enabled`                                                     | `false`                                                    | `true` once the analysis worker runs              |
+| Setting (file)                                                     | Value (now)      | With more load                       |
+| ------------------------------------------------------------------ | ---------------- | ------------------------------------ |
+| prod `system_only_critical_addons`, `apps_pool_enabled`            | `false`, `false` | `true`, `true` (apps `1`–`3` nodes)  |
+| prod `global.nodeSelector` (`deploy/helm/bbm/values-prod.yaml`)    | `{}`             | `{ bbm.io/pool: apps }`              |
+| `keda_enabled`                                                     | `false`          | `true` once the analysis worker runs |
 
 Notes:
 
-- The arm64 image builds in `.github/workflows/_build-push.yml` (api and web) can stay. They cost
-  some CI time and are harmless on x86 clusters. Remove `linux/arm64` there if no env runs on
-  arm64.
-- With upgrades back on, the next compute apply re-enables the weekly maintenance windows (Sunday
-  06:00–10:00 UTC).
+- The arm64 image builds in `.github/workflows/_build-push.yml` (api and web) still run, although
+  no env runs arm64 any more. They cost some CI time and are harmless on x86 clusters; removing
+  `linux/arm64` there is a separate change.
 - `up.sh` checks every env's node size, quota and region policy before applying anything, so a
   wrong value fails at its `[4] Node SKUs, vCPU quota` step, before any resource is created.
-
-> **Planned: sizing profiles.** To turn this table into one flag, `up.sh` could take
-> `--profile student` or `--profile standard` and write these values itself, so nobody edits
-> tfvars by hand when switching accounts. Not built yet; to be added after the current Azure for
-> Students bring-up is finished.
 
 ## 4. Bring up the new subscription
 
@@ -150,6 +142,34 @@ resolves.
 3. Add required reviewers if `github_reviewer_ids` is empty (section 11).
 4. Deploy: wait for a green `integration-azure.yml` run on `main`, then run `deploy.yml` with its
    `sha-<7>` tag (section 13).
+
+## Side by side: new account first, old one after
+
+To keep an environment running during the move, bring the new account up before tearing the old
+one down. Names that must be globally unique differ (random suffix, region in the PostgreSQL
+name) and the two tenants have separate `gh-bbm-*` apps. This assumes the old and new
+subscriptions are in different tenants: in the same tenant the custom role names (`BBM Power
+Operator`, `BBM tfstate reader` / `writer`) would clash, so tear the old one down first instead.
+Three things are shared:
+
+1. **Keep the old values.** `up.sh` overwrites the old account's suffix, object IDs and state
+   account in `envs/**`, and `down.sh` needs them. Before bringing up the new account, keep a
+   checkout of the current commit: `git worktree add ../bbm-old HEAD`.
+2. **Bring up the new account** from the main checkout (sections 2 to 6, with
+   `CLOUDFLARE_API_TOKEN` set). `up.sh` replaces the NS records, so DNS moves to the new account
+   here, and it points the GitHub variables and Environments at the new account.
+3. **Tear down the old account** from `../bbm-old`, after the new one is verified:
+
+   ```sh
+   unset CLOUDFLARE_API_TOKEN     # it would delete the NEW Azure NS records for the zone
+   az account set -s <old-guid>
+   infra/down.sh --subscription <old-guid> --all --keep-github --dry-run   # review
+   infra/down.sh --subscription <old-guid> --all --keep-github
+   git worktree remove ../bbm-old
+   ```
+
+   `--keep-github` matters: without it `down.sh` deletes the variables and Environments the new
+   account just set.
 
 ## Changing only the domain
 

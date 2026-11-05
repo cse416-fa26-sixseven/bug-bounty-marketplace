@@ -58,12 +58,12 @@ variable "power_operator_object_ids" {
 }
 
 variable "alert_emails" {
-  description = "Emails that receive subscription budget alerts."
+  description = "Emails that receive BBM budget alerts."
   type        = list(string)
 }
 
 variable "subscription_budget_amount" {
-  description = "Monthly subscription budget in USD."
+  description = "Monthly BBM budget in USD (counts only the BBM resource groups)."
   type        = number
   default     = 50
 }

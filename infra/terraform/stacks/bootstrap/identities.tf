@@ -131,6 +131,18 @@ locals {
     shared = azurerm_resource_group.shared.id
   }
 
+  # The subscription is shared with unrelated workloads (ADR 0003), so CI
+  # identities never get a role at subscription scope: only on these RGs.
+  env_rg_ids = merge([for env in local.persistent_envs : {
+    "${env}-data"    = azurerm_resource_group.env_data[env].id
+    "${env}-compute" = azurerm_resource_group.env_compute[env].id
+  }]...)
+
+  bbm_rg_ids = merge(local.env_rg_ids, {
+    tfstate = azurerm_resource_group.tfstate.id
+    shared  = azurerm_resource_group.shared.id
+  })
+
   # Grants shared by gh-bbm-test, gh-bbm-staging and gh-bbm-prod, parameterised by env.
   env_identity_roles = { for env in local.persistent_envs : env => [
     { key = "data-contributor", scope = azurerm_resource_group.env_data[env].id, role_definition_name = "Contributor" },
@@ -173,7 +185,7 @@ locals {
 # az postgres flexible-server stop/start, power-state tags).
 resource "azurerm_role_definition" "power_operator" {
   name        = "BBM Power Operator"
-  scope       = local.subscription_scope
+  scope       = azurerm_resource_group.env_data["test"].id
   description = "Pause/resume BBM AKS clusters and PostgreSQL flexible servers and update power-state tags."
 
   permissions {
@@ -190,7 +202,8 @@ resource "azurerm_role_definition" "power_operator" {
     ]
   }
 
-  assignable_scopes = [local.subscription_scope]
+  # Assignable only on the BBM env RGs, never the shared subscription.
+  assignable_scopes = values(local.env_rg_ids)
 }
 
 # Data-plane-only roles for CI state access, assigned on the tfstate container
@@ -255,10 +268,10 @@ locals {
     # prod/ is excluded for exactly this reason.
     "gh-bbm-plan" = {
       extra_subjects = ["pull_request", "ref:refs/heads/main"]
-      role_assignments = [
-        { key = "sub-reader", scope = local.subscription_scope, role_definition_name = "Reader" },
-        local.state_role.plan,
-      ]
+      role_assignments = concat(
+        [for k, rg in local.bbm_rg_ids : { key = "${k}-reader", scope = rg, role_definition_name = "Reader" }],
+        [local.state_role.plan],
+      )
     }
 
     # CI-run namespaces on the test cluster (no Terraform), main only
@@ -283,7 +296,7 @@ locals {
 
     "gh-bbm-global" = {
       environments = ["infra-global", "contracts-sepolia"]
-      role_assignments = [
+      role_assignments = concat([
         { key = "shared-contributor", scope = local.rg_ids.shared, role_definition_name = "Contributor" },
         {
           key                  = "shared-rbac-admin"
@@ -295,15 +308,17 @@ locals {
         # Shared KV data plane: contracts-sepolia reads the Sepolia secrets.
         # (Terraform itself never writes secret values into the shared KV.)
         { key = "shared-kv-secrets", scope = local.rg_ids.shared, role_definition_name = "Key Vault Secrets Officer" },
-        # Budgets (subscription + RG) live in stacks/global.
-        { key = "sub-cost-mgmt", scope = local.subscription_scope, role_definition_name = "Cost Management Contributor" },
         # infra-janitor.yml ACR purge (ABAC mode: Contributor is control plane
         # only): delete-lock/unlock deployed tags, `acr purge` in a quick run
         # with the caller's identity, list repositories.
         { key = "shared-acr-repo-contributor", scope = local.rg_ids.shared, role_definition_name = "Container Registry Repository Contributor" },
         { key = "shared-acr-catalog-lister", scope = local.rg_ids.shared, role_definition_name = "Container Registry Repository Catalog Lister" },
         local.state_role.global,
-      ]
+        ],
+        # Per-RG budgets live in stacks/global; the BBM-wide budget is in
+        # bootstrap (run by the subscription Owner).
+        [for k, rg in local.env_rg_ids : { key = "${k}-cost-mgmt", scope = rg, role_definition_name = "Cost Management Contributor" }],
+      )
     }
 
     # test env infra (terraform.yml, env-power.yml, platform installs).

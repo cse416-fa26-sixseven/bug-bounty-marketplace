@@ -162,6 +162,13 @@ jobs:
           # do not need it.
           submodules: ${{ matrix.service == 'contracts' && 'recursive' || 'false' }}
 
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -248,6 +255,13 @@ jobs:
           path: ${{ runner.temp }}/digests
           pattern: digests--${{ matrix.id }}--*
           merge-multiple: true
+
+      # Plan output and az errors print full resource IDs; keep the
+      # subscription ID out of the public logs (ADR 0003).
+      - name: Mask subscription ID
+        env:
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: '[[ -z "$SUB" ]] || echo "::add-mask::$SUB"'
 
       - name: Azure login (OIDC)
         uses: azure/login@v2

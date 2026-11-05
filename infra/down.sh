@@ -28,9 +28,10 @@
 # left alone.
 #
 # With --all, after a successful teardown the per-tenant tfvars/backend fields
-# up.sh wrote (subscription_id, suffix, admin/power-operator/Key Vault officer
+# up.sh wrote (suffix, admin/power-operator/Key Vault officer
 # object ids, the global hint block's principal ids, backend state account)
-# are reset to their placeholders, so up.sh on another tenant starts clean.
+# are reset to their placeholders and the gitignored .last-subscription is
+# removed, so up.sh on another tenant starts clean.
 # dns_zone_name, alert_emails, github_reviewer_ids, github_repo and the regions
 # (home location / location_abbr, each env's region and the env_locations
 # maps: user choices, not per tenant) are kept; if the next subscription needs
@@ -100,6 +101,8 @@ if ! az account show -o none 2>/dev/null; then
   exit 1
 fi
 az account set --subscription "$SUB" || die "cannot select subscription $SUB"
+# tf.sh passes it to Terraform; it is not in the committed tfvars (ADR 0003).
+export TF_VAR_subscription_id=$SUB ARM_SUBSCRIPTION_ID=$SUB
 SUB_NAME=$(az account show --query name -o tsv)
 REPO=$(tfvars_get_string "$BOOT_VARS" github_repo)
 LOC_ABBR=$(tfvars_get_string "$BOOT_VARS" location_abbr)
@@ -325,6 +328,14 @@ fi
 if [[ "$DRY_RUN" == 1 ]] || bootstrap_local_state_has_resources; then
   bootstrap_use_local_backend
   bootstrap_init_local
+  # Resource provider registrations are subscription-wide (and up.sh imports
+  # the ones already registered): forget them instead of unregistering them,
+  # so other workloads in a shared subscription keep working.
+  if [[ "$DRY_RUN" == 1 ]] || terraform -chdir="$BOOTSTRAP_DIR" state list 2>/dev/null |
+    grep -q '^azurerm_resource_provider_registration\.this'; then
+    run terraform -chdir="$BOOTSTRAP_DIR" state rm 'azurerm_resource_provider_registration.this' ||
+      die "could not drop the provider registrations from the bootstrap state; nothing destroyed"
+  fi
   tf_plan_apply bootstrap global --destroy || die "bootstrap destroy failed; re-run (the local state is kept)"
   _remove_override
   if [[ "$DRY_RUN" == 0 ]]; then
