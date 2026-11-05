@@ -3,7 +3,7 @@ from pathlib import Path
 from analysis import worker as main
 from analysis.config import Settings
 from analysis.jobs import claim_next
-from analysis.storage import read_source
+from analysis.storage import LocalSourceStore, read_source
 
 from .conftest import insert_job
 
@@ -138,8 +138,9 @@ def test_handle_dispatches_sandbox_jobs(pg_conn, tmp_path, monkeypatch, test_dat
         return JobOutcome(ok=False, reason="Docker CLI not found", retryable=True)
 
     monkeypatch.setattr(main, "run_sandbox_job", fake)
-    main.handle(job, _settings(tmp_path, test_database_url), explainer=None)
-    # The store the settings select is opened once per handle() and passed on.
+    # The poller opens one store and hands it to every job.
+    store = LocalSourceStore(tmp_path)
+    main.handle(job, _settings(tmp_path, test_database_url), explainer=None, store=store)
     assert seen == [("poc_a", "LocalSourceStore")]
     row = pg_conn.execute("SELECT status, last_error FROM jobs WHERE id = %s", (job.id,)).fetchone()
     assert (row["status"], row["last_error"]) == ("queued", "Docker CLI not found")
