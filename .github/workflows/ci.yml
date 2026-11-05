@@ -42,7 +42,7 @@ jobs:
 
       - name: Filter paths
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           # NOTE: YAML anchors cannot merge *into* another sequence (only
           # mappings support the `<<` merge key), so `root`'s paths are
