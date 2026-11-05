@@ -285,9 +285,12 @@ analysis:
       cpu: "1"
       memory: 2Gi
   # -- JOB_LEASE_SECONDS: how long a claimed job stays leased to one worker.
-  # Must outlive the sandbox wait (jobTemplate.activeDeadlineSeconds + 60 s,
-  # which includes a Kata node scaling up from zero), or a second worker
-  # would re-claim and run the PoC twice.
+  # With sandbox.enabled it MUST be greater than
+  # sandbox.jobTemplate.activeDeadlineSeconds + 120 (rendering fails
+  # otherwise): the worker waits activeDeadlineSeconds + 60 s for a Job
+  # (including a Kata node scaling up from zero) plus up to 60 s to delete a
+  # leftover Job first, and a shorter lease lets another worker re-claim the
+  # job and run the PoC twice.
   jobLeaseSeconds: 900
   sandbox:
     # -- SANDBOX_BACKEND: kubernetes (Jobs in the sandbox namespace, AKS) or

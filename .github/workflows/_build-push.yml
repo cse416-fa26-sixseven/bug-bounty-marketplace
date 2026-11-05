@@ -17,8 +17,9 @@ name: Build and push images
 # runner image, ADR 0004) and contracts amd64.
 #
 # Layer cache: amd64 uses the same GHA cache scopes as ci.yml's containers
-# and sandbox jobs (api/web/analysis/sandbox/contracts), so a main push reuses the layers CI
-# just built; arm64 uses <scope>-arm64. A registry cache
+# job (api/web/analysis/contracts), so a main push reuses the layers CI
+# just built; sandbox has its own scope (ci.yml's sandbox job uses a plain
+# docker build, no shared cache); arm64 uses <scope>-arm64. A registry cache
 # (<prefix>/<svc>:buildcache[-mocked][-arm64]) survives GHA cache eviction.
 # Images carry max provenance and an SBOM.
 #

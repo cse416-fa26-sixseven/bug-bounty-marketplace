@@ -35,7 +35,9 @@
 # (test.<zone> / preview.<zone>), so no per-namespace certificate is issued.
 
 global:
-  # The test cluster has a single (system) pool.
+  # App pods run on the test cluster's system pool (no apps pool). Its only
+  # other pool is the Kata sandbox pool, reached solely by the PoC Jobs
+  # through sandbox.jobTemplate's nodeSelector and toleration.
   nodeSelector: {}
 
 config:

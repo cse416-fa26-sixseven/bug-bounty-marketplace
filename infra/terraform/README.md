@@ -187,11 +187,11 @@ instead of registering it. You can also import it by hand:
   env-scoped name embeds the env's code (`rg-bbm-staging-data-dke`,
   `aks-bbm-prod-ncus`); shared names and `rg-bbm-tfstate-<abbr>` use the home
   code. `scripts/env-region.sh <env>` prints an env's region and names for
-  scripts and workflows. One 4 vCPU node per region (B4ps_v2 arm64 in test:
-  canadacentral offers no x86 4 vCPU B-series size to this subscription;
-  B4as_v2 x86 in staging and prod) fits the Azure for Students quota of 6
-  vCPUs per region; `keda_enabled = false` saves ~0.4
-  CPU while analysis is off.
+  scripts and workflows. Every cluster runs 1–2 (prod 1–3) x86 `Standard_D4as_v7`
+  system nodes plus a Kata `sandbox` pool of 0–1 `Standard_D2as_v7` nodes for
+  auditor PoCs (ADR 0003 §4, ADR 0004), all in one region; the analysis
+  worker runs on every env. `keda_enabled = false` saves ~0.4 CPU: the
+  worker polls the Postgres jobs table and the queue scaler is not wired yet.
 
 - **Bootstrap** (`dns.tf`) creates the parent zone `dns_zone_name` in
   `rg-bbm-shared-ncus` (home region), the child zones above, and NS delegation records for

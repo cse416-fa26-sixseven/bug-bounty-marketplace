@@ -104,7 +104,11 @@ All three envs run in one region ([ADR 0003](../adr/0003-shared-subscription-iso
 each cluster on `Standard_D4as_v7` nodes (4 vCPU / 16 GiB, x86; the subscription offers no
 B-series) that autoscale from 1 to `system_max_count` (2 for test and staging, 3 for prod, in
 `envs/<env>/compute.tfvars`), plus the Kata `sandbox` pool of 0–1 `Standard_D2as_v7` nodes
-(2 vCPU, same Dasv7 family; [ADR 0004](../adr/0004-poc-sandbox-on-aks.md)). Size the quota from
+(2 vCPU, same Dasv7 family; [ADR 0004](../adr/0004-poc-sandbox-on-aks.md)). When that pool is
+added to a cluster that already exists, reconcile the cluster afterwards with
+`az aks update -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr>` (no settings change) so
+the RuntimeClass `kata-vm-isolation` is installed, then run
+`infra/terraform/scripts/kata-spike.sh <env> <image tag>` to prove PoCs run in a VM. Size the quota from
 the maxima: **34 vCPUs** in that one region ((2 + 2 + 3) × 4 for the system pools, the extra node
 also covering the upgrade surge, + 3 × 2 for the sandbox pools), plus PostgreSQL Flexible
 `Standard_B1ms` for staging and prod. The prod `apps` pool (`Standard_D2als_v7`) is off and would

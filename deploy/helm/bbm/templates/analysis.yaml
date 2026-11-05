@@ -13,6 +13,16 @@ automountServiceAccountToken false, the pod-level field wins).
 {{- $csi := include "bbm.csi" . -}}
 {{- $sandbox := .Values.sandbox.enabled -}}
 {{- $sources := include "bbm.sourcesClaim" . -}}
+{{- /* The worker waits activeDeadlineSeconds + 60 s for a Job, plus up to
+60 s to delete a leftover Job first. A lease shorter than that lets another
+worker re-claim the job and run the PoC twice. */}}
+{{- if $sandbox }}
+{{- $deadline := int .Values.sandbox.jobTemplate.activeDeadlineSeconds }}
+{{- $lease := int $v.jobLeaseSeconds }}
+{{- if le $lease (add $deadline 120) }}
+{{- fail (printf "analysis.jobLeaseSeconds (%d) must be greater than sandbox.jobTemplate.activeDeadlineSeconds + 120 (%d + 120 = %d): the worker waits activeDeadlineSeconds + 60 s for a Job plus up to 60 s for a leftover Job, and a shorter lease lets another worker re-claim and run the PoC twice" $lease $deadline (add $deadline 120)) }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

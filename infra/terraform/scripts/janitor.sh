@@ -123,10 +123,8 @@ total=0
 while IFS=$'\t' read -r ns expires phase; do
   [[ -n "$ns" ]] || continue
   total=$((total + 1))
-  if [[ "$ns" =~ $sandbox_re ]]; then
-    log "sandbox companion, follows its release namespace: $ns"
-    continue
-  fi
+  # <ns>-sandbox companions carry the chart's labels, not bbm.io/ephemeral,
+  # so they never appear here; they are handled with their <ns> below.
   if [[ ! "$ns" =~ $name_re ]]; then
     log "skip (name is not run-<id>-<attempt> or pr-<n>): $ns"
     continue

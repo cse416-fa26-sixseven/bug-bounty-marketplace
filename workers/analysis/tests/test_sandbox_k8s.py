@@ -14,6 +14,7 @@ from analysis.config import Settings
 from analysis.sandbox import LOG_LIMIT_BYTES, STARTED_MARKER, SandboxResult
 from analysis.sandbox_k8s import (
     DELETE_WAIT_S,
+    MAX_TAR_BYTES,
     POLL_INTERVAL_S,
     WAIT_GRACE_S,
     KubeApiError,
@@ -106,7 +107,12 @@ def _job_status(kind: str, reason: str | None = None) -> dict:
     return {"conditions": [cond]}
 
 
-def _pod(exit_code: int | None, phase: str = "Succeeded", name: str = "poc-x-abc12") -> dict:
+def _pod(
+    exit_code: int | None,
+    phase: str = "Succeeded",
+    name: str = "poc-x-abc12",
+    owner_uid: str = "uid-123",
+) -> dict:
     if exit_code is None:
         status = {
             "phase": "Pending",
@@ -126,7 +132,11 @@ def _pod(exit_code: int | None, phase: str = "Succeeded", name: str = "poc-x-abc
                 {"name": "run", "state": {"terminated": {"exitCode": exit_code}}}
             ],
         }
-    return {"metadata": {"name": name}, "status": status}
+    metadata = {
+        "name": name,
+        "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "uid": owner_uid}],
+    }
+    return {"metadata": metadata, "status": status}
 
 
 class FakeKube:
@@ -575,6 +585,49 @@ def test_runner_uses_the_sanitised_name_everywhere(settings):
     assert next(v for v in volumes if v["name"] == "project")["secret"]["secretName"] == (
         "poc-poc-weird-chars"
     )
+
+
+def test_stale_pod_of_a_deleted_leftover_job_is_ignored(settings):
+    # The leftover Job's pod can linger in Terminating with the same job-name
+    # label; only the pod owned by the Job we created decides the verdict.
+    stale = _pod(0, name="poc-poc-1-old", owner_uid="uid-old")
+    stale["metadata"]["deletionTimestamp"] = "2026-11-05T00:00:00Z"
+    fresh = _pod(1, phase="Failed", name="poc-poc-1-new", owner_uid="uid-123")
+    api = FakeKube(
+        leftover=True,
+        polls=[_job_status("Failed", "BackoffLimitExceeded")],
+        pods=[stale, fresh],
+        log=FAIL_OUTPUT,
+    )
+    result = _run(settings, api)
+    assert result.status == "Failed"
+    assert ("read_pod_log", NS, "poc-poc-1-new", "run") in api.calls
+    assert not any(c[0] == "read_pod_log" and c[2] == "poc-poc-1-old" for c in api.calls)
+
+
+def test_only_a_stale_pod_present_is_an_infra_error_not_its_verdict(settings):
+    stale = _pod(0, name="poc-poc-1-old", owner_uid="uid-old")
+    api = FakeKube(polls=[_job_status("Failed", "BackoffLimitExceeded")], pods=[stale])
+    result = _run(settings, api)
+    assert result.status is None
+    assert result.infra_error.endswith("pod no pod)")
+    assert "read_pod_log" not in api.names()
+
+
+def test_oversized_project_fails_the_poc_without_touching_the_cluster(settings):
+    api = FakeKube()
+    clock = FakeClock()
+    tar = b"x" * (MAX_TAR_BYTES + 1)
+    result = run_poc_k8s(tar, "poc_1", settings, api=api, sleep=clock.sleep, clock=clock.now)
+    assert result.status == "Failed" and result.infra_error is None
+    assert result.log == (
+        f"The contract and PoC ({MAX_TAR_BYTES + 1} bytes as a tar) exceed the sandbox's"
+        " 900 KB project limit\n"
+    )
+    assert api.calls == []
+    # Exactly at the limit still runs.
+    api = FakeKube()
+    assert run_poc_k8s(b"x" * MAX_TAR_BYTES, "poc_1", settings, api=api).status == "Passed"
 
 
 # --- the adapter over the official client (fake underlying API objects) ----

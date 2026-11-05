@@ -71,8 +71,9 @@
   (otherwise the sandbox itself failed: `infra_error`, the job is retried up to 3×, including a
   Job that stayed Pending until its deadline); exit 137 → `Failed` naming both limits; exit 0 and
   `forge_passed(output)` → `Passed`; anything else → `Failed`. Logs are truncated to the last
-  64 KB. The API then moves the finding to `Verified` / `Rejected` (no-chain mode) or records
-  the verdict on-chain first (chain mode, unchanged).
+  64 KB. In no-chain mode the worker moves the finding to `Verified` / `Rejected` itself; in
+  chain mode it records only the verdict and the API applies it after the on-chain record
+  (unchanged).
 - The worker's job lease is raised to `JOB_LEASE_SECONDS=900` on AKS so it outlives the longest
   wait (660 s); otherwise a second worker would re-claim and run the PoC twice.
 
@@ -80,7 +81,8 @@
 
 - The **analysis ServiceAccount** (`bbm-analysis`) gets one namespaced Role in `<ns>-sandbox`:
   Jobs (create/get/list/watch/delete), Pods (get/list/watch), `pods/log` (get), Secrets
-  (create/get/delete). Nothing in the release namespace, nothing cluster-wide. Its pod mounts
+  (create/get/patch/delete; patch for the ownerReference). Nothing in the release namespace,
+  nothing cluster-wide. Its pod mounts
   its token only when `sandbox.enabled`, talks to the API server on 443 (already allowed by the
   analysis egress policy) and never holds a Docker socket.
 - The **Job pod** has no ServiceAccount token, no identity and no network. The
@@ -130,8 +132,10 @@
 `infra/terraform/scripts/kata-spike.sh <env> [<tag>]` runs the sandbox image as a Pod with the
 Job's RuntimeClass, nodeSelector, toleration and security context, waits for the pool to scale up,
 and exits 0 only if the pod completed **and** the guest kernel (`uname -r`) differs from the
-node's. It is run after the first `tf.sh compute test apply` (rollout step 2) and before staging
-and prod are applied. A runc result is a failure, never a silent downgrade.
+node's. If the RuntimeClass is missing it first reconciles the cluster (`az aks update`, see
+Consequences) and checks again. It is run after the first `tf.sh compute test apply` (rollout
+step 2) and before staging and prod are applied. A runc result is a failure, never a silent
+downgrade.
 
 ## Alternatives considered
 
@@ -174,9 +178,13 @@ and prod are applied. A runc result is a failure, never a silent downgrade.
   both go with the namespace (teardown, janitor). Previews create neither.
 - **Analysis on AKS** needs `llm-api-key` and `database-url` in the env Key Vault (staging/prod)
   and the ACR mirror images; test namespaces use the in-cluster Postgres.
-- **Rollout** (design §6): PR → `main`; `tf.sh compute test apply`; `kata-spike.sh test`; re-run
-  `integration-azure.yml`; `tf.sh compute staging apply`, `tf.sh compute prod apply`; CD deploys
-  the next green `main` to staging and, after approval, prod.
+- **Rollout** (design §6): PR → `main`; `tf.sh compute test apply`; `az aks update -g
+rg-bbm-test-compute-<abbr> -n aks-bbm-test-<abbr>` to reconcile the cluster so the RuntimeClass
+  `kata-vm-isolation` appears (a KataVmIsolation pool added to an existing cluster does not
+  install it until then; `kata-spike.sh` runs the same update when the RuntimeClass is missing);
+  `kata-spike.sh test`; re-run `integration-azure.yml`; `tf.sh compute staging apply` and
+  `tf.sh compute prod apply`, each followed by the same `az aks update`; CD deploys the next green
+  `main` to staging and, after approval, prod.
 - Removing `id-bbm-<env>-sandbox`, its federated credential and `azure.sandboxClientId`, and
   replacing the Azure Files share with the Blob adapter, are follow-up changes.
 

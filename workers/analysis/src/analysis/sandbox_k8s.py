@@ -55,6 +55,10 @@ WAIT_GRACE_S = 60
 POLL_INTERVAL_S = 2.0
 #: How long to wait for a leftover Job of the same name to disappear.
 DELETE_WAIT_S = 60
+#: Largest project tar stored in the Secret (the API object limit is 1 MiB
+#: and base64 adds a third; the API caps sources at 100 KB each, so a real
+#: project is ~210 KB). Bigger is the PoC's problem, not an outage.
+MAX_TAR_BYTES = 900_000
 _NAME_MAX = 63
 _NAME_PREFIX = "poc-"
 _UNSAFE = re.compile(r"[^a-z0-9-]+")
@@ -311,6 +315,15 @@ def run_poc_k8s(
         template = load_job_template(settings.sandbox_job_template)
     except ValueError as err:
         return _infra(str(err))
+    if len(tar) > MAX_TAR_BYTES:
+        return SandboxResult(
+            status="Failed",
+            log=(
+                f"The contract and PoC ({len(tar)} bytes as a tar) exceed the sandbox's"
+                f" {MAX_TAR_BYTES // 1000} KB project limit\n"
+            ),
+            infra_error=None,
+        )
     name = job_name(poc_id)
     timeout = settings.sandbox_timeout_s
     deadline_s = active_deadline(template)
@@ -327,7 +340,8 @@ def run_poc_k8s(
         _remove_leftovers(api, namespace, name, sleep, clock)
         api.create_secret(namespace, build_secret(name, namespace, tar))
         job = api.create_job(namespace, build_job(template, name, namespace, settings))
-        if (job.get("metadata") or {}).get("uid"):
+        uid = (job.get("metadata") or {}).get("uid")
+        if uid:
             api.patch_secret(
                 namespace, name, {"metadata": {"ownerReferences": [owner_reference(job)]}}
             )
@@ -337,7 +351,8 @@ def run_poc_k8s(
                 f"Sandbox Job did not finish within {outer_wait}s"
                 f" (activeDeadlineSeconds {deadline_s} + {WAIT_GRACE_S}s)"
             )
-        return _collect(api, namespace, name, container, finished, deadline_s, timeout)
+        uid = uid or (finished.get("metadata") or {}).get("uid")
+        return _collect(api, namespace, name, uid, container, finished, deadline_s, timeout)
     except KubeApiError as err:
         return _infra(f"Kubernetes API error: {err.reason}")
     finally:
@@ -389,17 +404,28 @@ def _wait_for_job(
         sleep(POLL_INTERVAL_S)
 
 
+def _owned_by(pod: JsonDict, uid: str | None) -> bool:
+    """Only the pods of this Job: a leftover Job of the same name deleted
+    just before (Background propagation) can leave its pod Terminating with
+    the same `job-name` label, and its log must never become the verdict."""
+    if uid is None:
+        return True
+    refs = (pod.get("metadata") or {}).get("ownerReferences") or []
+    return any(ref.get("uid") == uid for ref in refs)
+
+
 def _collect(
     api: KubeApi,
     namespace: str,
     name: str,
+    uid: str | None,
     container: str,
     job: JsonDict,
     deadline_s: int,
     timeout: int,
 ) -> SandboxResult:
     failed = _condition(job, "Failed")
-    pods = api.list_pods(namespace, name)
+    pods = [p for p in api.list_pods(namespace, name) if _owned_by(p, uid)]
     detail = "; ".join(_pod_summary(p) for p in pods) or "no pod"
     if failed and failed.get("reason") == "DeadlineExceeded":
         # forge is capped by `timeout -s KILL` well inside the deadline, so

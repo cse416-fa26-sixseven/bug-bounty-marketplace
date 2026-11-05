@@ -72,7 +72,8 @@ release namespace <ns> (bbm, run-<id>-<attempt>, pr-<n>)        namespace <ns>-s
   `timeout -s KILL 120` inside the container (same two-level limit as the Docker backend).
 - **Least privilege for the runner.** The analysis ServiceAccount gets a namespaced Role in
   `<ns>-sandbox` only: Jobs (create/get/list/watch/delete), Pods (get/list/watch), pods/log (get),
-  Secrets (create/get/delete). Nothing in the release namespace and nothing cluster-wide.
+  Secrets (create/get/patch/delete; patch for the ownerReference). Nothing in the release
+  namespace and nothing cluster-wide.
 - **How the project reaches the VM.** The worker builds the same tar as today
   (`build_tarball`) and stores it in a Secret `poc-<id>` (key `project.tar`, ≤ ~210 KB: two
   100 KB sources plus `foundry.toml`), mounted read-only at `/in`. No image build, no network
@@ -225,11 +226,16 @@ silently downgrading to runc.
 ## 6. Rollout
 
 1. PR `feat/sandbox-aks` → `main` (CI OK, fresh reviewer agent, merge commit).
-2. `tf.sh compute test apply` (adds the pool; no cluster recreate), `kata-spike.sh test`.
+2. `tf.sh compute test apply` (adds the pool; no cluster recreate), then
+   `az aks update -g rg-bbm-test-compute-<abbr> -n aks-bbm-test-<abbr>` to reconcile the cluster:
+   a KataVmIsolation pool added to an existing cluster does not install the RuntimeClass
+   `kata-vm-isolation` until then (`kata-spike.sh` runs the same update when it finds the
+   RuntimeClass missing). Then `kata-spike.sh test`.
 3. Push to `main` already triggered `integration-azure.yml`; re-run it so T18 runs with the pool
    present. Fix forward if red.
-4. `tf.sh compute staging apply`, `tf.sh compute prod apply`; CD deploys the next green `main`
-   to staging automatically and to prod after the reviewer approves.
+4. `tf.sh compute staging apply`, `tf.sh compute prod apply`, each followed by the same
+   `az aks update` reconcile; CD deploys the next green `main` to staging automatically and to
+   prod after the reviewer approves.
 5. Record cost: the pool is 0 nodes when idle; a running `Standard_D2as_v7` node is billed per
    hour plus the Azure Files share (pennies). `cost.md` carries the figures.
 

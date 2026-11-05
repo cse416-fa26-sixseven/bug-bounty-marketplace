@@ -118,7 +118,7 @@ flowchart TB
     subgraph Compute["Per env compute: rg-bbm-ENV-compute-ABBR (stack compute, disposable)"]
         AKS["AKS aks-bbm-ENV-ABBR (Free; prod Standard)<br/>CNI Overlay + Cilium, OIDC issuer, workload identity"]
         POOLS["Node pools: system 1-2 x Standard_D4as_v7 (prod 1-3);<br/>sandbox 0-1 x Standard_D2as_v7 (Kata VM isolation); apps off"]
-        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI,<br/>KEDA (keda_enabled, off while analysis is off), Container Insights (prod only)"]
+        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI,<br/>KEDA (keda_enabled, off until the queue is wired), Container Insights (prod only)"]
         FIC["Federated credentials for bbm-api, bbm-analysis,<br/>bbm-migrations, keda-operator, cert-manager<br/>(bbm-sandbox-runner: still emitted, no longer rendered)"]
         AKS --- POOLS
         AKS --- ADDONS

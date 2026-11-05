@@ -193,9 +193,12 @@ defaulting to `global.image.tag`); it is an env value, not a pod image, so
 PR previews must `--set analysis.sandbox.image.repository=bbm-preview/sandbox`
 (and `analysis.image.repository=bbm-preview/analysis`) the way they do for
 api/web, and `deploy.yml`'s "image exists in ACR" check has to list it
-explicitly. `analysis.jobLeaseSeconds` (900) must outlive
-`jobTemplate.activeDeadlineSeconds + 60 s`, the worker's wait for a Job,
-which includes the sandbox pool scaling up from zero.
+explicitly. **Lease rule:** `analysis.jobLeaseSeconds` (900) must be greater
+than `sandbox.jobTemplate.activeDeadlineSeconds + 120` (600 + 120); the chart
+fails to render otherwise. The worker waits `activeDeadlineSeconds + 60 s`
+for a Job (including the sandbox pool scaling up from zero) plus up to 60 s
+to delete a leftover Job of the same name first, and a lease shorter than
+that lets another worker re-claim the job and run the PoC twice.
 
 The sandbox pool (terraform `sandbox_pool_enabled`) carries node label
 `bbm.io/pool=sandbox`, taint `bbm.io/sandbox=true:NoSchedule` and
