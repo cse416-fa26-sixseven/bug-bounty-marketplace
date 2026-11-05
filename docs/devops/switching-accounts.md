@@ -100,7 +100,7 @@ If it does not, pick another size in `system_vm_size` (`envs/<env>/compute.tfvar
 | ------------------------------------------------------------------ | ---------------- | ------------------------------------ |
 | prod `system_only_critical_addons`, `apps_pool_enabled`            | `false`, `false` | `true`, `true` (apps `1`–`3` nodes)  |
 | prod `global.nodeSelector` (`deploy/helm/bbm/values-prod.yaml`)    | `{}`             | `{ bbm.io/pool: apps }`              |
-| `keda_enabled`                                                     | `false`          | `true` once the analysis worker runs |
+| `keda_enabled`                                                     | `false`          | `true` once something scales the worker with KEDA (architecture.md "Known gaps") |
 
 Notes:
 
@@ -138,7 +138,9 @@ resolves.
 
 1. Commit the tfvars and backend files `up.sh` rewrote ([azure-bootstrap.md section 9](azure-bootstrap.md#9-commit-what-upsh-rewrote)).
 2. Set the real secrets again: `llm-api-key` per env, the Sepolia secrets in the shared vault
-   (sections 10 and 12 of the bootstrap runbook).
+   (sections 10 and 12 of the bootstrap runbook). If the LLM resource (Azure AI Foundry, made by
+   hand, not Terraform) moves too, update `LLM_ENDPOINT` / `LLM_MODEL` under `analysis.extraEnv`
+   in `deploy/helm/bbm/values-{test,staging,prod}.yaml`.
 3. Add required reviewers if `github_reviewer_ids` is empty (section 11).
 4. Deploy: wait for a green `integration-azure.yml` run on `main`, then run `deploy.yml` with its
    `sha-<7>` tag (section 13).

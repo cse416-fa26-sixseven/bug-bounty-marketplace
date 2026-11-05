@@ -33,7 +33,7 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 | ---------------- | ------------------ | -------------------- | ---- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | web              | `apps/web`         | `bbm/web`            | 3000 | `/healthz`   | Next.js. Proxies `/api/*` to `API_INTERNAL_URL`. A `-mocked` variant is built with MSW enabled.                                        |
 | api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to `SOURCE_STORAGE_DIR` (local disk for now).                                         |
-| analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI). `POST /analyze` is a 501 stub. Slither + LLM explanation are planned.                                                |
+| analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI). Slither + LLM explanations; polls queued jobs from Postgres. Not deployed on AKS yet (needs shared sources).                                                |
 | anvil            | `contracts`        | `bbm/contracts`      | 8545 | JSON-RPC     | Local chain for compose and CI only.                                                                                                   |
 | contracts-deploy | `contracts`        | `bbm/contracts`      | n/a  | n/a          | One-shot `forge script script/Deploy.s.sol`. Writes `deployments/31337.json`.                                                          |
 | postgres         | upstream           | `postgres:16-alpine` | 5432 | `pg_isready` | Compose service, in-cluster pod in test-cluster namespaces (`<acr>/mirror/postgres:16-alpine`), or PG Flexible Server on staging/prod. |
@@ -162,14 +162,15 @@ flowchart LR
     WEB -- "/api/* proxy<br/>API_INTERNAL_URL" --> API
     API -- "private VNet, PG_POOL_MAX" --> PG[("PG Flexible Server<br/>snet-psql")]
     API -. "planned: Blob adapter" .-> BLOB[("Blob container sources")]
-    API -. "planned: enqueue" .-> Q[["Queue analysis-jobs"]]
-    Q -. "KEDA azure-queue scaler" .-> AN["analysis pods :8000<br/>0-3 replicas"]
+    API -- "insert queued jobs" --> PG
+    AN["analysis pods :8000<br/>(disabled on AKS)"] -. "claim jobs (FOR UPDATE SKIP LOCKED)" .-> PG
     AN -. "planned: read source" .-> BLOB
     AN -. "planned: PoC Job" .-> SBX["bbm-sandbox namespace<br/>Kata pods, deny-all egress"]
 ```
 
-Dashed edges are designed and provisioned (identities, roles, queue, container, ScaledObject
-template) but not yet wired in application code. `analysis.enabled` and `sandbox.enabled` are
+Dashed edges are designed and provisioned (identities, roles, container) but not yet in use on
+AKS. Jobs go through the Postgres `jobs` table; the provisioned Storage queue and the KEDA
+`azure-queue` ScaledObject template are unused. `analysis.enabled` and `sandbox.enabled` are
 `false` in the staging and prod values files. In test-cluster namespaces the api talks to the
 in-cluster Postgres pod instead of PG Flexible Server.
 
@@ -320,9 +321,10 @@ flowchart TB
   availability zones is not configured yet.
 - **Disruption.** PDBs are rendered only when the minimum replica count is above 1, so a
   single-replica environment can still drain nodes during upgrades.
-- **Queue-driven workers.** The analysis worker has a KEDA `azure-queue` ScaledObject on
-  `analysis-jobs` (0–3 replicas, 5 messages per replica, 300 s cooldown), so it scales to zero when
-  idle. It is disabled until the worker does real work.
+- **Worker scaling.** The chart has a KEDA `azure-queue` ScaledObject on `analysis-jobs` (0–3
+  replicas, 5 messages per replica, 300 s cooldown), but jobs go through Postgres and nothing writes
+  to that queue, so it stays off. Scale on the `jobs` table (e.g. a KEDA postgresql trigger)
+  instead when the worker runs on AKS.
 
 **Database**
 
@@ -377,7 +379,9 @@ recreated.
   `queued` rows; the worker claims them with `FOR UPDATE SKIP LOCKED`), and the LLM settings are
   in the env values. What's missing: the worker can't read uploaded sources, because the API keeps
   them in its own pod's `emptyDir` (`SOURCE_STORAGE_DIR`). Once sources are in Blob storage (the
-  adapter above), give the worker `DATABASE_URL` and the storage settings and set
+  adapter above), give the worker `DATABASE_URL` and the storage settings (add `database-url` to
+  the analysis SecretProviderClass and an env entry in `templates/analysis.yaml`), allow Postgres
+  egress in its NetworkPolicy (`bbm.postgresEgressRules`, like api and migrations), and set
   `analysis.enabled`. The KEDA ScaledObject scales on the Azure Storage queue, which nothing
   writes to yet; keep `analysis.keda.enabled` and `keda_enabled` off until it does, or scale on
   the job table instead.
