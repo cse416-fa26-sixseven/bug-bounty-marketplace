@@ -38,15 +38,36 @@ export ARBITER=0x...                                # the arbiter's address
 export CHALLENGE_WINDOW=600 REFUND_DELAY=600        # 10 minutes for a demo (defaults: 3 days, 3 hours)
 
 test "$(cast chain-id --rpc-url "$SEPOLIA_RPC_URL")" = 11155111
-forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL"                  # dry run, sends nothing
-forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL" --broadcast --slow
+# --gas-estimate-multiplier 800: forge 1.3.5 underestimates creation gas ~7x on current Sepolia
+forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL" --gas-estimate-multiplier 800                      # dry run, sends nothing
+forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL" --gas-estimate-multiplier 800 --broadcast --slow
 cat deployments/11155111.json
 ```
 
 `--rpc-url` is required even with `ETH_RPC_URL` set; without it forge
-simulates in memory. Trust `deployments/11155111.json` only after the
-broadcast succeeds. Besides the addresses it records `arbiter`,
-`challengeWindow` and `deployBlock`, where the API's event indexer starts.
+simulates in memory.
+
+`--gas-estimate-multiplier 800` is required too. Sepolia now runs a newer
+fork (200M block gas limit, repriced contract-creation and state costs) that
+Foundry 1.3.5's local simulation doesn't model, so it sends creations with
+about a seventh of the gas they need (e.g. 855,540 for `AuditorStaking`
+where the node's `eth_estimateGas` says ~4.57M) and they fail on-chain with
+`status 0` and `gasUsed == gasLimit`. 400 is still too low; 800 works and
+stays under the ~16.7M per-transaction cap. Only gas actually used is
+charged, so the larger limit costs nothing extra.
+
+Load-balanced public RPCs (e.g. publicnode) intermittently fail forge with
+`block not found`, because consecutive calls hit different backends. Just
+re-run the command.
+
+The script writes `deployments/11155111.json` before the transactions are
+sent, and a failed creation is still mined and burns the deployer's nonce,
+so after a failure the file names addresses that hold no code (and the next
+attempt deploys to different ones). Trust the file only when forge ends with
+`ONCHAIN EXECUTION COMPLETE & SUCCESSFUL`; otherwise fix the cause and
+deploy again. Besides the addresses the file records
+`arbiter`, `challengeWindow` and `deployBlock`, where the API's event
+indexer starts.
 
 Check the wiring:
 
