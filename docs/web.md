@@ -9,7 +9,7 @@ Next.js frontend. API calls go to `/api/*`, which `src/proxy.ts` forwards to
 - Routes: `/submit` and `/contracts` (developer), `/auditor` (queue, claim,
   stake gate, PoC), `/arbiter` (disputes), plus `/healthz` for the container
   probe. A header role switcher (zustand, persisted) picks the role; the
-  wallet is a mock (`src/lib/wallet`).
+  wallet depends on the API's chain (see [Wallets](#wallets)).
 - API clients live in `src/lib/api/{developer,auditor,arbiter}.ts` and parse
   responses with the `@bbm/shared` schemas.
 - Mocks: `src/mocks/handlers/{developer,auditor,arbiter}.ts`, composed in
@@ -18,6 +18,50 @@ Next.js frontend. API calls go to `/api/*`, which `src/proxy.ts` forwards to
   runs the same handlers under vitest.
 - Without mocking, only `/api/contracts` exists on the real API today, so
   most pages need the mocks.
+
+## Wallets
+
+`GET /api/chain` picks how the browser signs (`chainMode` in
+`src/lib/chain/config.ts`). Each mode implements the same `Wallet`
+(`src/lib/wallet`) and `TxClient` (`src/lib/chain/calls.ts`), so pages don't
+change:
+
+| API chain                         | Mode       | Signer                                                                                   |
+| --------------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| none (or anvil without an RPC URL) | `mock`     | Nothing is signed; mock addresses per role.                                              |
+| anvil, chain id 31337             | `local`    | The selected role's anvil key (`src/lib/chain/accounts.ts`), signed in on every role switch. |
+| anything else, e.g. Sepolia       | `injected` | The user's EIP-1193 wallet (`window.ethereum`, MetaMask), via viem's `custom` transport. |
+
+**Injected mode** (`src/lib/wallet/injected.ts`). **Connect wallet** runs
+`eth_requestAccounts`, switches the wallet to the API's chain
+(`wallet_switchEthereumChain`, falling back to `wallet_addEthereumChain` on
+4902), then signs in with SIWE. A transaction first makes sure the wallet is
+on that chain and the API session is still this account's, signing in again
+if not. It is then simulated (a revert shows its reason and nothing is sent),
+sent with `eth_sendTransaction` and awaited. Reads use the API's browser RPC
+URL when it publishes one, else the wallet. On reload, an account the wallet
+already shares counts as connected without a prompt while the session cookie
+is still its own. `accountsChanged` drops the connection, so the new account
+must connect (sign in) again. `chainChanged` to another chain shows "Wrong
+network". A missing wallet, a rejected prompt (4001) or a wallet left on the
+wrong chain shows a readable message next to the wallet button.
+
+**Roles with a real wallet.** The role switcher still chooses the workspace
+you see (developer, auditor, arbiter). Your identity is always the
+connected account: the API acts for the session's address and the contracts
+check `msg.sender`. One MetaMask account can fund bounties as a developer
+and stake and claim as an auditor. Rulings only work from the arbiter
+address the contracts were deployed with; any other account gets "Only the
+arbiter can rule on disputes." To act as another person, switch accounts in
+MetaMask and connect again. Anvil keys never leave the local chain.
+
+**Block-explorer links.** `src/lib/chain/networks.ts` is the one chain id →
+name/explorer map (Sepolia → <https://sepolia.etherscan.io>). After a user
+transaction confirms (fund, stake, dispute, rule, cancel, refund, withdraw),
+the header shows "Transaction confirmed" with a link to it (`TxNotice`).
+`TxLink` renders nothing on chains without an explorer, such as anvil.
+Verdicts and payouts are sent by the API's operator, and the API does not
+expose their hashes yet, so those statuses have no link.
 
 ## Sign-in
 
