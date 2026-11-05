@@ -3,7 +3,8 @@
 #   1. payout: fund -> analysis -> stake -> claim -> passing PoC -> Verified ->
 #      paid after the challenge window -> the auditor withdraws;
 #   2. dispute: a second bounty -> Verified -> the developer disputes -> the
-#      arbiter rules against the auditor -> Rejected, stake slashed by half.
+#      arbiter rules against the auditor -> Rejected, stake slashed by half;
+#      the auditor then withdraws what is left.
 # Users sign their own transactions with anvil's dev accounts (cast, inside the
 # contracts image) and sign in to the API with a signed message. Prints
 # LIFECYCLE OK. Can run again on the same stack (it tops the stake back up).
@@ -163,5 +164,13 @@ wait_status "$C2" "$F2" Rejected 30
 STAKE_AFTER=$(stake_of) || die "reading the stake failed"
 [ "$STAKE_AFTER" = "$((STAKE_BEFORE / 2))" ] || die "stake $STAKE_BEFORE -> $STAKE_AFTER, expected half"
 echo "ruling $RULING, finding Rejected, stake $STAKE_BEFORE -> $STAKE_AFTER wei"
+
+step "Auditor withdraws the remaining stake (no locks left)"
+ACTIVE=$(api -b "$WORK/aud" "$API/api/auditor/profile" | jq -r .activeSubmissions) || die "profile failed"
+[ "$ACTIVE" = "0" ] || die "auditor still holds $ACTIVE stake locks"
+cast_rpc send --private-key "$AUD_KEY" "$STAKING" "withdraw(uint256)" "$STAKE_AFTER" >/dev/null \
+  || die "stake withdraw failed"
+[ "$(stake_of)" = "0" ] || die "stake not withdrawn"
+echo "withdrew $STAKE_AFTER wei of stake"
 
 printf '\nLIFECYCLE OK\n'
