@@ -20,7 +20,15 @@ export function StakeWithdraw({
 }) {
   const chain = useChainCalls();
   const [amount, setAmount] = useState(() => weiToEth(profile.stake));
+  const [edited, setEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The amount defaults to the whole stake and follows profile refreshes
+  // (a withdrawal, more stake) until the auditor types their own amount.
+  const [shownStake, setShownStake] = useState(profile.stake);
+  if (profile.stake !== shownStake) {
+    setShownStake(profile.stake);
+    if (!edited) setAmount(weiToEth(profile.stake));
+  }
 
   const mutation = useMutation({
     mutationFn: async (amountWei: string) => {
@@ -29,6 +37,7 @@ export function StakeWithdraw({
     },
     onSuccess: () => {
       setError(null);
+      setEdited(false); // show what is left once the profile refreshes
       onWithdrawn();
     },
     onError: (err) => {
@@ -71,7 +80,10 @@ export function StakeWithdraw({
         step="any"
         value={amount}
         disabled={locked}
-        onChange={(e) => setAmount(e.target.value)}
+        onChange={(e) => {
+          setAmount(e.target.value);
+          setEdited(true);
+        }}
         className="w-32 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-white disabled:opacity-50"
       />
       <button

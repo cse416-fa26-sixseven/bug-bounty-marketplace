@@ -59,6 +59,36 @@ describe("StakeWithdraw", () => {
     expect(withdrawStake).toHaveBeenCalledWith({ auditorId: "auditor_1", amount: ethToWei("5000") });
   });
 
+  it("follows the stake when the profile refreshes, until the amount is edited", () => {
+    const view = (stake: string) =>
+      withQueryClient(<StakeWithdraw profile={profile({ stake: ethToWei(stake) })} auditorId="auditor_1" onWithdrawn={vi.fn()} />);
+    const { rerender } = render(view("5000"));
+    const input = screen.getByLabelText(/withdraw stake/i);
+
+    rerender(view("3000")); // e.g. after a partial withdrawal elsewhere
+    expect(input).toHaveValue(3000);
+
+    fireEvent.change(input, { target: { value: "100" } });
+    rerender(view("4000"));
+    expect(input).toHaveValue(100);
+  });
+
+  it("shows the remaining stake once a withdrawal lands and the profile refreshes", async () => {
+    withdrawStake.mockResolvedValueOnce(profile({ stake: ethToWei("4000") }));
+    const onWithdrawn = vi.fn();
+    const view = (stake: string) =>
+      withQueryClient(<StakeWithdraw profile={profile({ stake: ethToWei(stake) })} auditorId="auditor_1" onWithdrawn={onWithdrawn} />);
+    const { rerender } = render(view("5000"));
+    const input = screen.getByLabelText(/withdraw stake/i);
+
+    fireEvent.change(input, { target: { value: "1000" } });
+    fireEvent.click(screen.getByRole("button", { name: /withdraw stake/i }));
+    await waitFor(() => expect(onWithdrawn).toHaveBeenCalled());
+    rerender(view("4000"));
+
+    expect(input).toHaveValue(4000);
+  });
+
   it("refuses more than the stake without calling the API", () => {
     render(withQueryClient(<StakeWithdraw profile={profile()} auditorId="auditor_1" onWithdrawn={vi.fn()} />));
 
