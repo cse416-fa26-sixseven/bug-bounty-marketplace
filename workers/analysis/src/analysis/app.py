@@ -2,9 +2,10 @@
 
 - `GET /health`: liveness.
 - `POST /analyze`: stateless Slither + LLM analysis of one source file.
-- When `DATABASE_URL` is set, a background thread also runs the job poller
-  (see worker.py), which analyses contracts the API has queued and writes
-  their findings to Postgres.
+- When `DATABASE_URL` and a source store (`SOURCE_STORAGE_BLOB_CONTAINER_URL`
+  or `SOURCE_STORAGE_DIR`) are set, a background thread also runs the job
+  poller (see worker.py), which analyses contracts the API has queued and
+  writes their findings to Postgres.
 """
 
 import logging
@@ -54,7 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.explainer = make_explainer(settings)
     app.state.worker = None
     stop = threading.Event()
-    if settings.database_url and settings.source_storage_dir:
+    if settings.database_url and settings.source_storage_configured:
         app.state.worker = threading.Thread(
             target=run_worker,
             args=(settings, stop, app.state.explainer),
@@ -63,7 +64,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.worker.start()
     else:
-        log.info("job poller off: set DATABASE_URL and SOURCE_STORAGE_DIR to enable it")
+        log.info(
+            "job poller off: set DATABASE_URL and SOURCE_STORAGE_BLOB_CONTAINER_URL"
+            " (or SOURCE_STORAGE_DIR) to enable it"
+        )
     try:
         yield
     finally:

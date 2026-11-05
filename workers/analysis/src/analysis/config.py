@@ -28,6 +28,9 @@ def _opt(env: Mapping[str, str], name: str) -> str | None:
 class Settings:
     database_url: str | None
     source_storage_dir: Path | None
+    #: https://<account>.blob.core.windows.net/<container>, read with the
+    #: ambient Azure identity. Wins over source_storage_dir.
+    source_storage_blob_container_url: str | None
     poll_interval_s: float
     job_lease_s: int
     job_max_attempts: int
@@ -51,6 +54,7 @@ class Settings:
         return cls(
             database_url=_opt(env, "DATABASE_URL"),
             source_storage_dir=Path(storage) if storage else None,
+            source_storage_blob_container_url=_opt(env, "SOURCE_STORAGE_BLOB_CONTAINER_URL"),
             poll_interval_s=float(env.get("POLL_INTERVAL_SECONDS", "1")),
             job_lease_s=int(env.get("JOB_LEASE_SECONDS", "600")),
             job_max_attempts=int(env.get("JOB_MAX_ATTEMPTS", "3")),
@@ -80,6 +84,11 @@ class Settings:
         they are only taken when SANDBOX_ENABLED is set (otherwise they stay
         queued for a worker that has it)."""
         return ("analysis", "sandbox") if self.sandbox_enabled else ("analysis",)
+
+    @property
+    def source_storage_configured(self) -> bool:
+        """Whether some source store is set (see storage.open_store)."""
+        return bool(self.source_storage_blob_container_url or self.source_storage_dir)
 
     @property
     def llm_configured(self) -> bool:

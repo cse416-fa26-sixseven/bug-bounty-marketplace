@@ -9,8 +9,10 @@ from analysis.config import Settings
 from analysis.generated.models import Finding
 from analysis.jobs import claim_next
 from analysis.slither_runner import SlitherError
+from analysis.storage import BlobSourceStore
 
 from .conftest import insert_contract
+from .test_storage import FakeContainer
 
 FIXTURES = Path(__file__).parent / "fixtures"
 VAULT = (FIXTURES / "Vault.sol").read_bytes()
@@ -248,3 +250,52 @@ def test_no_transaction_is_held_open_while_slither_runs(pg_conn, settings, tmp_p
 
     assert run_analysis_job(pg_conn, _claim(pg_conn), settings, FakeExplainer(), slither=slither).ok
     assert seen == [TransactionStatus.IDLE]
+
+
+def test_reads_the_source_from_the_blob_store_it_is_given(pg_conn, tmp_path):
+    """On AKS the worker reads the container the API wrote; the local dir is unset."""
+    contract_id = insert_contract(pg_conn, VAULT, tmp_path)
+    key = pg_conn.execute(
+        "SELECT source_reference FROM contracts WHERE id = %s", (contract_id,)
+    ).fetchone()["source_reference"]
+    container = FakeContainer({key: VAULT})
+    settings = Settings.from_env({})
+    slither_calls: list = []
+
+    outcome = run_analysis_job(
+        pg_conn,
+        _claim(pg_conn),
+        settings,
+        FakeExplainer(),
+        slither=_slither(calls=slither_calls),
+        store=BlobSourceStore(container),
+    )
+
+    assert outcome.ok
+    assert container.requested == [key]
+    assert slither_calls == [(VAULT, "Vault.sol", "0.8.28")]
+    assert len(_findings(pg_conn, contract_id)) == 3
+
+
+def test_missing_blob_fails_without_retry(pg_conn, tmp_path):
+    contract_id = insert_contract(pg_conn, VAULT, tmp_path)
+    outcome = run_analysis_job(
+        pg_conn,
+        _claim(pg_conn),
+        Settings.from_env({}),
+        FakeExplainer(),
+        slither=_slither(),
+        store=BlobSourceStore(FakeContainer({})),
+    )
+    assert not outcome.ok and not outcome.retryable
+    assert outcome.reason.startswith("Source file not found: contracts/")
+    assert _findings(pg_conn, contract_id) == []
+
+
+def test_no_storage_configured_is_retryable(pg_conn, tmp_path):
+    insert_contract(pg_conn, VAULT, tmp_path)
+    outcome = run_analysis_job(
+        pg_conn, _claim(pg_conn), Settings.from_env({}), FakeExplainer(), slither=_slither()
+    )
+    assert not outcome.ok and outcome.retryable
+    assert outcome.reason.startswith("No source storage configured")

@@ -21,6 +21,7 @@ from .db import connect
 from .jobs import Job, claim_next, expire_exhausted, fail
 from .llm import Explainer, make_explainer
 from .sandbox_job import run_sandbox_job
+from .storage import SourceStore, open_store
 
 log = logging.getLogger("analysis.worker")
 
@@ -44,23 +45,31 @@ def load_dotenv(path: Path, env: MutableMapping[str, str]) -> None:
             env[key] = value
 
 
-def handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
+def handle(
+    job: Job,
+    settings: Settings,
+    explainer: Explainer | None,
+    store: SourceStore | None = None,
+) -> None:
     """Runs one job on its own connection and records any failure. Never
     raises: if the database is unreachable the job's lease expires and it is
-    retried, and the error is logged."""
+    retried, and the error is logged. `store` defaults to the one the
+    settings select."""
     try:
-        _handle(job, settings, explainer)
+        _handle(job, settings, explainer, store)
     except Exception:
         log.exception("job %s could not be run", job.id)
 
 
-def _handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
+def _handle(
+    job: Job, settings: Settings, explainer: Explainer | None, store: SourceStore | None
+) -> None:
     with connect(settings.database_url) as conn:
         try:
             if job.kind == "analysis":
-                outcome = run_analysis_job(conn, job, settings, explainer)
+                outcome = run_analysis_job(conn, job, settings, explainer, store=store)
             elif job.kind == "sandbox":
-                outcome = run_sandbox_job(conn, job, settings)
+                outcome = run_sandbox_job(conn, job, settings, store=store)
             else:
                 outcome = JobOutcome(ok=False, reason=f"No handler for {job.kind} jobs")
         except Exception as err:  # a bug or an outage: let the job be retried
@@ -85,11 +94,14 @@ def run(settings: Settings, stop: threading.Event, explainer: Explainer | None =
     """Polls until `stop` is set. A database error (e.g. the API has not
     applied its migrations yet) is logged and retried after a pause."""
     explainer = explainer if explainer is not None else make_explainer(settings)
+    # One store for every job: the Blob client caches its identity token.
+    store = open_store(settings)
     log.info(
-        "worker started (jobs %s, concurrency %d, LLM %s)",
+        "worker started (jobs %s, concurrency %d, LLM %s, sources %s)",
         "/".join(settings.job_kinds),
         settings.worker_concurrency,
         "on" if settings.llm_configured else "off: Slither text only",
+        type(store).__name__ if store is not None else "unconfigured",
     )
     in_flight: set[Future] = set()
     with ThreadPoolExecutor(settings.worker_concurrency) as pool:
@@ -117,7 +129,7 @@ def run(settings: Settings, stop: threading.Event, explainer: Explainer | None =
                             job.subject_id,
                             job.attempts,
                         )
-                        in_flight.add(pool.submit(handle, job, settings, explainer))
+                        in_flight.add(pool.submit(handle, job, settings, explainer, store))
             except psycopg.Error as err:
                 log.warning("job queue unavailable, retrying: %s", err)
                 stop.wait(settings.poll_interval_s)
@@ -128,14 +140,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     load_dotenv(_DOTENV, os.environ)
     settings = Settings.from_env()
-    missing = [
-        name
-        for name, value in (
-            ("DATABASE_URL", settings.database_url),
-            ("SOURCE_STORAGE_DIR", settings.source_storage_dir),
-        )
-        if not value
-    ]
+    missing = []
+    if not settings.database_url:
+        missing.append("DATABASE_URL")
+    if not settings.source_storage_configured:
+        missing.append("SOURCE_STORAGE_BLOB_CONTAINER_URL or SOURCE_STORAGE_DIR")
     if missing:
         sys.exit(f"bbm-analysis-worker: set {', '.join(missing)} (see .env.example)")
     stop = threading.Event()

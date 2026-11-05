@@ -16,14 +16,14 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 from psycopg.types.json import Jsonb
 
-from .analysis_job import JobOutcome
+from .analysis_job import NO_STORAGE, JobOutcome
 from .config import Settings
 from .jobs import Job, complete
 from .pgsafe import without_nul
 from .sandbox import SandboxResult, build_tarball, run_poc
 from .schema_base import to_iso_z
 from .solc import UnsupportedSolcError, pick_solc_for_all
-from .storage import read_source
+from .storage import SourceStore, open_store
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,11 @@ SELECT p.id, p.test_file_reference, p.sandbox_status, f.id AS finding_id,
 
 
 def run_sandbox_job(
-    conn: psycopg.Connection, job: Job, settings: Settings, runner: PocRunner = run_poc
+    conn: psycopg.Connection,
+    job: Job,
+    settings: Settings,
+    runner: PocRunner = run_poc,
+    store: SourceStore | None = None,
 ) -> JobOutcome:
     row = conn.execute(_LOAD, (job.subject_id,)).fetchone()
     # Don't hold the read transaction through a Docker run of up to minutes.
@@ -52,12 +56,13 @@ def run_sandbox_job(
         complete(conn, job.id)
         conn.commit()
         return JobOutcome(ok=True)
-    if settings.source_storage_dir is None:
-        return JobOutcome(ok=False, reason="SOURCE_STORAGE_DIR is not set", retryable=True)
+    store = store if store is not None else open_store(settings)
+    if store is None:
+        return JobOutcome(ok=False, reason=NO_STORAGE, retryable=True)
 
     try:
-        target = read_source(settings.source_storage_dir, row["source_reference"])
-        poc = read_source(settings.source_storage_dir, row["test_file_reference"])
+        target = store.read(row["source_reference"])
+        poc = store.read(row["test_file_reference"])
     except FileNotFoundError as err:
         return JobOutcome(ok=False, reason=f"Stored file missing: {err.filename}")
     try:

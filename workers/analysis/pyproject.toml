@@ -14,6 +14,8 @@ dependencies = [
     "semantic-version>=2.10",
     "slither-analyzer>=0.10",
     "solc-select>=1.0",
+    "azure-storage-blob>=12.26",
+    "azure-identity>=1.21",
 ]
 
 [project.scripts]
