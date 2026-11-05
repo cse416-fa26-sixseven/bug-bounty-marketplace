@@ -15,6 +15,7 @@ pipeline routes ([design](superpowers/specs/2026-10-19-analysis-pipeline-design.
 | `POST /api/auditor/claim`                              | JSON `{contractId, auditorId}`. Exclusive claim for `CLAIM_WINDOW_SECONDS`. `409` if already claimed, `404` if unknown.                                                                                                                                                        |
 | `POST /api/auditor/poc`                                | Multipart `findingId`, `auditorId`, `file` (`.t.sol`, at most 100 KB). The auditor must hold the active claim (`403`) and the finding must be `Flagged` (`409`). Marks it `Submitted` and queues a sandbox job. `201` with the `PoCSubmission`.                                |
 | `POST /api/auditor/findings`                           | Multipart `contractId`, `auditorId`, `title` (≤ 120 chars), `severity`, `description` (plain text, ≤ 4000 chars), `file` (`.t.sol`, at most 100 KB): reports a finding Slither missed, with its PoC. Same claim (`403`) and stake (`403`) checks as a PoC upload; `400` with `issues`, `404` for an unknown contract, `413` if too large. Creates the finding (`source: "auditor"`, `slitherDetector: "auditor-reported"`, the description in `llmExplanation`) already `Submitted`, with its PoC and sandbox job in one transaction. `201` with `{finding, poc}`. |
+| `PUT /api/findings/:id/note`                           | JSON `{note, developerId}`: the contract's developer sets their note on a finding (plain text, trimmed, ≤ 2000 chars; `""` or `null` clears it). With a chain configured the writer is the signed-in wallet (`401` without a session) and `developerId` is optional. `403` for anyone but the contract's developer, `400` with `issues`, `404` for an unknown finding. `200` with the updated `Finding`. |
 
 Every `Finding` carries `source` (`slither` or `auditor`), `title` and
 `reportedByAuditorId` (both `null` for Slither findings). Auditor-reported
@@ -25,6 +26,13 @@ description (the views label it as the auditor's, not as AI output), and
 `GET /api/findings/:id/raw` returns the report as submitted. On-chain the
 finding is keyed by `onchainId(findingId)` like any other, so
 `recordSubmission`/`recordVerification` need no change.
+
+Developer notes (R16) are `developerNote` / `developerNoteUpdatedAt` on the
+`Finding` (both `null` when there is none). Only the contract's developer
+writes a note; it is returned with the finding wherever the finding is
+returned, so the claiming auditor's and the arbiter's views show it
+read-only. Finding reads are not access-controlled today, so a note is
+exactly as visible as the finding it annotates.
 
 Analysis and sandbox jobs go into the Postgres `jobs` table and are processed
 by the analysis worker (`workers/analysis`). Stake, disputes and payouts are
