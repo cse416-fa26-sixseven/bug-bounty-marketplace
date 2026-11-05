@@ -24,6 +24,43 @@ export function findAuditorById(auditorId: string): AuditorProfile | undefined {
   return db.auditorProfiles.find((a) => a.id === auditorId);
 }
 
+/** Findings whose stake lock outlives the claim, as in the real API. */
+const LOCKING_STATUSES = new Set<Finding["status"]>(["Submitted", "Verified", "Disputed"]);
+
+/** Findings whose outcome releases the claim lock at once, as in the real API
+ * (PayoutCredited, a Failed verdict, a lost dispute). */
+const RELEASING_STATUSES = new Set<Finding["status"]>(["Paid", "Rejected"]);
+
+/** Mirrors AuditorStaking.activeSubmissions: one lock per contract the
+ * auditor holds an unexpired claim on or has a pending finding on. A claim
+ * whose PoC'd finding was paid or rejected no longer holds one. */
+export function activeSubmissionsFor(auditorId: string): number {
+  const locked = new Set<string>();
+  const released = new Set<string>();
+  const pocs = db.pocSubmissions.filter((p) => p.auditorId === auditorId);
+  for (const poc of pocs) {
+    const finding = findFindingById(poc.findingId);
+    if (!finding) continue;
+    if (LOCKING_STATUSES.has(finding.status)) locked.add(finding.contractId);
+    else if (RELEASING_STATUSES.has(finding.status)) released.add(finding.contractId);
+  }
+  for (const [contractId, claim] of Object.entries(db.claims)) {
+    if (
+      claim.auditorId === auditorId &&
+      new Date(claim.expiresAt).getTime() > Date.now() &&
+      !released.has(contractId)
+    ) {
+      locked.add(contractId);
+    }
+  }
+  return locked.size;
+}
+
+/** The profile as GET /api/auditor/profile returns it. */
+export function profileView(auditor: AuditorProfile): AuditorProfile {
+  return { ...auditor, activeSubmissions: activeSubmissionsFor(auditor.id) };
+}
+
 export interface QueueItem extends Contract {
   bounty: { amount: Wei; currency: string };
 }
@@ -97,7 +134,20 @@ export function postStake(auditorId: string, amount: string): AuditorProfile {
   if (!PositiveWeiSchema.safeParse(amount).success)
     throw new MockApiError(400, "Stake amount must be a positive wei amount");
   auditor.stake = (BigInt(auditor.stake) + BigInt(amount)).toString();
-  return auditor;
+  return profileView(auditor);
+}
+
+export function withdrawStake(auditorId: string, amount: string): AuditorProfile {
+  const auditor = findAuditorById(auditorId);
+  if (!auditor) throw new MockApiError(404, `Auditor ${auditorId} not found`);
+  if (!PositiveWeiSchema.safeParse(amount).success)
+    throw new MockApiError(400, "Withdrawal amount must be a positive wei amount");
+  if (activeSubmissionsFor(auditorId) > 0)
+    throw new MockApiError(409, "Your stake is locked by an active claim or a pending finding");
+  if (BigInt(amount) > BigInt(auditor.stake))
+    throw new MockApiError(400, "Withdrawal amount exceeds your stake");
+  auditor.stake = (BigInt(auditor.stake) - BigInt(amount)).toString();
+  return profileView(auditor);
 }
 
 function resolveSandbox(pocId: string, findingId: string): void {

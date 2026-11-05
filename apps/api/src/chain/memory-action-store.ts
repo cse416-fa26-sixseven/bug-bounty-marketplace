@@ -1,7 +1,11 @@
 import type { FindingStatus } from "@bbm/shared";
 import type { MemoryStore } from "../pipeline/memory-repository.js";
 import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, PayoutDue } from "./action-store.js";
-import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
+import {
+  DEFAULT_CHALLENGE_WINDOW_SECONDS,
+  PENDING_FINDING_STATUSES,
+  challengeWindowEnd,
+} from "./action-store.js";
 import { InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
 
 /** In-memory ChainActionStore over the same MemoryStore the repositories use.
@@ -119,7 +123,7 @@ export class MemoryChainActionStore implements ChainActionStore {
 
   async takeClaimUnlock(
     contractId: string,
-    options: { auditorId?: string; expiredBy?: Date },
+    options: { auditorId?: string; expiredBy?: Date; settling?: string },
   ): Promise<string | null> {
     const stored = this.store.contracts.get(contractId);
     if (!stored || stored.claimLock !== "locked" || !stored.claimedByAuditorId) return null;
@@ -128,6 +132,12 @@ export class MemoryChainActionStore implements ChainActionStore {
       if (!stored.claimExpiresAt || stored.claimExpiresAt.getTime() > options.expiredBy.getTime()) {
         return null;
       }
+    }
+    if (
+      (options.expiredBy !== undefined || options.settling !== undefined) &&
+      this.holdsPendingFinding(contractId, stored.claimedByAuditorId, options.settling)
+    ) {
+      return null;
     }
     stored.claimLock = "unlocking";
     return stored.claimedByAuditorId;
@@ -167,9 +177,23 @@ export class MemoryChainActionStore implements ChainActionStore {
       if (contractId !== undefined && id !== contractId) continue;
       if (stored.claimLock !== "locked" || !stored.claimedByAuditorId || !stored.claimExpiresAt) continue;
       if (stored.claimExpiresAt.getTime() > now.getTime()) continue;
+      if (this.holdsPendingFinding(id, stored.claimedByAuditorId)) continue;
       out.push({ contractId: id, auditorId: stored.claimedByAuditorId });
     }
     return out;
+  }
+
+  /** Same rule as the Postgres holdsPendingFinding. `except` is left out. */
+  private holdsPendingFinding(contractId: string, auditorId: string, except?: string): boolean {
+    const auditor = auditorId.toLowerCase();
+    for (const poc of this.store.pocs.values()) {
+      if (poc.auditorId.toLowerCase() !== auditor) continue;
+      if (poc.findingId === except) continue;
+      const finding = this.store.findings.get(poc.findingId);
+      if (finding?.contractId !== contractId) continue;
+      if (PENDING_FINDING_STATUSES.has(finding.status)) return true;
+    }
+    return false;
   }
 
   async listPayoutsDue(now: Date): Promise<PayoutDue[]> {

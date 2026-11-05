@@ -200,9 +200,12 @@ describe("review fixes", () => {
   });
 
   it("cancel releases the auditor's claim lock before expiring the contract", async () => {
+    // releaseClaimLock, not the expiry sweep: the sweep keeps a lock that backs
+    // a pending finding, which can never settle once the bounty is closed.
     const chainActions = {
       chainConfigured: true,
-      releaseExpiredLocks: vi.fn(async () => 1),
+      releaseClaimLock: vi.fn(async () => true),
+      releaseExpiredLocks: vi.fn(async () => 0),
       lockClaim: vi.fn(async () => undefined),
     };
     const { app, upload, fundOnChain } = setup({ chainActions });
@@ -215,15 +218,14 @@ describe("review fixes", () => {
       headers: { cookie: dev },
     });
     expect(res.statusCode).toBe(200);
-    expect(chainActions.releaseExpiredLocks).toHaveBeenCalledWith(expect.any(Date), id);
-    const [at] = chainActions.releaseExpiredLocks.mock.calls[0] as unknown as [Date];
-    expect(at.getTime()).toBeGreaterThan(Date.now() + 365 * 86_400_000);
+    expect(chainActions.releaseClaimLock).toHaveBeenCalledWith(id);
+    expect(chainActions.releaseExpiredLocks).not.toHaveBeenCalled();
   });
 
   it("keeps the contract when the claim lock cannot be released", async () => {
     const chainActions = {
       chainConfigured: true,
-      releaseExpiredLocks: vi.fn(async () => {
+      releaseClaimLock: vi.fn(async () => {
         throw new Error("rpc down");
       }),
     };
