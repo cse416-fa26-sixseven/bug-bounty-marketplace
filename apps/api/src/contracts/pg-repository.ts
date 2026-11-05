@@ -308,10 +308,23 @@ export class PgContractRepository implements ContractRepository {
     return result.rows[0]?.funded ?? false;
   }
 
-  async markFunded(contractId: string, at: Date): Promise<void> {
+  async markFunded(contractId: string, at: Date, deadline?: Date): Promise<void> {
+    if (!deadline) {
+      await this.pool.query(
+        "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",
+        [contractId, at],
+      );
+      return;
+    }
+    // One statement: the deadline moves only while the bounty is unfunded, so
+    // a repeat call cannot change a funded bounty's terms.
     await this.pool.query(
-      "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",
-      [contractId, at],
+      `WITH b AS (
+         UPDATE bounties SET deadline = $3, onchain_funded_at = $2
+          WHERE contract_id = $1 AND onchain_funded_at IS NULL
+          RETURNING contract_id)
+       UPDATE contracts SET deadline = $3 WHERE id IN (SELECT contract_id FROM b)`,
+      [contractId, at, deadline],
     );
   }
 

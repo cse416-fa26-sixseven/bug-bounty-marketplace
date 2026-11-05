@@ -165,9 +165,16 @@ export class MemoryContractRepository implements ContractRepository {
     return this.store.onchainFunded.has(contractId);
   }
 
-  async markFunded(contractId: string, at: Date): Promise<void> {
-    if (!this.store.onchainFunded.has(contractId))
-      this.store.onchainFunded.set(contractId, at.toISOString());
+  async markFunded(contractId: string, at: Date, deadline?: Date): Promise<void> {
+    if (this.store.onchainFunded.has(contractId)) return;
+    if (deadline) {
+      const stored = this.store.contracts.get(contractId);
+      if (!stored) return;
+      stored.contract.deadline = deadline.toISOString();
+      const bounty = this.store.bounties.get(stored.contract.bountyId);
+      if (bounty) bounty.deadline = deadline.toISOString();
+    }
+    this.store.onchainFunded.set(contractId, at.toISOString());
   }
 
   async setContractStatus(

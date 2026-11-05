@@ -406,6 +406,19 @@ export function describeRepositories(
       expect(await h.jobsFor(poc.id)).toEqual([{ kind: "sandbox", status: "queued" }]);
     });
 
+    it("markFunded with a deadline moves an unfunded bounty's deadline, never a funded one's", async () => {
+      const { contract } = await insert();
+      const later = new Date("2031-06-01T00:00:00.000Z");
+      await h.contracts.markFunded(contract.id, T0, later);
+      expect(await h.contracts.isFunded(contract.id)).toBe(true);
+      expect((await h.contracts.findContractById(contract.id, T0))?.deadline).toBe(later.toISOString());
+      expect((await h.contracts.findBounty(contract.id))?.deadline).toBe(later.toISOString());
+
+      await h.contracts.markFunded(contract.id, minutes(1), new Date("2032-01-01T00:00:00.000Z"));
+      expect((await h.contracts.findContractById(contract.id, T0))?.deadline).toBe(later.toISOString());
+      expect((await h.contracts.findBounty(contract.id))?.deadline).toBe(later.toISOString());
+    });
+
     it("markFunded, fundedOnly queue, findBounty and setContractStatus", async () => {
       const funded = await insertAnalysed();
       const unfunded = await insertAnalysed();

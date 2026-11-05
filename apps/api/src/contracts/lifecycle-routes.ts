@@ -69,11 +69,23 @@ export function registerContractLifecycleRoutes(
       bounty !== null &&
       onchain.state === BOUNTY_STATE_OPEN &&
       getAddress(onchain.developer) === getAddress(contract.developerAddress) &&
-      onchain.amount === BigInt(bounty.amount) &&
-      onchain.deadline === BigInt(Math.floor(Date.parse(contract.deadline) / 1000));
+      onchain.amount === BigInt(bounty.amount);
     if (!matches) return reply.code(409).send({ error: "bounty not funded on-chain" });
-    await contracts.markFunded(contract.id, now());
-    return contract;
+    const at = now();
+    const storedDeadline = BigInt(Math.floor(Date.parse(contract.deadline) / 1000));
+    if (onchain.deadline === storedDeadline) {
+      await contracts.markFunded(contract.id, at);
+    } else {
+      // Funding waits for the analysis, so the upload's deadline may have
+      // passed: the developer funds with a later one and the API adopts it.
+      // A bounty already funded keeps its terms.
+      const onchainDeadline = new Date(Number(onchain.deadline) * 1000);
+      if ((await contracts.isFunded(contract.id)) || onchainDeadline <= at) {
+        return reply.code(409).send({ error: "bounty not funded on-chain" });
+      }
+      await contracts.markFunded(contract.id, at, onchainDeadline);
+    }
+    return (await contracts.findContractById(contract.id, at)) ?? contract;
   });
 
   for (const action of ["cancel", "reclaim"] as const) {

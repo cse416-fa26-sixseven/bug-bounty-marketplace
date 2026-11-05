@@ -43,7 +43,7 @@ describeRepositories(
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
       findBounty: (id) => repo.findBounty(id),
       listClaimedContractIds: (id, now) => repo.listClaimedContractIds(id, now),
-      markFunded: (id, at) => repo.markFunded(id, at),
+      markFunded: (id, at, deadline) => repo.markFunded(id, at, deadline),
       isFunded: (id) => repo.isFunded(id),
       isAnalysisDone: (id) => repo.isAnalysisDone(id),
       setContractStatus: (id, next, now) => repo.setContractStatus(id, next, now),

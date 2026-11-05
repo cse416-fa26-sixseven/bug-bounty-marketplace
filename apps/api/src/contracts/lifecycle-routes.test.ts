@@ -41,11 +41,16 @@ function setup(options: { chainActions?: unknown } = {}) {
     pipeline: new MemoryPipelineRepository(store),
     findingStatus: new MemoryChainActionStore(store),
   });
-  function fundOnChain(contractId: string, state = 1, developer: Address = DEVELOPER.address) {
+  function fundOnChain(
+    contractId: string,
+    state = 1,
+    developer: Address = DEVELOPER.address,
+    deadline = DEADLINE,
+  ) {
     bounties.set(onchainId(contractId), {
       developer,
       amount: BigInt(AMOUNT),
-      deadline: BigInt(Date.parse(DEADLINE) / 1000),
+      deadline: BigInt(Date.parse(deadline) / 1000),
       state,
       submissionCount: 0n,
       verifiedFinding: ZERO,
@@ -118,6 +123,30 @@ describe("contract lifecycle routes with a chain", () => {
 
     job.status = "done";
     expect((await funded()).statusCode).toBe(200);
+  });
+
+  it("adopts a later on-chain deadline for an unfunded bounty, but not a past one or a funded one's", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const funded = (id: string) =>
+      app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+
+    const past = (await upload(dev)).json().id as string;
+    fundOnChain(past, 1, DEVELOPER.address, "2020-01-01T00:00:00.000Z");
+    expect((await funded(past)).statusCode).toBe(409);
+
+    const id = (await upload(dev)).json().id as string;
+    const LATER = "2031-06-01T00:00:00.000Z";
+    fundOnChain(id, 1, DEVELOPER.address, LATER);
+    const res = await funded(id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deadline).toBe(LATER);
+
+    // Funded: its terms no longer move.
+    fundOnChain(id, 1, DEVELOPER.address, "2032-01-01T00:00:00.000Z");
+    expect((await funded(id)).statusCode).toBe(409);
+    fundOnChain(id, 1, DEVELOPER.address, LATER);
+    expect((await funded(id)).statusCode).toBe(200);
   });
 
   it("refuses to mark funded when the chain does not hold the bounty", async () => {

@@ -60,8 +60,11 @@ export interface ContractRepository {
   isAnalysisDone(contractId: string): Promise<boolean>;
   /** True once the bounty is confirmed funded on-chain (markFunded). */
   isFunded(contractId: string): Promise<boolean>;
-  /** Records that the bounty is funded on-chain. Idempotent. */
-  markFunded(contractId: string, at: Date): Promise<void>;
+  /** Records that the bounty is funded on-chain. Idempotent. With `deadline`,
+   * an unfunded bounty first takes that deadline (contract and bounty): funding
+   * waits for the analysis, so the developer may fund with a later deadline
+   * than the one entered at upload. A funded bounty keeps its deadline. */
+  markFunded(contractId: string, at: Date, deadline?: Date): Promise<void>;
   /** Moves the contract through the contract status machine. Null when the
    * contract is unknown; same status is a no-op; an illegal move throws
    * InvalidTransitionError. */
