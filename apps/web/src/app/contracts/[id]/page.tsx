@@ -7,6 +7,7 @@ import { developerApi, ApiError } from "@/lib/api";
 import { useChainCalls } from "@/lib/chain/use-chain";
 import { AnalysisNotice } from "../_components/AnalysisNotice";
 import { FindingCard } from "../_components/FindingCard";
+import { FundBounty } from "../_components/FundBounty";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -56,7 +57,9 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
 
   const cancelMutation = useMutation({
     mutationFn: async () => {
-      if (chain) await chain.deleteBounty(id);
+      // A bounty is funded only after the analysis, so there may be nothing
+      // on-chain to delete; the API checks either way.
+      if (chain && (await chain.isFunded(id))) await chain.deleteBounty(id);
       return developerApi.cancelContract(id);
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["contract", id] }),
@@ -149,6 +152,8 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
       </div>
       {reclaimError && <p className="mt-2 text-sm text-red-400">{reclaimError}</p>}
       {cancelError && <p className="mt-2 text-sm text-red-400">{cancelError}</p>}
+
+      <FundBounty contract={contract} analysis={analysisQuery.data} />
 
       <h2 className="mt-10 text-lg font-semibold text-white">Findings</h2>
       {findingsQuery.isError ? (

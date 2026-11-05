@@ -25,6 +25,8 @@ describe("AnalysisNotice", () => {
     );
     expect(screen.getByText(/Analysis failed/)).toBeTruthy();
     expect(screen.getByText(/Expected type name/)).toBeTruthy();
+    expect(screen.getByText(/can't be funded or claimed/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /submit the fixed file/i }).getAttribute("href")).toBe("/submit");
   });
 
   it("says no issues were found when analysis finished with zero findings", () => {

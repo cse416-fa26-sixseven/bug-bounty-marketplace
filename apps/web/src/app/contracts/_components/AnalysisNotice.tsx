@@ -1,4 +1,5 @@
 import React from "react";
+import Link from "next/link";
 import type { AnalysisStatus } from "@bbm/shared";
 
 /** What the developer sees in place of findings while there are none: the
@@ -22,6 +23,13 @@ export function AnalysisNotice({
             {status.error}
           </pre>
         )}
+        <p className="mt-2 text-sm text-red-200">
+          This contract can't be funded or claimed. Fix the error and{" "}
+          <Link href="/submit" className="font-medium text-emerald-300 underline">
+            submit the fixed file
+          </Link>
+          .
+        </p>
       </div>
     );
   }
