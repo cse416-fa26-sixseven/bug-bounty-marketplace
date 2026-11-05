@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import {
+  AUDITOR_FINDING_DETECTOR,
+  AuditorFindingFieldsSchema,
   compareWei,
+  type AuditorFindingReport,
   type PoCSubmission,
   PocSourceFilenameSchema,
   PocSourceSizeSchema,
@@ -13,7 +16,9 @@ import type { AuditorStakingPort } from "../chain/auditor-staking.js";
 import type { ChainActions } from "../chain/actions.js";
 import type { PipelineConfig } from "./config.js";
 import { canTransitionFinding } from "../status/transitions.js";
-import type { PipelineRepository } from "./repository.js";
+import { toFinding } from "./mapping.js";
+import { registerDeveloperNoteRoutes } from "./note-routes.js";
+import type { FindingRecord, NewJob, PipelineRepository } from "./repository.js";
 import type { PocVerdictSource } from "./verdict-source.js";
 import { resolveActor, type Auth } from "../auth/session.js";
 
@@ -64,6 +69,7 @@ export function pocStorageKey(pocId: string, sha256: string): string {
 export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRouteDeps): void {
   const { contracts, pipeline, storage, config, chainActions, stakeReader, verdicts } = deps;
   const identity = deps.identity ?? null;
+  registerDeveloperNoteRoutes(app, { pipeline, config, identity });
 
   app.get<{ Params: { id: string } }>("/api/contracts/:id/findings", async (request, reply) => {
     const now = config.now();
@@ -183,10 +189,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
       return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
     }
-    const issues = [
-      ...(PocSourceFilenameSchema.safeParse(body.file.filename).error?.issues ?? []),
-      ...(PocSourceSizeSchema.safeParse(body.file.bytes.byteLength).error?.issues ?? []),
-    ].map((issue) => issue.message);
+    const issues = pocFileIssues(body.file);
     if (issues.length > 0) {
       return reply.code(400).send({ error: "Invalid PoC submission", issues });
     }
@@ -196,65 +199,190 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     if (!finding) return reply.code(404).send({ error: "Not found" });
     const claim = await contracts.findActiveClaim(finding.contractId, now);
     if (!claim || claim.auditorId !== auditorId) {
-      return reply.code(403).send({ error: "You do not hold an active claim on this contract" });
+      return reply.code(403).send({ error: NO_CLAIM });
     }
     if (!canTransitionFinding(finding.status, "Submitted")) {
       return reply.code(409).send({ error: "Finding is not Flagged" });
     }
 
-    // Stake gate: checked before any bytes are stored, so a rejected upload
-    // leaves nothing behind.
-    if (stakeReader === null) {
-      // Not a silent pass: every skipped check is logged so a deployment
-      // without CHAIN_RPC_URL shows up in the logs.
-      console.warn(`POST /api/auditor/poc: stake check skipped for ${auditorId}, no chain configured`);
-    } else {
-      if (!ADDRESS.test(auditorId)) {
-        return reply
-          .code(400)
-          .send({ error: "auditorId must be the auditor's 0x wallet address for the stake check" });
-      }
-      const stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
-      if (compareWei(stake, REQUIRED_STAKE_WEI) < 0) {
-        return reply.code(403).send({ error: "Auditor stake is below the required stake" });
-      }
-    }
+    if (!(await passesStakeGate("POST /api/auditor/poc", auditorId, reply))) return reply;
 
-    const pocId = `poc_${randomUUID()}`;
-    const sha256 = createHash("sha256").update(body.file.bytes).digest("hex");
-    const testFileReference = pocStorageKey(pocId, sha256);
-    // Bytes first, row second: a failed insert leaves an orphan object rather
-    // than a row pointing at nothing (same rule as contract uploads).
-    await storage.put(testFileReference, body.file.bytes);
-
-    const submittedAt = now.toISOString();
-    const poc: PoCSubmission = {
-      id: pocId,
-      findingId,
-      auditorId,
-      testFileReference,
-      submittedAt,
-      sandboxStatus: "Pending",
-      sandboxLog: null,
-    };
+    const poc = await storePoc(findingId, auditorId, body.file.bytes, now);
     const outcome = await pipeline.submitPoc({
       poc,
       findingId,
-      now: submittedAt,
-      job: { id: `job_${randomUUID()}`, kind: "sandbox", subjectId: pocId, createdAt: submittedAt },
+      now: poc.submittedAt,
+      job: sandboxJob(poc),
     });
     if (outcome === "no_claim") {
-      return reply.code(403).send({ error: "You do not hold an active claim on this contract" });
+      return reply.code(403).send({ error: NO_CLAIM });
     }
     if (outcome === "not_flagged") {
       return reply.code(409).send({ error: "Finding is not Flagged" });
     }
-    // The stored row is Pending until a verdict exists. Only a decided verdict
-    // is written back; the sandbox job queued above is left as it is.
+    return reply.code(201).send(await withVerdict(poc));
+  });
+
+  // US5: the auditor holding the claim reports a finding Slither missed,
+  // with the PoC that proves it. Same checks as a PoC upload; the finding is
+  // born Submitted and follows the same sandbox → Verified/Rejected path.
+  app.post("/api/auditor/findings", async (request, reply) => {
+    const body = await readMultipart(request);
+    if (!body.ok) {
+      return body.reason === "too_large"
+        ? reply.code(413).send({ error: "PoC file exceeds the 100 KB limit" })
+        : reply.code(400).send({ error: "Expected a multipart/form-data body" });
+    }
+    const actor = resolveActor(identity, request, reply, body.fields.auditorId);
+    if (!actor.ok) return reply;
+    const auditorId = actor.id;
+    const { contractId, title, severity, description } = body.fields;
+    if (!contractId || !auditorId || !title || !severity || !description || !body.file) {
+      return reply.code(400).send({
+        error: "contractId, auditorId, title, severity, description and file are required",
+      });
+    }
+    if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
+      return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
+    }
+    const fields = AuditorFindingFieldsSchema.safeParse({ contractId, title, severity, description });
+    const issues = [
+      ...(fields.error?.issues.map((issue) => issue.message) ?? []),
+      ...pocFileIssues(body.file),
+    ];
+    if (!fields.success || issues.length > 0) {
+      return reply.code(400).send({ error: "Invalid finding report", issues });
+    }
+    const report = fields.data;
+
+    const now = config.now();
+    const contract = await contracts.findContractById(report.contractId, now);
+    if (!contract) return reply.code(404).send({ error: "Not found" });
+    const claim = await contracts.findActiveClaim(contract.id, now);
+    if (!claim || claim.auditorId !== auditorId) {
+      return reply.code(403).send({ error: NO_CLAIM });
+    }
+
+    if (!(await passesStakeGate("POST /api/auditor/findings", auditorId, reply))) return reply;
+
+    const findingId = `finding_${randomUUID()}`;
+    const poc = await storePoc(findingId, auditorId, body.file.bytes, now);
+    const at = poc.submittedAt;
+    const finding: FindingRecord = {
+      id: findingId,
+      contractId: contract.id,
+      severity: report.severity,
+      slitherDetector: AUDITOR_FINDING_DETECTOR,
+      slitherConfidence: "n/a",
+      // GET /api/findings/:id/raw returns the report as submitted.
+      rawOutput: {
+        source: "auditor",
+        reportedByAuditorId: auditorId,
+        title: report.title,
+        severity: report.severity,
+        description: report.description,
+      },
+      rawOutputReference: `/api/findings/${findingId}/raw`,
+      llmExplanation: report.description,
+      explanationSource: "auditor",
+      status: "Submitted",
+      statusHistory: [{ status: "Submitted", changedAt: at }],
+      isFalsePositive: false,
+      challengeWindowExpiresAt: null,
+      createdAt: at,
+      source: "auditor",
+      title: report.title,
+      reportedByAuditorId: auditorId,
+      developerNote: null,
+      developerNoteUpdatedAt: null,
+    };
+    const outcome = await pipeline.submitAuditorFinding({
+      finding,
+      poc,
+      job: sandboxJob(poc),
+      now: at,
+    });
+    if (outcome === "no_claim") {
+      return reply.code(403).send({ error: NO_CLAIM });
+    }
+    const created: AuditorFindingReport = {
+      finding: toFinding(finding, claim),
+      poc: await withVerdict(poc),
+    };
+    return reply.code(201).send(created);
+  });
+
+  function pocFileIssues(file: { filename: string; bytes: Buffer }): string[] {
+    return [
+      ...(PocSourceFilenameSchema.safeParse(file.filename).error?.issues ?? []),
+      ...(PocSourceSizeSchema.safeParse(file.bytes.byteLength).error?.issues ?? []),
+    ].map((issue) => issue.message);
+  }
+
+  /** Stake gate: checked before any bytes are stored, so a rejected upload
+   * leaves nothing behind. Sends the error reply and returns false on failure. */
+  async function passesStakeGate(
+    route: string,
+    auditorId: string,
+    reply: FastifyReply,
+  ): Promise<boolean> {
+    if (stakeReader === null) {
+      // Not a silent pass: every skipped check is logged so a deployment
+      // without CHAIN_RPC_URL shows up in the logs.
+      console.warn(`${route}: stake check skipped for ${auditorId}, no chain configured`);
+      return true;
+    }
+    if (!ADDRESS.test(auditorId)) {
+      void reply
+        .code(400)
+        .send({ error: "auditorId must be the auditor's 0x wallet address for the stake check" });
+      return false;
+    }
+    const stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
+    if (compareWei(stake, REQUIRED_STAKE_WEI) < 0) {
+      void reply.code(403).send({ error: "Auditor stake is below the required stake" });
+      return false;
+    }
+    return true;
+  }
+
+  /** Stores the PoC bytes and returns its Pending submission. Bytes first,
+   * row second: a failed insert leaves an orphan object rather than a row
+   * pointing at nothing (same rule as contract uploads). */
+  async function storePoc(
+    findingId: string,
+    auditorId: string,
+    bytes: Buffer,
+    now: Date,
+  ): Promise<PoCSubmission> {
+    const pocId = `poc_${randomUUID()}`;
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const testFileReference = pocStorageKey(pocId, sha256);
+    await storage.put(testFileReference, bytes);
+    return {
+      id: pocId,
+      findingId,
+      auditorId,
+      testFileReference,
+      submittedAt: now.toISOString(),
+      sandboxStatus: "Pending",
+      sandboxLog: null,
+    };
+  }
+
+  /** The stored row is Pending until a verdict exists. Only a decided verdict
+   * is written back; the queued sandbox job is left as it is. */
+  async function withVerdict(poc: PoCSubmission): Promise<PoCSubmission> {
     const sandboxStatus = await verdicts.requestVerdict({ ...poc });
     if (sandboxStatus !== "Pending") {
-      await pipeline.recordVerdict(pocId, sandboxStatus);
+      await pipeline.recordVerdict(poc.id, sandboxStatus);
     }
-    return reply.code(201).send({ ...poc, sandboxStatus });
-  });
+    return { ...poc, sandboxStatus };
+  }
+}
+
+const NO_CLAIM = "You do not hold an active claim on this contract";
+
+function sandboxJob(poc: PoCSubmission): NewJob {
+  return { id: `job_${randomUUID()}`, kind: "sandbox", subjectId: poc.id, createdAt: poc.submittedAt };
 }

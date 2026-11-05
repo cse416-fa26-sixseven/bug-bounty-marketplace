@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, auditorApi } from "@/lib/api";
@@ -8,6 +8,7 @@ import { useAuditorId, useRequiredStakeWei } from "@/lib/chain/use-chain";
 import { ClaimCountdown } from "../../_components/ClaimCountdown";
 import { REQUIRED_STAKE_WEI, StakeGate, isStakeMet } from "../../_components/StakeGate";
 import { FindingCard } from "../../_components/FindingCard";
+import { ReportFindingForm } from "../../_components/ReportFindingForm";
 
 /** True while a finding is still awaiting an auditor action or sandbox
  * result - used to decide whether to keep polling. */
@@ -22,6 +23,12 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const queryClient = useQueryClient();
   const auditorId = useAuditorId();
   const requiredStakeWei = useRequiredStakeWei(REQUIRED_STAKE_WEI);
+  // Ticks so the report form hides once the claim lapses.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const contractQuery = useQuery({
     queryKey: ["contract", contractId],
@@ -41,6 +48,8 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const profileQuery = useQuery({
     queryKey: ["auditor-profile", auditorId],
     queryFn: () => auditorApi.getProfile(auditorId),
+    // Testnet mode before a wallet is connected: there is no auditor yet.
+    enabled: auditorId !== "",
   });
 
   const refetchFindings = () =>
@@ -48,6 +57,9 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const refetchProfile = () =>
     void queryClient.invalidateQueries({ queryKey: ["auditor-profile", auditorId] });
 
+  if (auditorId === "") {
+    return <p className="text-slate-400">Connect your wallet to review this contract.</p>;
+  }
   if (contractQuery.isLoading || findingsQuery.isLoading || profileQuery.isLoading) {
     return <p className="text-slate-400">Loading contract...</p>;
   }
@@ -78,6 +90,15 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   // itself; every finding on a given claimed contract shares the same
   // value, so the first one is representative.
   const claimExpiresAt = findings.find((f) => f.claimExpiresAt)?.claimExpiresAt ?? null;
+  // The claim comes from the auditor's profile (the API lists only active
+  // claims), not from findings: a contract Slither found nothing on has no
+  // finding to carry it, and that is exactly when a report matters. The
+  // contract reads back Open once a claim lapses, and the findings' expiry,
+  // when there are findings, hides the form on the second it lapses.
+  const ownsClaim =
+    contract.status === "Claimed" &&
+    profile.claimedContractIds.includes(contractId) &&
+    (claimExpiresAt === null || new Date(claimExpiresAt).getTime() > now);
 
   return (
     <div className="flex flex-col gap-6">
@@ -100,6 +121,14 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
       </div>
 
       <StakeGate profile={profile} auditorId={auditorId} onStaked={refetchProfile} />
+
+      {ownsClaim && stakeMet && (
+        <ReportFindingForm
+          contractId={contractId}
+          auditorId={auditorId}
+          onReported={refetchFindings}
+        />
+      )}
 
       <section>
         <h2 className="text-xl font-semibold text-white">Findings</h2>

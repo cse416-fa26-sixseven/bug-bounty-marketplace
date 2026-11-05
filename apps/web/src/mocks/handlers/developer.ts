@@ -13,6 +13,7 @@ import {
   listContracts,
   listFindingsByContract,
   reclaimContract,
+  setFindingNote,
 } from "../db/contracts";
 import { openDispute } from "../db/disputes";
 import { errorResponse } from "./util";
@@ -33,7 +34,7 @@ function failures(result: {
 
 /**
  * Developer-flow routes: submit a contract, list contracts/findings,
- * dispute a finding, reclaim an expired bounty. Owns no routes outside this
+ * dispute a finding, keep a note on a finding, reclaim an expired bounty. Owns no routes outside this
  * area - see CLAUDE.md for the per-flow handler split.
  */
 export const developerHandlers = [
@@ -131,6 +132,21 @@ export const developerHandlers = [
       disputeFinding(findingId, body.developerId);
       const dispute = openDispute(findingId, body.developerId, body.reason);
       return HttpResponse.json(dispute, { status: 201 });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.put("*/api/findings/:id/note", async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as {
+      developerId?: string;
+      note?: unknown;
+    };
+    if (!body.developerId) {
+      return HttpResponse.json({ error: "developerId is required" }, { status: 400 });
+    }
+    try {
+      return HttpResponse.json(setFindingNote(String(params.id), body.developerId, body.note));
     } catch (err) {
       return errorResponse(err);
     }

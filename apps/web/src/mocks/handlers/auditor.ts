@@ -1,4 +1,5 @@
 import { http, HttpResponse } from "msw";
+import { POC_SOURCE_MAX_BYTES } from "@bbm/shared";
 import {
   claimContract,
   findAuditorById,
@@ -6,14 +7,17 @@ import {
   markFalsePositive,
   postStake,
   profileView,
+  reportFinding,
+  reportFindingIssues,
   submitPoc,
   withdrawStake,
 } from "../db/auditors";
 import { errorResponse } from "./util";
 
 /**
- * Auditor-flow routes: queue, claim, stake and stake withdrawal, PoC submission, false-positive
- * flagging, own profile. Owns no routes outside this area.
+ * Auditor-flow routes: queue, claim, stake and stake withdrawal, PoC submission,
+ * auditor-reported findings, false-positive flagging, own profile. Owns no
+ * routes outside this area.
  */
 export const auditorHandlers = [
   http.get("*/api/auditor/queue", ({ request }) => {
@@ -106,6 +110,38 @@ export const auditorHandlers = [
     try {
       const poc = submitPoc(findingId, auditorId, file.name);
       return HttpResponse.json(poc, { status: 201 });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.post("*/api/auditor/findings", async ({ request }) => {
+    const form = await request.formData();
+    const file = form.get("file");
+    const field = (name: string) => String(form.get(name) ?? "");
+    const auditorId = field("auditorId");
+    const input = {
+      contractId: field("contractId"),
+      title: field("title"),
+      severity: field("severity"),
+      description: field("description"),
+    };
+    // Same order and statuses as the API.
+    if (file instanceof File && file.size > POC_SOURCE_MAX_BYTES) {
+      return HttpResponse.json({ error: "PoC file exceeds the 100 KB limit" }, { status: 413 });
+    }
+    if (!(file instanceof File) || !auditorId || Object.values(input).some((v) => !v)) {
+      return HttpResponse.json(
+        { error: "contractId, auditorId, title, severity, description and file are required" },
+        { status: 400 },
+      );
+    }
+    const issues = reportFindingIssues(input, file);
+    if (issues.length > 0) {
+      return HttpResponse.json({ error: "Invalid finding report", issues }, { status: 400 });
+    }
+    try {
+      return HttpResponse.json(reportFinding(input, auditorId, file), { status: 201 });
     } catch (err) {
       return errorResponse(err);
     }

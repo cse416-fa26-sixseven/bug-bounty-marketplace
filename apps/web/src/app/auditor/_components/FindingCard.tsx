@@ -4,7 +4,13 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { Finding } from "@bbm/shared";
 import { auditorApi, ApiError } from "@/lib/api";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isOnChain, useChainInfo } from "@/lib/chain/config";
+import {
+  FindingDescriptionNote,
+  FindingOriginBadge,
+  findingHeading,
+} from "@/components/FindingOrigin";
+import { DeveloperNoteView } from "@/components/DeveloperNote";
 
 const SEVERITY_STYLES: Record<Finding["severity"], string> = {
   Critical: "bg-red-500/20 text-red-400",
@@ -39,7 +45,7 @@ export function FindingCard({
   stakeMet: boolean;
   onChanged: () => void;
 }) {
-  const onChain = isLocalChain(useChainInfo());
+  const onChain = isOnChain(useChainInfo());
   const [file, setFile] = useState<File | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -89,7 +95,8 @@ export function FindingCard({
         >
           {finding.status}
         </span>
-        <span className="text-xs text-slate-500">{finding.slitherDetector}</span>
+        <span className="text-xs text-slate-500">{findingHeading(finding)}</span>
+        <FindingOriginBadge finding={finding} />
         {changedAt && (
           <span className="ml-auto text-xs text-slate-500">
             updated {new Date(changedAt).toLocaleTimeString()}
@@ -97,7 +104,9 @@ export function FindingCard({
         )}
       </div>
 
-      <p className="mt-2 text-sm text-slate-300">{finding.llmExplanation}</p>
+      <p className="mt-2 whitespace-pre-line text-sm text-slate-300">{finding.llmExplanation}</p>
+      <FindingDescriptionNote finding={finding} />
+      <DeveloperNoteView finding={finding} />
       <details className="mt-4 text-xs text-slate-400">
         <summary className="text-emerald-300">Finding status history</summary>
         <ol className="mt-3 space-y-2">

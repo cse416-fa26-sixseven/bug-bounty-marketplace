@@ -18,6 +18,16 @@ export interface ChainConfig {
   arbiterAddress: Address;
   /** BountyEscrow's challenge window. Defaults to the deploy script's 3 days. */
   challengeWindowSeconds: number;
+  /** First block the event indexer reads when it has no checkpoint:
+   * INDEXER_START_BLOCK, else the deployments file's deployBlock. Unset reads
+   * from block 0, which is fine on anvil but far too slow on a testnet. */
+  startBlock?: bigint;
+  /** Blocks behind the head the event indexer stops at
+   * (INDEXER_CONFIRMATIONS, default 0). Load-balanced public RPCs can answer
+   * eth_blockNumber from one backend and eth_getLogs from another a block
+   * behind, which rejects a range ending at the head; a few confirmations
+   * avoid that and ride out shallow reorgs. */
+  indexerConfirmations?: bigint;
 }
 
 /** BountyEscrow's default challenge window in Deploy.s.sol: 3 days. */
@@ -93,7 +103,8 @@ export function loadChainConfig(
       }
       throw err;
     }
-    return { ...common, ...readDeployment(deploymentsFile, text, chainId) };
+    const { deployBlock, ...deployment } = readDeployment(deploymentsFile, text, chainId);
+    return withIndexerSettings({ ...common, ...deployment }, env, deployBlock);
   }
 
   const addresses = [
@@ -115,14 +126,39 @@ export function loadChainConfig(
     throw new Error("CHALLENGE_WINDOW_SECONDS must be a non-negative integer");
   }
 
-  return {
-    ...common,
-    auditorStakingAddress: env.AUDITOR_STAKING_ADDRESS as Address,
-    bountyEscrowAddress: env.BOUNTY_ESCROW_ADDRESS as Address,
-    disputeResolutionAddress: env.DISPUTE_RESOLUTION_ADDRESS as Address,
-    arbiterAddress: (env.ARBITER_ADDRESS as Address | undefined) ?? operatorAddress,
-    challengeWindowSeconds,
-  };
+  return withIndexerSettings(
+    {
+      ...common,
+      auditorStakingAddress: env.AUDITOR_STAKING_ADDRESS as Address,
+      bountyEscrowAddress: env.BOUNTY_ESCROW_ADDRESS as Address,
+      disputeResolutionAddress: env.DISPUTE_RESOLUTION_ADDRESS as Address,
+      arbiterAddress: (env.ARBITER_ADDRESS as Address | undefined) ?? operatorAddress,
+      challengeWindowSeconds,
+    },
+    env,
+    undefined,
+  );
+}
+
+/** Adds the indexer settings: startBlock (INDEXER_START_BLOCK when set, else
+ * the deploy block) and indexerConfirmations (INDEXER_CONFIRMATIONS, default 0). */
+function withIndexerSettings(
+  config: ChainConfig,
+  env: NodeJS.ProcessEnv,
+  deployBlock: bigint | undefined,
+): ChainConfig {
+  const rawConfirmations = env.INDEXER_CONFIRMATIONS?.trim();
+  if (rawConfirmations && !/^\d+$/.test(rawConfirmations)) {
+    throw new Error("INDEXER_CONFIRMATIONS must be a non-negative integer number of blocks");
+  }
+  const withConfirmations = { ...config, indexerConfirmations: BigInt(rawConfirmations || "0") };
+
+  const raw = env.INDEXER_START_BLOCK?.trim();
+  if (raw) {
+    if (!/^\d+$/.test(raw)) throw new Error("INDEXER_START_BLOCK must be a non-negative integer block number");
+    return { ...withConfirmations, startBlock: BigInt(raw) };
+  }
+  return deployBlock === undefined ? withConfirmations : { ...withConfirmations, startBlock: deployBlock };
 }
 
 /** Parses the deploy script's deployments/<chainId>.json. */
@@ -137,7 +173,7 @@ function readDeployment(
   | "disputeResolutionAddress"
   | "arbiterAddress"
   | "challengeWindowSeconds"
-> {
+> & { deployBlock: bigint | undefined } {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(text) as Record<string, unknown>;
@@ -157,7 +193,16 @@ function readDeployment(
   if (typeof challengeWindowSeconds !== "number" || !Number.isInteger(challengeWindowSeconds) || challengeWindowSeconds < 0) {
     throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} has no valid challengeWindow`);
   }
+  // Written by Deploy.s.sol since the Sepolia runbook; older files have none.
+  const deployBlock = parsed.deployBlock;
+  if (
+    deployBlock !== undefined &&
+    (typeof deployBlock !== "number" || !Number.isSafeInteger(deployBlock) || deployBlock < 0)
+  ) {
+    throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} has an invalid deployBlock`);
+  }
   return {
+    deployBlock: deployBlock === undefined ? undefined : BigInt(deployBlock),
     auditorStakingAddress: parsed.auditorStaking as Address,
     bountyEscrowAddress: parsed.bountyEscrow as Address,
     disputeResolutionAddress: parsed.disputeResolution as Address,

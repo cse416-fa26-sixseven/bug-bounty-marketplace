@@ -86,6 +86,15 @@ spec:
             - name: TRUST_PROXY
               value: {{ .Values.ingress.trustedProxyCidr | quote }}
             {{- end }}
+            {{- /* Sign-In with Ethereum binds each message to the public
+            origin, and the Gateway only serves it over HTTPS, so the session
+            cookie is Secure (COOKIE_SECURE defaults to true for https). */}}
+            {{- if and .Values.ingress.enabled .Values.ingress.host }}
+            - name: AUTH_ORIGIN
+              value: {{ printf "https://%s" .Values.ingress.host | quote }}
+            - name: COOKIE_SECURE
+              value: "true"
+            {{- end }}
             {{- with $v.migrationsDir }}
             - name: MIGRATIONS_DIR
               value: {{ . | quote }}

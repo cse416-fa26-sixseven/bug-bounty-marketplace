@@ -25,6 +25,7 @@ import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js"
 import { runMigrations } from "./db/migrate.js";
 import { parseBoolEnv, parseIntEnv } from "./env.js";
 import { loadRateLimitConfig, parseTrustProxy } from "./http/rate-limit.js";
+import { checkAuthOrigin, loadAuthConfig } from "./auth/config.js";
 
 // DATABASE_URL selects Postgres. Without it the API keeps contracts in memory,
 // which is fine for local UI work and tests. MIGRATE_ON_BOOT (default true)
@@ -60,6 +61,13 @@ if (chainConfig && (!sessionSecret || sessionSecret.length < 16)) {
     "CHAIN_RPC_URL is set but SESSION_SECRET is missing or shorter than 16 characters (needed for wallet sign-in)",
   );
 }
+// AUTH_ORIGIN pins the SIWE domain/URI to the web app's public origin; without
+// it they come from each request (fine for local dev only). COOKIE_SECURE
+// (default: AUTH_ORIGIN is https) marks the session cookie Secure.
+const authConfig = loadAuthConfig(process.env);
+// Throws under NODE_ENV=production; warns in local dev.
+const authOriginWarning = checkAuthOrigin(authConfig, process.env, chainConfig !== null);
+if (authOriginWarning) console.warn(`@bbm/api ${authOriginWarning}`);
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
 const bountyEscrowPort = chainConfig ? createBountyEscrowFromConfig(chainConfig) : undefined;
@@ -102,6 +110,7 @@ const app = buildApp({
   chainActions,
   chainConfig,
   sessionSecret,
+  authConfig,
   bountyEscrow: bountyEscrowPort,
   disputeResolution: chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined,
   auditorStaking: stakingPort ?? undefined,
@@ -137,6 +146,8 @@ async function start(): Promise<void> {
     const db = pool;
     indexer = startEventIndexer({
       config: chainConfig,
+      startBlock: chainConfig.startBlock,
+      confirmations: chainConfig.indexerConfirmations,
       repository: new PgIndexerRepository(db),
       findingStatus: new PgChainActionStore(db, {
         challengeWindowSeconds: chainConfig.challengeWindowSeconds,

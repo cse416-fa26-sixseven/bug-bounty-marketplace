@@ -6,11 +6,11 @@ import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { PgContractRepository } from "../contracts/pg-repository.js";
 import type { ContractRepository } from "../contracts/repository.js";
 import { runMigrations } from "../db/migrate.js";
-import { MemoryStore } from "../pipeline/memory-repository.js";
+import { MemoryPipelineRepository, MemoryStore } from "../pipeline/memory-repository.js";
 import { PgPipelineRepository } from "../pipeline/pg-repository.js";
-import type { FindingRecord } from "../pipeline/repository.js";
+import type { FindingRecord, PipelineRepository } from "../pipeline/repository.js";
 import { InvalidTransitionError } from "../status/transitions.js";
-import { makeContract, makeFinding } from "../testing/repository-suite.js";
+import { makeAuditorFinding, makeContract, makeFinding } from "../testing/repository-suite.js";
 import type { ChainActionStore } from "./action-store.js";
 import { createChainActions } from "./actions.js";
 import type { AuditorStakingPort } from "./auditor-staking.js";
@@ -28,7 +28,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (pool && createdContracts.length > 0) {
-    await pool.query("DELETE FROM jobs WHERE subject_id = ANY($1)", [createdContracts]);
+    await pool.query(
+      `DELETE FROM jobs WHERE subject_id = ANY($1)
+          OR subject_id IN (SELECT p.id FROM poc_submissions p JOIN findings f ON f.id = p.finding_id
+                             WHERE f.contract_id = ANY($1))`,
+      [createdContracts],
+    );
     await pool.query(
       "DELETE FROM poc_submissions WHERE finding_id IN (SELECT id FROM findings WHERE contract_id = ANY($1))",
       [createdContracts],
@@ -43,6 +48,7 @@ afterAll(async () => {
 interface Harness {
   store: ChainActionStore;
   contracts: ContractRepository;
+  pipeline: PipelineRepository;
   seed(record: FindingRecord): Promise<void>;
   seedPoc(findingId: string, auditorId: string): Promise<void>;
   /** Claims the contract until `expiresAt` and takes the claim to "locked". */
@@ -72,6 +78,7 @@ function memoryHarness(): Harness {
   return {
     store,
     contracts,
+    pipeline: new MemoryPipelineRepository(mem),
     seed: async (record) => {
       mem.findings.set(record.id, structuredClone(record));
     },
@@ -106,6 +113,7 @@ function pgHarness(): Harness {
   const store = new PgChainActionStore(db, { challengeWindowSeconds: WINDOW_SECONDS });
   return {
     store,
+    pipeline,
     contracts: {
       ...repo,
       insertContract: async (record) => {
@@ -281,6 +289,40 @@ for (const [name, make, skip] of [
         await expect(h.store.takeClaimUnlock(contractId, { expiredBy: AFTER })).resolves.toBe(auditor);
       },
     );
+
+    it("keeps the lock while the auditor's own reported finding awaits its verdict", async () => {
+      // An auditor-reported finding is a normal findings row with the
+      // reporter's PoC, created through submitAuditorFinding, so it counts.
+      const auditor = newAuditor();
+      const record = makeContract();
+      await h.contracts.insertContract(record);
+      const contractId = record.contract.id;
+      await h.claimLocked(contractId, auditor, EXPIRES);
+      const finding = makeAuditorFinding(contractId, auditor);
+      const id = pocId();
+      expect(
+        await h.pipeline.submitAuditorFinding({
+          finding,
+          poc: {
+            id,
+            findingId: finding.id,
+            auditorId: auditor,
+            testFileReference: `pocs/${id}/x.t.sol`,
+            submittedAt: AT,
+            sandboxStatus: "Pending",
+            sandboxLog: null,
+          },
+          job: { id: `job_${id}`, kind: "sandbox", subjectId: id, createdAt: AT },
+          now: AT,
+        }),
+      ).toBe("ok");
+      expect(await listed(contractId)).toEqual([]);
+      await expect(h.store.takeClaimUnlock(contractId, { expiredBy: AFTER })).resolves.toBeNull();
+      // Settling it (e.g. a Failed verdict) releases the lock.
+      await expect(
+        h.store.takeClaimUnlock(contractId, { auditorId: auditor, settling: finding.id }),
+      ).resolves.toBe(auditor);
+    });
 
     it("matches the PoC auditor case-insensitively", async () => {
       const { contractId } = await lockedWith("Verified", (auditor) => auditor.toLowerCase());

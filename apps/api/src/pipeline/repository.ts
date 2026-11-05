@@ -3,6 +3,7 @@ import type {
   Contract,
   Finding,
   FindingSeverity,
+  FindingSource,
   FindingStatus,
   FindingStatusHistoryEntry,
   PoCSubmission,
@@ -32,12 +33,30 @@ export interface FindingRecord {
   rawOutput: unknown;
   rawOutputReference: string;
   llmExplanation: string;
-  explanationSource: "llm" | "slither";
+  /** "auditor" when llmExplanation is the reporting auditor's description. */
+  explanationSource: "llm" | "slither" | "auditor";
   status: FindingStatus;
   statusHistory: FindingStatusHistoryEntry[];
   isFalsePositive: boolean;
   challengeWindowExpiresAt: string | null;
   createdAt: string;
+  source: FindingSource;
+  /** Set (with reportedByAuditorId) only for auditor-reported findings. */
+  title: string | null;
+  reportedByAuditorId: string | null;
+  /** The developer's note; null (with its timestamp) when there is none. */
+  developerNote: string | null;
+  developerNoteUpdatedAt: string | null;
+}
+
+export interface NewAuditorFindingRecord {
+  /** The auditor-reported finding, already Submitted. */
+  finding: FindingRecord;
+  /** The PoC proving it; poc.auditorId is the reporting auditor. */
+  poc: PoCSubmission;
+  job: NewJob;
+  /** ISO timestamp the claim is checked against. */
+  now: string;
 }
 
 export interface NewPocRecord {
@@ -63,6 +82,10 @@ export interface PipelineRepository {
    * Otherwise writes nothing and returns "no_claim" (claim missing, expired
    * or someone else's) or "not_flagged" (finding no longer Flagged). */
   submitPoc(record: NewPocRecord): Promise<"ok" | "not_flagged" | "no_claim">;
+  /** Inserts an auditor-reported finding (already Submitted), its PoC and the
+   * sandbox job, atomically, if `poc.auditorId` still holds the finding's
+   * contract claim at `now`. Otherwise writes nothing and returns "no_claim". */
+  submitAuditorFinding(record: NewAuditorFindingRecord): Promise<"ok" | "no_claim">;
   /** Stores a sandbox verdict on a submitted PoC. Throws if the PoC is unknown. */
   recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void>;
   /** Decided PoCs (Passed/Failed) whose verdict the API has not applied yet
@@ -73,6 +96,9 @@ export interface PipelineRepository {
   /** Flagged → Rejected with isFalsePositive, atomically. "not_flagged" when
    * the finding has moved on, "not_found" when it does not exist. */
   markFalsePositive(findingId: string, changedAt: string): Promise<"ok" | "not_flagged" | "not_found">;
+  /** Sets the developer's note on a finding (null clears it, and its
+   * timestamp). Returns false when the finding does not exist. */
+  setDeveloperNote(findingId: string, note: string | null, updatedAt: string): Promise<boolean>;
   /** The finding's most recent PoC submission, or null. */
   findLatestPoc(findingId: string): Promise<PoCSubmission | null>;
 }

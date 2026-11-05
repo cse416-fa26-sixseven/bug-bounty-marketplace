@@ -1,62 +1,180 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { getAddress, isAddress, verifyMessage, type Address, type Hex } from "viem";
+import { getAddress, isAddress, isAddressEqual, verifyMessage, type Address, type Hex } from "viem";
+import { createSiweMessage, parseSiweMessage, validateSiweMessage } from "viem/siwe";
 
 export const SESSION_COOKIE = "bbm_session";
 const NONCE_TTL_MS = 5 * 60_000;
 const SESSION_TTL_MS = 8 * 3_600_000;
 /** Open sign-in requests kept per address; older ones are dropped. */
 const MAX_NONCES_PER_ADDRESS = 5;
+/** The SIWE statement every sign-in message carries. */
+export const SIGN_IN_STATEMENT = "Sign in to BountyGuard.";
 
-/** The exact message a wallet signs to sign in. */
-export function signInMessage(address: string, nonce: string): string {
-  return `BountyGuard sign-in\nAddress: ${address}\nNonce: ${nonce}`;
+/** Where a sign-in happens: the SIWE `domain` (host[:port]) and `uri` (origin). */
+export interface SignInOrigin {
+  domain: string;
+  uri: string;
+}
+
+export interface AuthOptions {
+  /** HMAC secret for session cookies. */
+  secret: string;
+  now: () => Date;
+  /** The chain the API runs on: every message names it and login checks it. */
+  chainId: number;
+  /** AUTH_ORIGIN, or null to take the origin from each request (dev only). */
+  origin: string | null;
+  /** Add Secure to the session cookie. */
+  secureCookie: boolean;
+}
+
+export type LoginResult = { ok: true; address: Address; token: string } | { ok: false; reason: string };
+
+function originFromUrl(value: string): SignInOrigin | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return { domain: url.host, uri: url.origin };
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Signed-message sign-in. A nonce is single use and lives 5 minutes; a session
- * is an HMAC-signed cookie (address + expiry) that lives 8 hours. Nonces are
- * held in memory, so sign-in needs a single API replica (as the demo runs).
+ * Sign-In with Ethereum (EIP-4361). POST /api/auth/nonce issues a SIWE message
+ * naming the web app's domain and URI, the address, the API's chain, a
+ * single-use nonce and a 5-minute expiry; POST /api/auth/login checks each of
+ * those against what was issued, and the signature against the address. A
+ * session is an HMAC-signed cookie (address + expiry) that lives 8 hours.
+ * Nonces are held in memory, so sign-in needs a single API replica (as the
+ * demo runs).
  */
 export class Auth {
-  private readonly nonces = new Map<string, { address: Address; expiresAt: number }>();
+  private readonly nonces = new Map<string, { address: Address; origin: SignInOrigin; expiresAt: number }>();
+  private readonly secret: string;
+  private readonly now: () => Date;
+  private readonly chainId: number;
+  private readonly fixedOrigin: SignInOrigin | null;
+  private readonly secureCookie: boolean;
 
-  constructor(
-    private readonly secret: string,
-    private readonly now: () => Date,
-  ) {}
+  constructor(options: AuthOptions) {
+    this.secret = options.secret;
+    this.now = options.now;
+    this.chainId = options.chainId;
+    this.fixedOrigin = options.origin ? originFromUrl(options.origin) : null;
+    this.secureCookie = options.secureCookie;
+  }
 
-  issueNonce(address: string): { nonce: string; message: string } {
+  /**
+   * The domain and URI a request signs in for: AUTH_ORIGIN when configured
+   * (null when the request's Origin header names another site).
+   * Otherwise the browser's Origin header (sent on every POST, and passed on
+   * unchanged by the web app's /api proxy), else the Host (X-Forwarded-Host
+   * only from a TRUST_PROXY proxy, as Fastify's request.host does).
+   */
+  originOf(request: FastifyRequest): SignInOrigin | null {
+    const header = request.headers.origin;
+    const fromHeader = typeof header === "string" && header !== "null" ? originFromUrl(header) : null;
+    if (this.fixedOrigin) {
+      // A browser on another site sends its own Origin: refuse it. Clients
+      // without one (scripts) get the configured origin.
+      if (fromHeader && fromHeader.uri !== this.fixedOrigin.uri) return null;
+      return this.fixedOrigin;
+    }
+    if (fromHeader) return fromHeader;
+    return request.host ? originFromUrl(`${request.protocol}://${request.host}`) : null;
+  }
+
+  /** A SIWE message for `address` at `origin`, or null when the origin's host
+   * is not a valid SIWE domain (e.g. a bare docker service name). */
+  issueNonce(address: string, origin: SignInOrigin): { nonce: string; message: string } | null {
     const checksummed = getAddress(address);
+    const now = this.now();
+    const nonce = randomBytes(16).toString("hex");
+    let message: string;
+    try {
+      message = createSiweMessage({
+        domain: origin.domain,
+        address: checksummed,
+        statement: SIGN_IN_STATEMENT,
+        uri: origin.uri,
+        version: "1",
+        chainId: this.chainId,
+        nonce,
+        issuedAt: now,
+        expirationTime: new Date(now.getTime() + NONCE_TTL_MS),
+      });
+    } catch {
+      return null;
+    }
     this.pruneNonces();
     const open = [...this.nonces].filter(([, entry]) => entry.address === checksummed);
     for (const [stale] of open.slice(0, Math.max(0, open.length - MAX_NONCES_PER_ADDRESS + 1))) {
       this.nonces.delete(stale);
     }
-    const nonce = randomBytes(16).toString("hex");
-    this.nonces.set(nonce, { address: checksummed, expiresAt: this.now().getTime() + NONCE_TTL_MS });
-    return { nonce, message: signInMessage(checksummed, nonce) };
+    this.nonces.set(nonce, { address: checksummed, origin, expiresAt: now.getTime() + NONCE_TTL_MS });
+    return { nonce, message };
   }
 
-  /** Verifies a signature over an issued nonce's message. Returns the session
-   * cookie value on success, null otherwise. A nonce is spent when a
-   * signature over it verifies. */
-  async login(address: string, signature: Hex): Promise<{ address: Address; token: string } | null> {
-    if (!isAddress(address)) return null;
-    const checksummed = getAddress(address);
-    for (const [nonce, entry] of this.nonces) {
-      if (entry.address !== checksummed) continue;
-      if (entry.expiresAt <= this.now().getTime()) {
-        this.nonces.delete(nonce);
-        continue;
-      }
-      const message = signInMessage(checksummed, nonce);
-      const valid = await verifyMessage({ address: checksummed, message, signature }).catch(() => false);
-      if (!valid) continue;
-      this.nonces.delete(nonce);
-      return { address: checksummed, token: this.sign(checksummed) };
+  /**
+   * Verifies a signed SIWE message. Its nonce must be open, and its domain,
+   * URI, address and chain must be the ones that nonce was issued for; the
+   * login request must come from that same domain. A nonce is spent when a
+   * signature over it verifies. `claimedAddress`, when sent, must match.
+   */
+  async login(
+    message: string,
+    signature: Hex,
+    origin: SignInOrigin | null,
+    claimedAddress?: string,
+  ): Promise<LoginResult> {
+    const fail = (reason: string): LoginResult => ({ ok: false, reason });
+    let parsed: ReturnType<typeof parseSiweMessage>;
+    try {
+      parsed = parseSiweMessage(message);
+    } catch {
+      return fail("not a sign-in message");
     }
-    return null;
+    const entry = parsed.nonce ? this.nonces.get(parsed.nonce) : undefined;
+    if (!parsed.nonce || !entry) return fail("no open sign-in request for this message");
+    const now = this.now();
+    if (entry.expiresAt <= now.getTime()) {
+      this.nonces.delete(parsed.nonce);
+      return fail("the sign-in request expired");
+    }
+    if (
+      parsed.domain !== entry.origin.domain ||
+      parsed.uri !== entry.origin.uri ||
+      origin?.domain !== entry.origin.domain
+    ) {
+      return fail("the message is for another site");
+    }
+    if (parsed.version !== "1" || parsed.chainId !== this.chainId) return fail("the message is for another chain");
+    if (
+      !validateSiweMessage({
+        message: parsed,
+        address: entry.address,
+        domain: entry.origin.domain,
+        nonce: parsed.nonce,
+        time: now,
+      })
+    ) {
+      return fail("the message is for another account or has expired");
+    }
+    if (claimedAddress !== undefined && !(isAddress(claimedAddress) && isAddressEqual(claimedAddress, entry.address))) {
+      return fail("the message is for another account");
+    }
+    // Claim the nonce before awaiting, so two concurrent logins with the same
+    // signed message cannot both pass; give it back if the signature fails.
+    const nonce = parsed.nonce;
+    this.nonces.delete(nonce);
+    const valid = await verifyMessage({ address: entry.address, message, signature }).catch(() => false);
+    if (!valid) {
+      this.nonces.set(nonce, entry);
+      return fail("the signature does not match the message's address");
+    }
+    return { ok: true, address: entry.address, token: this.sign(entry.address) };
   }
 
   /** The signed-in address from the request's session cookie, or null. */
@@ -81,11 +199,15 @@ export class Auth {
   }
 
   sessionCookie(token: string): string {
-    return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`;
+    return `${SESSION_COOKIE}=${token}; ${this.cookieAttributes()}; Max-Age=${SESSION_TTL_MS / 1000}`;
   }
 
-  static clearedCookie(): string {
-    return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  clearedCookie(): string {
+    return `${SESSION_COOKIE}=; ${this.cookieAttributes()}; Max-Age=0`;
+  }
+
+  private cookieAttributes(): string {
+    return `Path=/; HttpOnly;${this.secureCookie ? " Secure;" : ""} SameSite=Lax`;
   }
 
   private sign(address: Address): string {

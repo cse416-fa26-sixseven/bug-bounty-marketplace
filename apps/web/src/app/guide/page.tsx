@@ -2,7 +2,8 @@
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { useRoleStore } from "@/lib/role/store";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isLocalChain, isOnChain, useChainInfo } from "@/lib/chain/config";
+import { networkName } from "@/lib/chain/networks";
 import { weiToEth } from "@/lib/money";
 
 /** Steps on the local chain, where analysis, the sandbox and payouts are real. */
@@ -76,7 +77,9 @@ const guides = [
 export default function GuidePage() {
   const chainInfo = useChainInfo();
   const setRole = useRoleStore((s) => s.setRole);
-  const onChain = isLocalChain(chainInfo);
+  const onChain = isOnChain(chainInfo);
+  const local = isLocalChain(chainInfo);
+  const chainName = onChain ? networkName(chainInfo.chainId) : "";
   const shown = onChain
     ? chainGuides(weiToEth(chainInfo.requiredStakeWei), chainInfo.challengeWindowSeconds)
     : guides;
@@ -87,12 +90,13 @@ export default function GuidePage() {
           <p className="eyebrow">GETTING STARTED</p>
           <h1>Three roles. One secure workflow.</h1>
           <p>Walk through the complete bounty lifecycle with the frontend demo.</p>
-          {isLocalChain(chainInfo) ? (
+          {onChain ? (
             <p className="mt-2 text-emerald-300">
-              Running on a local test chain: findings appear in under a minute, auditors stake{" "}
+              Running on {local ? "a local test chain" : `the ${chainName} testnet`}:
+              findings appear in under a minute, auditors stake{" "}
               {weiToEth(chainInfo.requiredStakeWei)} ETH, the challenge window is{" "}
               {chainInfo.challengeWindowSeconds} seconds, and losing a dispute slashes half the
-              auditor&apos;s stake. No real funds are involved.
+              auditor&apos;s stake. {local ? "No real funds are involved." : "Use test ETH only."}
             </p>
           ) : null}
         </div>
@@ -117,12 +121,19 @@ export default function GuidePage() {
       </div>
       <section className="panel form-aside mt-6">
         <h2>About this MVP environment</h2>
-        {onChain ? (
+        {local ? (
           <p>
             This app runs against the real API on a local Anvil chain. Each role signs its own
-            transactions with an Anvil test account and signs in to the API with a signed message
-            when you switch roles. Slither, the AI explanations and the Foundry sandbox run for
-            real; no real funds are involved. Data persists until the demo stack is restarted.
+            transactions with an Anvil test account and signs in to the API with Sign-In with
+            Ethereum when you switch roles. Slither, the AI explanations and the Foundry sandbox run
+            for real; no real funds are involved. Data persists until the demo stack is restarted.
+          </p>
+        ) : onChain ? (
+          <p>
+            This app runs against the real API on {chainName}. Connect your
+            browser wallet (MetaMask): you sign in with Sign-In with Ethereum and sign every
+            transaction yourself, and your connected account is your identity in every role. The
+            role selector only picks the workspace you see; rulings need the arbiter&apos;s account.
           </p>
         ) : (
           <>

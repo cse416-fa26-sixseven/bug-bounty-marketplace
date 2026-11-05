@@ -18,7 +18,10 @@ import {
 } from "@bbm/shared";
 import { onchainId } from "./ids";
 
-export type LocalChainInfo = Extract<ChainInfo, { configured: true }>;
+/** GET /api/chain for a configured chain (local anvil or a testnet). */
+export type ConfiguredChainInfo = Extract<ChainInfo, { configured: true }>;
+/** The same shape; named for the local anvil chain the demo keys live on. */
+export type LocalChainInfo = ConfiguredChainInfo;
 
 /** A transaction the user signs. */
 export interface ContractWrite {
@@ -79,7 +82,8 @@ export class ChainTxError extends Error {
   }
 }
 
-function reasonOf(err: unknown): string {
+/** The revert's error name, or viem's short message, for ChainTxError. */
+export function reasonOf(err: unknown): string {
   if (err instanceof BaseError) {
     const revert = err.walk((e) => e instanceof ContractFunctionRevertedError);
     if (revert instanceof ContractFunctionRevertedError) {
@@ -135,13 +139,15 @@ export function viemTxClient(info: LocalChainInfo, account: PrivateKeyAccount): 
  *
  * A step that already happened on-chain (an earlier attempt whose API call
  * failed) resolves null instead of failing, so retrying the flow goes straight
- * on to the API call.
+ * on to the API call. `onSent` hears each confirmed transaction's hash (the
+ * explorer link the UI shows).
+ *
+ * `client` is viemTxClient (an anvil key) or injectedTxClient (MetaMask).
  */
 export function chainCalls(
-  info: LocalChainInfo,
-  account: PrivateKeyAccount,
-  client: TxClient = viemTxClient(info, account),
-  options: { beforeSend?: () => Promise<void> } = {},
+  info: ConfiguredChainInfo,
+  client: TxClient,
+  options: { beforeSend?: () => Promise<void>; onSent?: (hash: Hash) => void } = {},
 ) {
   const auditorStaking = info.addresses.auditorStaking as Address;
   const bountyEscrow = info.addresses.bountyEscrow as Address;
@@ -174,6 +180,7 @@ export function chainCalls(
     }
     const hash = await client.write(request);
     if (!(await client.waitForSuccess(hash))) throw new ChainTxError("transaction reverted");
+    options.onSent?.(hash);
     return hash;
   }
 

@@ -11,9 +11,12 @@ a successful reproduction marks a finding **Verified**. After the challenge
 window passes with no dispute, escrow pays the auditor (first verified PoC
 wins, and the bounty closes). The developer can dispute a Verified finding
 during the challenge window; an admin arbiter rules, and a losing auditor's
-stake is slashed. Auditors can also mark AI findings as false positives.
+stake is slashed. Auditors can also mark AI findings as false positives, or
+report a vulnerability Slither missed together with the PoC that proves it.
 
 Finding statuses: `Flagged → Submitted → Verified → Disputed/Rejected → Paid`.
+An auditor-reported finding (`source: "auditor"`) starts at `Submitted` and
+then follows the same path.
 
 ## Repository layout
 
@@ -143,7 +146,8 @@ Run the web app in live chain mode against it. `NEXT_PUBLIC_LIVE_CHAIN`
 sends the chain description, sign-in and every lifecycle route (funding,
 cancel, reclaim, profile, disputes, rulings) to the real API. Each role signs
 its transactions in the browser with its anvil account (developer, auditor,
-arbiter) and signs in to the API with a signed message when you switch roles.
+arbiter) and signs in to the API with Sign-In with Ethereum (EIP-4361) when
+you switch roles.
 Without `NEXT_PUBLIC_LIVE_CHAIN` the chain stays mocked, so the app never
 signs anything.
 

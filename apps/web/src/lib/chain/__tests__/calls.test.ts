@@ -8,7 +8,6 @@ import {
   type ContractWrite,
   type TxClient,
 } from "../calls";
-import { ANVIL_ACCOUNTS } from "../accounts";
 import { onchainId } from "../ids";
 
 const INFO: Extract<ChainInfo, { configured: true }> = {
@@ -50,7 +49,7 @@ describe("onchainId", () => {
 describe("chainCalls", () => {
   it("funds a bounty with the deadline in unix seconds and the amount as value", async () => {
     const client = fakeClient();
-    const calls = chainCalls(INFO, ANVIL_ACCOUNTS.developer, client);
+    const calls = chainCalls(INFO, client);
 
     await expect(
       calls.fundBounty("contract_1", new Date("2030-01-01T00:00:00.000Z"), "1000000000000000000"),
@@ -66,7 +65,7 @@ describe("chainCalls", () => {
 
   it("stakes, disputes, rules, deletes, refunds and withdraws payout and stake against the right contracts", async () => {
     const client = fakeClient();
-    const calls = chainCalls(INFO, ANVIL_ACCOUNTS.auditor, client);
+    const calls = chainCalls(INFO, client);
     await calls.stake("100000000000000000");
     await calls.openDispute("contract_1", "finding_1", "bad PoC");
     await calls.rule("contract_1", "finding_1", false);
@@ -98,7 +97,7 @@ describe("chainCalls", () => {
         throw new ChainTxError("PastDeadline");
       }),
     });
-    const calls = chainCalls(INFO, ANVIL_ACCOUNTS.developer, client);
+    const calls = chainCalls(INFO, client);
     await expect(
       calls.fundBounty("contract_1", new Date("2020-01-01T00:00:00.000Z"), "1"),
     ).rejects.toThrow(/deadline has already passed/);
@@ -108,8 +107,19 @@ describe("chainCalls", () => {
   it("fails when the receipt is not successful", async () => {
     const client = fakeClient({ waitForSuccess: vi.fn(async () => false) });
     await expect(
-      chainCalls(INFO, ANVIL_ACCOUNTS.auditor, client).withdrawPayout(),
+      chainCalls(INFO, client).withdrawPayout(),
     ).rejects.toBeInstanceOf(ChainTxError);
+  });
+
+  it("reports each confirmed transaction to onSent", async () => {
+    const onSent = vi.fn();
+    await chainCalls(INFO, fakeClient(), { onSent }).stake("1");
+    expect(onSent).toHaveBeenCalledWith(HASH);
+
+    const failed = vi.fn();
+    const reverted = fakeClient({ waitForSuccess: vi.fn(async () => false) });
+    await expect(chainCalls(INFO, reverted, { onSent: failed }).stake("1")).rejects.toThrow();
+    expect(failed).not.toHaveBeenCalled();
   });
 
   it("checks the API session before signing, and sends nothing when that fails", async () => {
@@ -117,7 +127,7 @@ describe("chainCalls", () => {
     const beforeSend = vi.fn(async () => {
       throw new Error("still signing in");
     });
-    const calls = chainCalls(INFO, ANVIL_ACCOUNTS.auditor, client, { beforeSend });
+    const calls = chainCalls(INFO, client, { beforeSend });
     await expect(calls.stake("1")).rejects.toThrow("still signing in");
     expect(beforeSend).toHaveBeenCalledOnce();
     expect(client.simulate).not.toHaveBeenCalled();
@@ -143,7 +153,7 @@ describe("chainCalls", () => {
           throw new ChainTxError(error);
         }),
       });
-      await expect(run(chainCalls(INFO, ANVIL_ACCOUNTS.developer, client))).resolves.toBeNull();
+      await expect(run(chainCalls(INFO, client))).resolves.toBeNull();
       expect(client.write).not.toHaveBeenCalled();
     },
   );
@@ -155,7 +165,7 @@ describe("chainCalls", () => {
       }),
       read: vi.fn(async () => closedBounty(3)),
     });
-    const calls = chainCalls(INFO, ANVIL_ACCOUNTS.developer, client);
+    const calls = chainCalls(INFO, client);
     await expect(calls.deleteBounty("contract_1")).resolves.toBeNull();
     await expect(calls.refund("contract_1")).resolves.toBeNull();
     expect(client.write).not.toHaveBeenCalled();
@@ -169,13 +179,13 @@ describe("chainCalls", () => {
       read: vi.fn(async () => closedBounty(2)),
     });
     await expect(
-      chainCalls(INFO, ANVIL_ACCOUNTS.developer, client).deleteBounty("contract_1"),
+      chainCalls(INFO, client).deleteBounty("contract_1"),
     ).rejects.toMatchObject({ reason: "BountyNotOpen" });
   });
 
   it("reports whether a bounty is funded on-chain", async () => {
     const client = fakeClient({ read: vi.fn(async () => closedBounty(0)) });
-    const calls = chainCalls(INFO, ANVIL_ACCOUNTS.developer, client);
+    const calls = chainCalls(INFO, client);
     await expect(calls.isFunded("contract_1")).resolves.toBe(false);
     vi.mocked(client.read).mockResolvedValue(closedBounty(1));
     await expect(calls.isFunded("contract_1")).resolves.toBe(true);

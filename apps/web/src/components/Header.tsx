@@ -5,7 +5,9 @@ import { RoleSwitcher } from "./RoleSwitcher";
 import { WalletBadge } from "./WalletBadge";
 import { Icon } from "./Icon";
 import { useRoleStore } from "@/lib/role/store";
-import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { isInjectedChain, isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { networkName } from "@/lib/chain/networks";
+import { TxNotice } from "./TxLink";
 import { isMockingEnabled } from "@/lib/mocking";
 const links = [
   { href: "/", label: "Overview", icon: "grid" },
@@ -15,7 +17,9 @@ const links = [
   { href: "/guide", label: "Getting started", icon: "book" },
 ] as const;
 export function Header() {
-  const onChain = isLocalChain(useChainInfo());
+  const info = useChainInfo();
+  const onChain = isLocalChain(info);
+  const testnet = isInjectedChain(info) ? info : null;
   const pathname = usePathname();
   const setRole = useRoleStore((s) => s.setRole);
   const current = links.find((item) =>
@@ -95,13 +99,18 @@ export function Header() {
           <WalletBadge />
         </div>
       </header>
-      {(onChain || isMockingEnabled()) && (
+      {(onChain || testnet || isMockingEnabled()) && (
         <div className="demo-banner">
           <span className="live-dot" />
           {onChain ? (
             <>
               <strong>Local test chain</strong>
               <span>Transactions are real on a local Anvil network; no real funds.</span>
+            </>
+          ) : testnet ? (
+            <>
+              <strong>{networkName(testnet.chainId)} testnet</strong>
+              <span>Transactions are real and signed in your own wallet. Use test ETH only.</span>
             </>
           ) : (
             <>
@@ -114,6 +123,7 @@ export function Header() {
           </Link>
         </div>
       )}
+      <TxNotice />
     </>
   );
 }

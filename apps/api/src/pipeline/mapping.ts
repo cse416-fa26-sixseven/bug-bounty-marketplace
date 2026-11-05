@@ -35,6 +35,11 @@ export function toFinding(record: FindingRecord, claim: ActiveClaim | null): Fin
     claimExpiresAt: claim ? claim.expiresAt.toISOString() : null,
     isFalsePositive: record.isFalsePositive,
     challengeWindowExpiresAt: record.challengeWindowExpiresAt,
+    source: record.source,
+    title: record.title,
+    reportedByAuditorId: record.reportedByAuditorId,
+    developerNote: record.developerNote,
+    developerNoteUpdatedAt: record.developerNoteUpdatedAt,
   };
 }
 

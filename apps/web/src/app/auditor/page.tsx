@@ -16,8 +16,15 @@ export default function AuditorPage() {
         </p>
       </div>
 
-      <ProfileSummary auditorId={auditorId} />
-      <QueueList auditorId={auditorId} />
+      {auditorId ? (
+        <>
+          <ProfileSummary auditorId={auditorId} />
+          <QueueList auditorId={auditorId} />
+        </>
+      ) : (
+        // Testnet mode before a wallet is connected: the account is the auditor.
+        <p className="text-slate-400">Connect your wallet to see your auditor profile and the queue.</p>
+      )}
     </div>
   );
 }

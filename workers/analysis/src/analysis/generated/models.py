@@ -92,6 +92,11 @@ class Severity(StrEnum):
     Informational = "Informational"
 
 
+class Source(StrEnum):
+    slither = "slither"
+    auditor = "auditor"
+
+
 class FindingStatus(StrEnum):
     Flagged = "Flagged"
     Submitted = "Submitted"
@@ -159,3 +164,8 @@ class Finding(BaseModel):
     claimExpiresAt: AwareDatetime | None
     isFalsePositive: bool
     challengeWindowExpiresAt: AwareDatetime | None
+    source: Source
+    title: Annotated[str | None, Field(min_length=1)]
+    reportedByAuditorId: Annotated[str | None, Field(min_length=1)]
+    developerNote: Annotated[str | None, Field(min_length=1)]
+    developerNoteUpdatedAt: AwareDatetime | None
