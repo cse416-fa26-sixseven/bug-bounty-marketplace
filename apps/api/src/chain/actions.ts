@@ -42,6 +42,13 @@ export interface ChainActions {
    * has passed. Returns how many claims were released. Throws the first
    * failure after trying the rest. */
   releaseExpiredLocks(now: Date, contractId?: string): Promise<number>;
+  /** The contract's bounty is closed on-chain (cancelled or refunded), so no
+   * verification or payout can follow: releases the claim lock on it whatever
+   * its expiry and findings, unlike the expiry sweep, which keeps a lock that
+   * backs a pending finding. Also finishes an unlock an earlier attempt left
+   * in 'unlocking'. Returns true if a lock was released; throws when the
+   * unlock fails. */
+  releaseClaimLock(contractId: string): Promise<boolean>;
   /** The sweep the keeper runs: settles every claim left in 'locking' (the lock
    * landed: unlock it; it did not: clear the intent) and finishes every claim
    * left in 'unlocking'. Returns how many claims were released. */
@@ -335,6 +342,10 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
       }
       if (firstError) throw firstError.err;
       return unlocked;
+    },
+
+    async releaseClaimLock(contractId) {
+      return unlock(contractId, {});
     },
 
     async finishPendingUnlocks() {

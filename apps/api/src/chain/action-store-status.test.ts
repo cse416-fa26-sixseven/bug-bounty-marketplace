@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
+import type { Hash } from "viem";
 import type { FindingStatus } from "@bbm/shared";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { PgContractRepository } from "../contracts/pg-repository.js";
@@ -11,6 +12,8 @@ import type { FindingRecord } from "../pipeline/repository.js";
 import { InvalidTransitionError } from "../status/transitions.js";
 import { makeContract, makeFinding } from "../testing/repository-suite.js";
 import type { ChainActionStore } from "./action-store.js";
+import { createChainActions } from "./actions.js";
+import type { AuditorStakingPort } from "./auditor-staking.js";
 import { MemoryChainActionStore } from "./memory-action-store.js";
 import { PgChainActionStore } from "./pg-action-store.js";
 
@@ -48,6 +51,7 @@ interface Harness {
 }
 
 const WINDOW_SECONDS = 60;
+const HASH = `0x${"ab".repeat(32)}` as Hash;
 const AT = "2026-10-20T12:00:00.000Z";
 
 let pocCount = 0;
@@ -284,6 +288,32 @@ for (const [name, make, skip] of [
       // Verdict and dispute paths unlock by auditor, not by expiry.
       const { contractId, auditor } = await lockedWith("Submitted");
       await expect(h.store.takeClaimUnlock(contractId, { auditorId: auditor })).resolves.toBe(auditor);
+    });
+
+    it("a cancelled or refunded bounty releases the lock of a finding still awaiting its verdict", async () => {
+      // The finding is Submitted with the sandbox verdict pending, so nothing
+      // is on-chain yet. Once the bounty is closed, a Passed verdict cannot be
+      // recorded (BountyNotOpen) and the finding never leaves Submitted: only
+      // the close can release this lock.
+      const { contractId, auditor } = await lockedWith("Submitted");
+      const auditorStaking = {
+        stakeOf: vi.fn(async () => 0n),
+        reputation: vi.fn(async () => 0n),
+        activeSubmissions: vi.fn(async () => 1n),
+        lockSubmission: vi.fn(async () => HASH),
+        unlockSubmission: vi.fn(async () => HASH),
+      } satisfies AuditorStakingPort;
+      const actions = createChainActions({ store: h.store, auditorStaking, claimLockEnabled: true });
+
+      // The expiry sweep keeps it, however late it runs ...
+      await expect(actions.releaseExpiredLocks(new Date(8.64e15), contractId)).resolves.toBe(0);
+      expect(auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+      // ... but closing the bounty releases it, once.
+      await expect(actions.releaseClaimLock(contractId)).resolves.toBe(true);
+      await expect(actions.releaseClaimLock(contractId)).resolves.toBe(false);
+      expect(auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+      expect(auditorStaking.unlockSubmission).toHaveBeenCalledWith(auditor);
+      await expect(h.store.findUnlockingClaims(contractId)).resolves.toEqual([]);
     });
   });
 }
