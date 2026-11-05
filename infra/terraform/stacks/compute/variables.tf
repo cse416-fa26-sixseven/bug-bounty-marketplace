@@ -107,19 +107,19 @@ variable "apps_max_count" {
 }
 
 variable "sandbox_pool_enabled" {
-  description = "Create the Kata `sandbox` node pool (needs Dsv5 quota)."
+  description = "Create the Kata `sandbox` node pool (needs quota for the sandbox_vm_size family, Dasv7 by default; ADR 0004)."
   type        = bool
   default     = false
 }
 
 variable "sandbox_vm_size" {
-  description = "VM size of the sandbox pool (must support nested virtualisation)."
+  description = "VM size of the sandbox pool: Gen2 with nested virtualisation (Standard_D2as_v7)."
   type        = string
-  default     = "Standard_D2s_v5"
+  default     = "Standard_D2as_v7"
 }
 
 variable "sandbox_max_count" {
-  description = "Maximum nodes in the sandbox pool (minimum is 0)."
+  description = "Maximum nodes in the sandbox pool (minimum is 0: no node while no PoC runs)."
   type        = number
   default     = 1
 }

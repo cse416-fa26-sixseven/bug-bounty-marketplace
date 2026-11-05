@@ -272,8 +272,10 @@ resource "azurerm_kubernetes_cluster_node_pool" "apps" {
   }
 }
 
-# Kata (pod sandboxing) pool for untrusted PoC runs. Off by default: needs a
-# nested-virtualisation size (Dsv5) and quota a new subscription may lack.
+# Kata (pod sandboxing) pool for untrusted PoC runs (ADR 0004). Off by
+# default in the module; every env enables it in its compute.tfvars. Needs a
+# Gen2 nested-virtualisation size (Standard_D2as_v7, Dasv7 family) and quota
+# for it; autoscales to 0 nodes when no PoC runs.
 resource "azurerm_kubernetes_cluster_node_pool" "sandbox" {
   count = var.sandbox_pool.enabled ? 1 : 0
 

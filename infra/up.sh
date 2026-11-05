@@ -473,6 +473,11 @@ for e in "${ENVS[@]}"; do
   if tfvars_has "$f" apps_pool_enabled && [[ "$(tfvars_get "$f" apps_pool_enabled)" == true ]]; then
     pools+=" apps $(tfvars_get_string "$f" apps_vm_size) $(tfvars_get "$f" apps_max_count)"
   fi
+  # The Kata sandbox pool (ADR 0004) is its own VM family; it scales to 0
+  # when idle, but the quota must cover its max_count.
+  if tfvars_has "$f" sandbox_pool_enabled && [[ "$(tfvars_get "$f" sandbox_pool_enabled)" == true ]]; then
+    pools+=" sandbox $(tfvars_get_string "$f" sandbox_vm_size) $(tfvars_get "$f" sandbox_max_count)"
+  fi
   existing=$(az aks list -g "rg-bbm-$e-compute-$a" --query "[?name=='aks-bbm-$e-$a'] | length(@)" -o tsv 2>/dev/null || echo 0)
   read -r -a pool_args <<<"$pools"
   i=0

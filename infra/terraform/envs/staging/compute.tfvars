@@ -17,9 +17,16 @@ system_min_count            = 1
 system_max_count            = 2 # also leaves room for the upgrade surge node
 system_only_critical_addons = false
 
-apps_pool_enabled    = false
-sandbox_pool_enabled = false # Kata sandbox; needs a D-series size this subscription offers
-container_insights   = false
+apps_pool_enabled  = false
+container_insights = false
+
+# Kata (pod sandboxing) pool for auditor PoCs (ADR 0004). Standard_D2as_v7
+# is Gen2 with nested virtualisation, in the Dasv7 family this subscription has
+# quota for (+2 vCPUs per env at max scale). Autoscales 0-1: no node, and no
+# cost, while no PoC runs; the first PoC after an idle period waits 3-5 min.
+sandbox_pool_enabled = true
+sandbox_vm_size      = "Standard_D2as_v7"
+sandbox_max_count    = 1
 
 # Automatic upgrades use the defaults (patch / NodeImage); max_count leaves room
 # for the surge node.
