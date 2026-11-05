@@ -18,6 +18,10 @@
 # TF_VAR_tfstate_account (unless already set) for terraform_remote_state.
 # Other TF_VAR_* env vars pass through to terraform untouched.
 #
+# The subscription ID is never committed (public repo, ADR 0003). It comes from
+# $TF_VAR_subscription_id (CI: vars.AZURE_SUBSCRIPTION_ID), else
+# $ARM_SUBSCRIPTION_ID, else the signed-in `az account show` subscription.
+#
 # `apply <planfile>` applies a saved plan without -var-file (terraform rejects
 # both together). `init -migrate-state` / `-reconfigure` run interactively so
 # terraform can ask before copying state (or pass -force-copy yourself).
@@ -77,6 +81,20 @@ if [[ -n "${TFSTATE_RG:-}" && -z "${TF_VAR_tfstate_resource_group:-}" ]]; then
 fi
 if [[ -n "${TFSTATE_ACCOUNT:-}" && -z "${TF_VAR_tfstate_account:-}" ]]; then
   export TF_VAR_tfstate_account="$TFSTATE_ACCOUNT"
+fi
+
+# Subscription for the providers and the azurerm backend (see header).
+if [[ "$cmd" != "validate" && "$cmd" != "fmt" ]]; then
+  if [[ -z "${TF_VAR_subscription_id:-}" ]]; then
+    TF_VAR_subscription_id=${ARM_SUBSCRIPTION_ID:-}
+    if [[ -z "$TF_VAR_subscription_id" ]]; then
+      TF_VAR_subscription_id=$(az account show --query id -o tsv 2>/dev/null) ||
+        die "no subscription: set TF_VAR_subscription_id or run az login + az account set -s <id>"
+      echo "tf.sh: using the az CLI subscription $TF_VAR_subscription_id" >&2
+    fi
+    export TF_VAR_subscription_id
+  fi
+  export ARM_SUBSCRIPTION_ID=${ARM_SUBSCRIPTION_ID:-$TF_VAR_subscription_id}
 fi
 
 tf() {

@@ -57,6 +57,21 @@ az account list -o table                   # find the subscription GUID
 gh auth login                              # skip if `gh auth status` is already fine
 ```
 
+**Tenant with security defaults** (sign-in fails with `AADSTS530035`): security defaults block the
+device-code flow, and on a machine without a browser (a VM, SSH, Lima) `az login` falls back to it
+even without `--use-device-code`. Use the browser flow and open the printed URL on your laptop:
+
+```sh
+BROWSER=echo az login --tenant <tenant-id>   # prints the sign-in URL instead of opening a browser
+```
+
+After sign-in the browser goes to `http://localhost:<port>/?code=...`. Lima and VS Code forward that
+port to the VM; otherwise copy the URL and run `curl '<url>'` on the VM while `az login` waits.
+
+The subscription ID is never committed (the repo is public, ADR 0003). `up.sh` / `down.sh` take it
+from `--subscription`; `scripts/tf.sh` reads `TF_VAR_subscription_id`, else `ARM_SUBSCRIPTION_ID`,
+else the `az account show` subscription (and prints which). CI uses `vars.AZURE_SUBSCRIPTION_ID`.
+
 Log in as a **user**, not a service principal: `up.sh` reads your object ID with
 `az ad signed-in-user show`.
 
@@ -218,10 +233,10 @@ Most of a first run's time goes to creating the AKS clusters and the Postgres se
 | ---- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | Preflight          | checks tools and Terraform 1.9.x, `az login`, selects the subscription, reads your object ID, warns if you lack Owner, checks you are a `gh` admin on the repo; resolves the home and env regions and checks each against the allowed-locations policy |
 | 2    | DNS zone           | takes `--zone`, the tfvars value or a prompt; writes `dns_zone_name`                                                                                                                                           |
-| 3    | `bootstrap.tfvars` | writes the home region, each env's region and `ingress_pip_zones`, the `env_locations` maps, `subscription_id`, adds you to `admin_object_ids`, fills `preregistered_resource_providers` with the providers already registered, asks for the budget alert email and the GitHub reviewer IDs if unset |
+| 3    | `bootstrap.tfvars` | writes the home region, each env's region and `ingress_pip_zones`, the `env_locations` maps, adds you to `admin_object_ids`, fills `preregistered_resource_providers` with the providers already registered, asks for the budget alert email and the GitHub reviewer IDs if unset |
 | 4    | SKUs, quota, versions | per env region: fails if the node size is not offered or restricted; prints each region's vCPU usage against its needs, checks PG `Standard_B1ms`, fixes `kubernetes_version` if not offered (warnings) |
 | 5    | Bootstrap          | first run: applies on local state, then migrates the state into `stbbmtfstate<sfx>`. Later runs: applies on the remote state                                                                                   |
-| 6    | tfvars             | writes `suffix` and `subscription_id` into every `envs/**/*.tfvars`, the state account into every `backend*.hcl`, the bootstrap hint block into `global.tfvars`, and you into `secret_officer_user_object_ids` |
+| 6    | tfvars             | writes `suffix` into every `envs/**/*.tfvars`, the state account into every `backend*.hcl`, the bootstrap hint block into `global.tfvars`, and you into `secret_officer_user_object_ids` |
 | 7    | GitHub             | runs the bootstrap output `gh_setup_commands` after you confirm: repo variables, Environments, branch policies, `AZURE_CLIENT_ID` per Environment                                                              |
 | 8    | DNS delegation     | prints the parent zone's four NS records; upserts them in Cloudflare when `CLOUDFLARE_API_TOKEN` is set                                                                                                        |
 | 9    | Global             | applies `global`; imports `postgres:16-alpine` and `curlimages/curl:8.10.1` into ACR under `mirror/`                                                                                                           |
@@ -451,7 +466,7 @@ The full runbook is [switching-accounts.md](switching-accounts.md); the cutover 
 
 What `up.sh` runs, for debugging a single step. Commands run from `infra/terraform`.
 
-1. **Fill `envs/global/bootstrap.tfvars`:** `subscription_id`, `admin_object_ids`
+1. **Fill `envs/global/bootstrap.tfvars`** (and `export TF_VAR_subscription_id=<guid>`): `admin_object_ids`
    (`az ad signed-in-user show --query id -o tsv`), `alert_emails`, `budget_start_date` (first of
    the current month, RFC3339), `github_reviewer_ids` (`gh api users/<login> --jq .id`),
    `dns_zone_name`, and `preregistered_resource_providers`: every namespace from
@@ -482,7 +497,7 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
 
 5. **tfvars:** replace the lines between `# >>> bootstrap hint` and `# <<< bootstrap hint` in
    `envs/global/global.tfvars` with `./scripts/tf.sh bootstrap global output -raw global_tfvars_hint`.
-   Set `suffix` and `subscription_id` in every `envs/<env>/*.tfvars`, `storage_account_name` in
+   Set `suffix` in every `envs/<env>/*.tfvars`, `storage_account_name` in
    every `backend*.hcl`, and add your object ID to `secret_officer_user_object_ids` in
    `global.tfvars` and each `data.tfvars`.
 6. **GitHub:** `./scripts/tf.sh bootstrap global output -raw gh_setup_commands > /tmp/gh-setup.sh`,

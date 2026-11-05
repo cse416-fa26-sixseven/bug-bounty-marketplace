@@ -52,9 +52,9 @@ that don't exist there.
 
 | File                           | Reset                                                                                                                                 |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `envs/global/bootstrap.tfvars` | `subscription_id`, `admin_object_ids`, `power_operator_object_ids`, `preregistered_resource_providers`                                |
-| `envs/global/global.tfvars`    | hint block `subscription_id`, `suffix`, `ephemeral_ci_principal_id`, `preview_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
-| `envs/<env>/*.tfvars`          | `subscription_id`, `suffix`, and `secret_officer_user_object_ids` in `data.tfvars`                                                    |
+| `envs/global/bootstrap.tfvars` | `admin_object_ids`, `power_operator_object_ids`, `preregistered_resource_providers`                                |
+| `envs/global/global.tfvars`    | hint block `suffix`, `ephemeral_ci_principal_id`, `preview_ci_principal_id`, `secret_officer_sp_object_ids`; `secret_officer_user_object_ids` |
+| `envs/<env>/*.tfvars`          | `suffix`, and `secret_officer_user_object_ids` in `data.tfvars`                                                    |
 | `envs/**/backend*.hcl`         | `resource_group_name`, `storage_account_name` (`stbbmtfstate0000`)                                                                    |
 
 Kept, because they survive an account switch: `dns_zone_name`, `alert_emails`,
@@ -66,8 +66,9 @@ in `env_locations`). Regions are a user choice, not a per-tenant value. To chang
 file and fails early, listing the allowed regions, when the subscription's policy forbids a
 choice.
 
-If you skipped step 1 (the old account is gone), `up.sh` notices: when `bootstrap.tfvars` holds a
-non-placeholder `subscription_id` that differs from `--subscription`, it warns and offers to do the
+If you skipped step 1 (the old account is gone), `up.sh` notices: when the subscription it last
+used (gitignored `envs/global/.last-subscription`, or `subscription_id` in an older
+`bootstrap.tfvars`) differs from `--subscription`, it warns and offers to do the
 same reset first (`--yes` resets without asking; with no terminal and no `--yes` it stops).
 
 Also check `alert_emails` in `bootstrap.tfvars` and `global.tfvars`. `up.sh` only asks for it while

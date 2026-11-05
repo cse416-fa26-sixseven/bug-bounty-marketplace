@@ -2,7 +2,6 @@
 # infra/up.sh with `./scripts/tf.sh bootstrap global output -raw global_tfvars_hint`
 # (or paste that output there by hand). Keep the marker lines.
 # >>> bootstrap hint (written by infra/up.sh)
-subscription_id              = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
 suffix                       = "xx3m"
 ephemeral_ci_principal_id    = "3deb6616-bf5d-403c-a401-f28957c251e3"
 preview_ci_principal_id      = "eb6cf570-6af3-401e-9a0b-f904b7f0f3b7"

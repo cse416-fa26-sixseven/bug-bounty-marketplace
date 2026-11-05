@@ -1,16 +1,14 @@
 # stacks/bootstrap — applied once by a subscription Owner (who can also create
 # Entra app registrations). Example values only; no secrets belong here.
-subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
 # Home region: tfstate, the shared RG (ACR, shared Log Analytics / Key Vault,
 # parent DNS zone). infra/up.sh --location <region> rewrites location /
 # location_abbr here, in global.tfvars and in the backend .hcl state RG
-# (Azure for Students allows only francecentral, belgiumcentral, denmarkeast,
-# northcentralus and canadacentral; up.sh checks the subscription's policy).
+# (up.sh checks the subscription's allowed-locations policy).
 location      = "northcentralus"
 location_abbr = "ncus" # modules/naming local.location_abbrs
 
-# Region of each env's resource groups (ADR 0002 section 8): one region per
-# env, because Azure for Students has 6 vCPUs per region. Copied by infra/up.sh
+# Region of each env's resource groups (ADR 0002 section 8, ADR 0003): all envs
+# share the home region. Copied by infra/up.sh
 # from envs/<env>/data.tfvars (the source of truth; --env-location <env>=<region>
 # rewrites it) here and into global.tfvars. Keep one line per env.
 env_locations = {

@@ -1,11 +1,10 @@
 # stacks/data for test — data layer of the test cluster that hosts CI-run and
 # PR-preview namespaces (ADR 0002). No PostgreSQL server: each namespace runs
 # in-cluster Postgres. dns_zone_name is read from global state.
-subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
-env             = "test"
-location        = "canadacentral" # this env's region: infra/up.sh --env-location test=<region>
-location_abbr   = "cac"
-suffix          = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
+env           = "test"
+location      = "canadacentral" # this env's region: infra/up.sh --env-location test=<region>
+location_abbr = "cac"
+suffix        = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.10.0.0/16"
 subnet_cidrs = {

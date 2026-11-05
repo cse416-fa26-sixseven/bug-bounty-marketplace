@@ -64,7 +64,7 @@ make_tree() {
 }
 
 # pin_fixture_regions <tree>: give the copy a fixed region layout (test ncus,
-# staging frc, prod cac, every env on Standard_B4as_v2), so the assertions
+# staging frc, prod cac, every env on one Standard_B4as_v2 node), so the assertions
 # below don't depend on the regions the real subscription uses. The real
 # envs/** layout is checked for consistency separately ("repo:" checks).
 pin_fixture_regions() {
@@ -74,7 +74,8 @@ pin_fixture_regions() {
     for f in "$dst/envs/$e/data.tfvars" "$dst/envs/$e/compute.tfvars"; do
       sed -E -e "s/^(location[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$loc\"/" \
         -e "s/^(location_abbr[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$abbr\"/" \
-        -e 's/^(system_vm_size[[:space:]]*=[[:space:]]*)"[^"]*"/\1"Standard_B4as_v2"/' "$f" >"$f.tmp"
+        -e 's/^(system_vm_size[[:space:]]*=[[:space:]]*)"[^"]*"/\1"Standard_B4as_v2"/' \
+        -e 's/^(system_max_count[[:space:]]*=[[:space:]]*)[0-9]+/\11/' "$f" >"$f.tmp"
       cat "$f.tmp" >"$f"
       rm -f "$f.tmp"
     done
@@ -128,10 +129,10 @@ eq "get list" "$(tfvars_get "$B" admin_object_ids)" "[]"
 check_fails "get missing key dies" tfvars_get "$B" no_such_key
 check_fails "get multi-line value dies" tfvars_get "$D" subnet_cidrs
 
-tfvars_set "$B" subscription_id '"11111111-2222-3333-4444-555555555555"' 2>/dev/null
-eq "set value" "$(tfvars_get_string "$B" subscription_id)" "11111111-2222-3333-4444-555555555555"
+tfvars_set "$B" dns_zone_name '"set.example.com"' 2>/dev/null
+eq "set value" "$(tfvars_get_string "$B" dns_zone_name)" "set.example.com"
 tfvars_set "$D" suffix '"ab12"' 2>/dev/null
-eq "set keeps trailing comment" "$(grep '^suffix' "$D")" 'suffix          = "ab12" # bootstrap output: suffix (same as envs/global/global.tfvars)'
+eq "set keeps trailing comment" "$(grep '^suffix' "$D")" 'suffix        = "ab12" # bootstrap output: suffix (same as envs/global/global.tfvars)'
 eq "set leaves other lines alone" "$(diff "$BASE/envs/staging/data.tfvars" "$D" | grep -c '^[<>]')" "2"
 check_fails "set missing key dies" tfvars_set "$B" no_such_key '"x"'
 check_fails "set multi-line value dies" tfvars_set "$D" subnet_cidrs '{}'
@@ -163,7 +164,6 @@ eq "kubernetes_version set" "$(tfvars_get_string "$C" kubernetes_version)" "1.33
 eq "compute.tfvars one line changed" "$(diff <(echo "$kv_before") "$C" | grep -c '^[<>]')" "2"
 
 cat >"$T/hint" <<'EOF'
-subscription_id           = "11111111-2222-3333-4444-555555555555"
 suffix                    = "ab12"
 ephemeral_ci_principal_id = "eeeeeeee-0000-0000-0000-000000000000"
 preview_ci_principal_id = "dddddddd-0000-0000-0000-000000000000"
@@ -193,7 +193,7 @@ BBM_TF_ROOT="$RT"
 RB="$RT/envs/global/bootstrap.tfvars" RG_="$RT/envs/global/global.tfvars"
 OLD=aaaaaaaa-0000-0000-0000-00000000000a
 {
-  tfvars_set "$RB" subscription_id '"11111111-2222-3333-4444-555555555555"'
+  echo 11111111-2222-3333-4444-555555555555 >"$RT/envs/global/.last-subscription"
   tfvars_set "$RB" dns_zone_name '"bbm.example.com"'
   tfvars_set "$RB" alert_emails '["me@uni.edu"]'
   tfvars_set "$RB" github_reviewer_ids '[12345]'
@@ -206,7 +206,6 @@ OLD=aaaaaaaa-0000-0000-0000-00000000000a
   for e in test staging prod; do
     tfvars_set "$RT/envs/$e/data.tfvars" suffix '"ab12"'
     tfvars_list_add "$RT/envs/$e/data.tfvars" secret_officer_user_object_ids "$OLD"
-    tfvars_set "$RT/envs/$e/compute.tfvars" subscription_id '"11111111-2222-3333-4444-555555555555"'
   done
   for f in "$RT"/envs/*/backend*.hcl; do
     tfvars_set "$f" storage_account_name '"stbbmtfstateab12"'
@@ -215,7 +214,8 @@ OLD=aaaaaaaa-0000-0000-0000-00000000000a
 } 2>/dev/null
 check "reset: old values present before" grep -qF "$OLD" "$RT/envs/prod/data.tfvars"
 reset_out=$(reset_tenant_fields 2>&1)
-eq "reset: bootstrap subscription_id" "$(tfvars_get_string "$RB" subscription_id)" "$PLACEHOLDER_GUID"
+check_fails "reset: forgets the last subscription" test -e "$RT/envs/global/.last-subscription"
+eq "reset: no subscription_id in committed tfvars" "$(grep -rl '^subscription_id' "$RT/envs" | wc -l | tr -d ' ')" "0"
 eq "reset: admin_object_ids" "$(tfvars_get "$RB" admin_object_ids)" "[]"
 eq "reset: power_operator_object_ids" "$(tfvars_get "$RB" power_operator_object_ids)" "[]"
 eq "reset: preregistered providers" "$(tfvars_get "$RB" preregistered_resource_providers)" "[]"
@@ -227,7 +227,6 @@ eq "reset: global user officers" "$(tfvars_get "$RG_" secret_officer_user_object
 for e in test staging prod; do
   eq "reset: $e data officers" "$(tfvars_get "$RT/envs/$e/data.tfvars" secret_officer_user_object_ids)" "[]"
   eq "reset: $e data suffix" "$(tfvars_get_string "$RT/envs/$e/data.tfvars" suffix)" "$PLACEHOLDER_SUFFIX"
-  eq "reset: $e compute subscription" "$(tfvars_get_string "$RT/envs/$e/compute.tfvars" subscription_id)" "$PLACEHOLDER_GUID"
 done
 eq "reset: no old object id left" "$(grep -rlF "$OLD" "$RT/envs" | wc -l | tr -d ' ')" "0"
 eq "reset: backends back to committed placeholders" \
@@ -473,7 +472,7 @@ case "${args[0]}" in
       suffix) printf ab12 ;;
       tfstate_resource_group) printf rg-bbm-tfstate-ncus ;;
       tfstate_storage_account) printf stbbmtfstateab12 ;;
-      global_tfvars_hint) printf 'subscription_id = "11111111-2222-3333-4444-555555555555"\nsuffix = "ab12"\n' ;;
+      global_tfvars_hint) printf 'suffix = "ab12"\n' ;;
       dns_name_servers) echo '["ns1-01.azure-dns.com.","ns2-01.azure-dns.net.","ns3-01.azure-dns.org.","ns4-01.azure-dns.info."]' ;;
       gh_setup_commands) cat <<'GH'
 #!/usr/bin/env bash
@@ -732,7 +731,7 @@ TREE3="$T/tree3"
 make_tree "$TREE3"
 OLD_SUB=22222222-0000-0000-0000-000000000000
 {
-  BBM_TF_ROOT="$TREE3" tfvars_set "$TREE3/envs/global/bootstrap.tfvars" subscription_id "\"$OLD_SUB\""
+  echo "$OLD_SUB" >"$TREE3/envs/global/.last-subscription"
   BBM_TF_ROOT="$TREE3" tfvars_set "$TREE3/envs/global/bootstrap.tfvars" admin_object_ids '["bbbbbbbb-0000-0000-0000-00000000000b"]'
 } 2>/dev/null
 if RUN_TREE="$TREE3" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
@@ -744,7 +743,8 @@ fi
 out=$(cat "$T/out")
 has "up: tenant mismatch warned" "filled in for subscription $OLD_SUB, not $SUB"
 has "up: tenant mismatch resets admin ids" 'admin_object_ids = [] (was ["bbbbbbbb-0000-0000-0000-00000000000b"])'
-has "up: tenant mismatch resets subscription" "subscription_id = \"$PLACEHOLDER_GUID\" (was \"$OLD_SUB\")"
+hasnt_file() { if grep -q '^subscription_id' "$2"; then bad "$1"; else ok_ "$1"; fi; }
+hasnt_file "up: never writes subscription_id into bootstrap.tfvars" "$TREE3/envs/global/bootstrap.tfvars"
 if setsid -w true 2>/dev/null; then # no controlling terminal and no --yes: refuse, don't guess
   if RUN_WRAP="setsid -w" RUN_TREE="$TREE3" run_script up.sh --subscription "$SUB" --zone bbm.example.com --dry-run; then
     bad "up: tenant mismatch without --yes or a tty dies"
@@ -762,7 +762,6 @@ if grep -qi 'one-command' "$T/out"; then ok_ "up: --help prints usage"; else bad
 : >"$LOG"
 # down --all resets per-tenant fields; prefill TREE2 as up.sh would have
 {
-  BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/bootstrap.tfvars" subscription_id "\"$SUB\""
   BBM_TF_ROOT="$TREE2" tfvars_list_add "$TREE2/envs/global/bootstrap.tfvars" admin_object_ids aaaaaaaa-0000-0000-0000-000000000001
   BBM_TF_ROOT="$TREE2" tfvars_list_add "$TREE2/envs/test/data.tfvars" secret_officer_user_object_ids aaaaaaaa-0000-0000-0000-000000000001
   BBM_TF_ROOT="$TREE2" tfvars_set "$TREE2/envs/global/backend.hcl" storage_account_name '"stbbmtfstateab12"'
@@ -793,7 +792,6 @@ hasnt() { if grep -qF -- "$2" <<<"$out"; then bad "$1 (unexpected: $2)"; else ok
 hasnt "down --all: other tenant's/suffix's vault kept" 'kv-bbm-stg-zz99'
 has "down --all: prod confirmation noted in dry run" "a real run asks you to type 'prod'"
 has "down: resets admin ids" 'bootstrap.tfvars: admin_object_ids = [] (was ["aaaaaaaa-0000-0000-0000-000000000001"])'
-has "down: resets subscription" "bootstrap.tfvars: subscription_id = \"$PLACEHOLDER_GUID\" (was \"$SUB\")"
 has "down: resets data officers" 'test/data.tfvars: secret_officer_user_object_ids = [] (was'
 has "down: resets backend account" 'global/backend.hcl: storage_account_name = "stbbmtfstate0000" (was "stbbmtfstateab12")'
 if grep -qE 'dns_zone_name|alert_emails|github_reviewer_ids' <<<"$(grep 'would set' <<<"$out")"; then

@@ -100,6 +100,8 @@ if ! az account show -o none 2>/dev/null; then
   exit 1
 fi
 az account set --subscription "$SUB" || die "cannot select subscription $SUB"
+# tf.sh passes it to Terraform; it is not in the committed tfvars (ADR 0003).
+export TF_VAR_subscription_id=$SUB ARM_SUBSCRIPTION_ID=$SUB
 SUB_NAME=$(az account show --query name -o tsv)
 REPO=$(tfvars_get_string "$BOOT_VARS" github_repo)
 LOC_ABBR=$(tfvars_get_string "$BOOT_VARS" location_abbr)
