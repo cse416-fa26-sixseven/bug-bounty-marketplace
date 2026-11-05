@@ -227,7 +227,7 @@ silently downgrading to runc.
 
 1. PR `feat/sandbox-aks` → `main` (CI OK, fresh reviewer agent, merge commit).
 2. `tf.sh compute test apply` (adds the pool; no cluster recreate), then
-   `az aks update -g rg-bbm-test-compute-<abbr> -n aks-bbm-test-<abbr>` to reconcile the cluster:
+   `az aks update -g rg-bbm-test-compute-<abbr> -n aks-bbm-test-<abbr> --yes` to reconcile the cluster:
    a KataVmIsolation pool added to an existing cluster does not install the RuntimeClass
    `kata-vm-isolation` until then (`kata-spike.sh` runs the same update when it finds the
    RuntimeClass missing). Then `kata-spike.sh test`.

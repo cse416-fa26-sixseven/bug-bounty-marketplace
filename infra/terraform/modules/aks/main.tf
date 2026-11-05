@@ -170,8 +170,14 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   # KEDA add-on (analysis worker queue scaler). About 0.4 CPU of requests, so
   # it is off while the analysis worker is disabled (var.keda_enabled).
-  workload_autoscaler_profile {
-    keda_enabled = var.keda_enabled
+  # Rendered only when KEDA is on: with every flag false Azure returns no
+  # profile at all, and a literal block would then show up as a change on
+  # every plan (and re-trigger the Gateway API patch below).
+  dynamic "workload_autoscaler_profile" {
+    for_each = var.keda_enabled ? [1] : []
+    content {
+      keda_enabled = true
+    }
   }
 
   dynamic "oms_agent" {
@@ -245,6 +251,13 @@ resource "azapi_update_resource" "app_routing_gateway_api" {
     # settings should survive it (`az aks show --query ingressProfile`).
     replace_triggered_by = [azurerm_kubernetes_cluster.this]
   }
+
+  # The cluster is busy while a node pool is being created; a PATCH in the
+  # same apply would fail with a conflict, so wait for the pools first.
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.apps,
+    azurerm_kubernetes_cluster_node_pool.sandbox,
+  ]
 }
 
 resource "azurerm_kubernetes_cluster_node_pool" "apps" {
