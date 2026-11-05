@@ -17,6 +17,8 @@ export interface RepositoryHarness {
   pipeline: PipelineRepository;
   seedFinding(record: FindingRecord): Promise<void>;
   setJobStatus(jobId: string, status: JobStatus, lastError?: string): Promise<void>;
+  /** Queues another analysis job for the contract, as a re-run would. */
+  addAnalysisJob(job: { id: string; subjectId: string; createdAt: string; status: JobStatus }): Promise<void>;
   jobsFor(subjectId: string): Promise<Array<{ kind: string; status: JobStatus }>>;
   /** Removes what the tests have inserted so far, so the next test starts with
    * no claims. The auditors in these tests hold one claim at a time. */
@@ -309,6 +311,31 @@ export function describeRepositories(
       }
       expect(await h.contracts.isAnalysisDone(done.contract.id)).toBe(true);
       expect(await h.contracts.isAnalysisDone("contract_missing")).toBe(false);
+    });
+
+    it("isAnalysisDone and listQueue follow the newest analysis job, by time then id", async () => {
+      const job = (subjectId: string, createdAt: Date, status: JobStatus, id = `job_${randomUUID()}`) =>
+        h.addAnalysisJob({ id, subjectId, createdAt: createdAt.toISOString(), status });
+      const listed = async (id: string) => (await h.contracts.listQueue(T0)).some((c) => c.id === id);
+
+      // An older failure does not hold back a newer finished run.
+      const rerun = await insert();
+      await h.setJobStatus(rerun.analysisJob.id, "failed", "solc error");
+      await job(rerun.contract.id, minutes(5), "done");
+      expect(await h.contracts.isAnalysisDone(rerun.contract.id)).toBe(true);
+      expect(await listed(rerun.contract.id)).toBe(true);
+
+      // An older finished run does not stand in for a newer one still running.
+      const running = await insertAnalysed();
+      await job(running.contract.id, minutes(5), "running");
+      expect(await h.contracts.isAnalysisDone(running.contract.id)).toBe(false);
+      expect(await listed(running.contract.id)).toBe(false);
+
+      // Same timestamp: the larger id is the newer job.
+      const tie = await insert();
+      await job(tie.contract.id, minutes(5), "done", "job_zzzz_" + randomUUID());
+      await job(tie.contract.id, minutes(5), "failed", "job_aaaa_" + randomUUID());
+      expect(await h.contracts.isAnalysisDone(tie.contract.id)).toBe(true);
     });
 
     it("listQueue includes Open and expired claims, not active claims, with the bounty", async () => {

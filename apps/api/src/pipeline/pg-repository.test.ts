@@ -109,6 +109,13 @@ describeRepositories(
           lastError ?? null,
         ]);
       },
+      addAnalysisJob: async ({ id, subjectId, createdAt, status }) => {
+        await db.query(
+          `INSERT INTO jobs (id, kind, subject_id, status, attempts, created_at, updated_at)
+           VALUES ($1, 'analysis', $2, $3, 0, $4, $4)`,
+          [id, subjectId, status, createdAt],
+        );
+      },
       jobsFor: async (subjectId) => {
         const result = await db.query<{ kind: string; status: JobStatus }>(
           "SELECT kind, status FROM jobs WHERE subject_id = $1 ORDER BY created_at",
