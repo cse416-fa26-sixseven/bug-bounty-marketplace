@@ -63,12 +63,25 @@ make_tree() {
   pin_fixture_regions "$dst"
 }
 
-# pin_fixture_regions <tree>: give the copy a fixed region layout (test ncus,
+# pin_fixture_regions <tree>: give the copy a fixed region layout (home ncus, test ncus,
 # staging frc, prod cac, every env on one Standard_B4as_v2 node), so the assertions
 # below don't depend on the regions the real subscription uses. The real
 # envs/** layout is checked for consistency separately ("repo:" checks).
 pin_fixture_regions() {
   local dst=$1 e loc abbr f
+  # Home region (tfstate, shared): northcentralus / ncus, whatever the real
+  # envs/global use.
+  for f in "$dst/envs/global/bootstrap.tfvars" "$dst/envs/global/global.tfvars"; do
+    sed -E -e 's/^(location[[:space:]]*=[[:space:]]*)"[^"]*"/\1"northcentralus"/' \
+      -e 's/^(location_abbr[[:space:]]*=[[:space:]]*)"[^"]*"/\1"ncus"/' "$f" >"$f.tmp"
+    cat "$f.tmp" >"$f"
+    rm -f "$f.tmp"
+  done
+  for f in "$dst"/envs/*/backend*.hcl; do
+    sed -E 's/^(resource_group_name[[:space:]]*=[[:space:]]*)"rg-bbm-tfstate-[^"]*"/\1"rg-bbm-tfstate-ncus"/' "$f" >"$f.tmp"
+    cat "$f.tmp" >"$f"
+    rm -f "$f.tmp"
+  done
   for pair in test=northcentralus/ncus staging=francecentral/frc prod=canadacentral/cac; do
     e=${pair%%=*} loc=${pair#*=}; abbr=${loc#*/}; loc=${loc%/*}
     for f in "$dst/envs/$e/data.tfvars" "$dst/envs/$e/compute.tfvars"; do
