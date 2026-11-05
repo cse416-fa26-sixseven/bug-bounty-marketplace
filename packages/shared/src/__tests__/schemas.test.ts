@@ -273,6 +273,15 @@ describe("AuditorFindingFieldsSchema", () => {
     ).toBe(false);
   });
 
+  it("rejects NUL characters, which Postgres text columns cannot store", () => {
+    expect(AuditorFindingFieldsSchema.safeParse({ ...valid, title: "a\u0000b" }).success).toBe(
+      false,
+    );
+    expect(
+      AuditorFindingFieldsSchema.safeParse({ ...valid, description: "a\u0000b" }).success,
+    ).toBe(false);
+  });
+
   it("rejects an unknown severity", () => {
     expect(AuditorFindingFieldsSchema.safeParse({ ...valid, severity: "Severe" }).success).toBe(
       false,

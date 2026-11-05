@@ -98,7 +98,8 @@ export const AuditorFindingFieldsSchema = z.object({
     .min(1, { error: "Title is required" })
     .max(AUDITOR_FINDING_TITLE_MAX_LENGTH, {
       error: `Title must be at most ${AUDITOR_FINDING_TITLE_MAX_LENGTH} characters`,
-    }),
+    })
+    .refine(hasNoNul, { error: "Title must not contain NUL characters" }),
   severity: FindingSeveritySchema,
   description: z
     .string()
@@ -106,6 +107,12 @@ export const AuditorFindingFieldsSchema = z.object({
     .min(1, { error: "Description is required" })
     .max(AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH, {
       error: `Description must be at most ${AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH} characters`,
-    }),
+    })
+    .refine(hasNoNul, { error: "Description must not contain NUL characters" }),
 });
+
+/** Postgres text and jsonb cannot hold U+0000. */
+function hasNoNul(value: string): boolean {
+  return !value.includes("\u0000");
+}
 export type AuditorFindingFields = z.infer<typeof AuditorFindingFieldsSchema>;
