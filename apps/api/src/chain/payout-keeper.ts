@@ -1,3 +1,6 @@
+import type { ChainActions } from "./actions.js";
+import type { LapseSummary } from "./dispute-lapser.js";
+
 export interface PayoutKeeperOptions {
   /** One pass of work, e.g. ChainActions.runPayoutsOnce bound to the clock. */
   runOnce: () => Promise<unknown>;
@@ -44,4 +47,34 @@ export function startPayoutKeeper(options: PayoutKeeperOptions): PayoutKeeper {
       await inFlight;
     },
   };
+}
+
+export interface KeeperPassDeps {
+  chainActions: Pick<ChainActions, "finishPendingUnlocks" | "runPayoutsOnce">;
+  /** Lapses disputes left unruled past their ruling window; omitted without a chain. */
+  runLapses?: () => Promise<LapseSummary>;
+  now: () => Date;
+  log?: (message: string) => void;
+  onError?: (message: string, err: unknown) => void;
+}
+
+/**
+ * One keeper pass: finish pending unlocks, lapse unruled disputes, then pay
+ * out. The first two are best-effort: a failure is reported and the payout
+ * step still runs, so an RPC hiccup in either never delays a payout.
+ */
+export async function runKeeperPass(deps: KeeperPassDeps): Promise<void> {
+  const log = deps.log ?? ((message: string) => console.log(`@bbm/api ${message}`));
+  const onError = deps.onError ?? ((message: string, err: unknown) => console.error(`@bbm/api ${message}`, err));
+
+  await deps.chainActions.finishPendingUnlocks().catch((err: unknown) => onError("unlock sweep failed", err));
+  if (deps.runLapses) {
+    const lapses = await deps.runLapses().catch((err: unknown) => {
+      onError("lapse pass failed", err);
+      return null;
+    });
+    if (lapses && lapses.lapsed + lapses.failed > 0) log(`lapse pass: ${JSON.stringify(lapses)}`);
+  }
+  const summary = await deps.chainActions.runPayoutsOnce(deps.now());
+  if (summary.due > 0) log(`payout pass: ${JSON.stringify(summary)}`);
 }

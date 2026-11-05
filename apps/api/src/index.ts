@@ -9,7 +9,7 @@ import { PgDisputeRepository } from "./disputes/pg-repository.js";
 import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
 import { createChainActions, type ChainActions } from "./chain/actions.js";
 import { PgChainActionStore } from "./chain/pg-action-store.js";
-import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
+import { runKeeperPass, startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
 import { runLapsesOnce } from "./chain/dispute-lapser.js";
 import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
 import { startEventIndexer, type EventIndexerHandle } from "./indexer/indexer.js";
@@ -184,28 +184,15 @@ async function start(): Promise<void> {
     const intervalSeconds = parseIntEnv(process.env.PAYOUT_KEEPER_INTERVAL_SECONDS, 60);
     payoutKeeper = startPayoutKeeper({
       intervalMs: intervalSeconds * 1000,
-      runOnce: async () => {
-        // Finish unlocks left in 'unlocking' first. A failure is logged here so
-        // the payout pass still runs.
-        await chainActions
-          .finishPendingUnlocks()
-          .catch((err: unknown) => console.error("@bbm/api unlock sweep failed", err));
-        // Lapse disputes the arbiter left unruled past the ruling window, so
-        // their payouts unfreeze. A failure is logged and payouts still run.
-        if (disputeRepository && disputeResolutionPort) {
-          const lapses = await runLapsesOnce({
-            disputes: disputeRepository,
-            disputeResolution: disputeResolutionPort,
-          }).catch((err: unknown) => {
-            console.error("@bbm/api lapse pass failed", err);
-            return null;
-          });
-          if (lapses && lapses.lapsed + lapses.failed > 0)
-            console.log(`@bbm/api lapse pass: ${JSON.stringify(lapses)}`);
-        }
-        const summary = await chainActions.runPayoutsOnce(new Date());
-        if (summary.due > 0) console.log(`@bbm/api payout pass: ${JSON.stringify(summary)}`);
-      },
+      runOnce: () =>
+        runKeeperPass({
+          chainActions,
+          runLapses:
+            disputeRepository && disputeResolutionPort
+              ? () => runLapsesOnce({ disputes: disputeRepository, disputeResolution: disputeResolutionPort })
+              : undefined,
+          now: () => new Date(),
+        }),
       onError: (err) => console.error("@bbm/api payout pass failed", err),
     });
   }
