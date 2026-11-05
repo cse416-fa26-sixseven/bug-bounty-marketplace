@@ -27,18 +27,31 @@ export function findAuditorById(auditorId: string): AuditorProfile | undefined {
 /** Findings whose stake lock outlives the claim, as in the real API. */
 const LOCKING_STATUSES = new Set<Finding["status"]>(["Submitted", "Verified", "Disputed"]);
 
+/** Findings whose outcome releases the claim lock at once, as in the real API
+ * (PayoutCredited, a Failed verdict, a lost dispute). */
+const RELEASING_STATUSES = new Set<Finding["status"]>(["Paid", "Rejected"]);
+
 /** Mirrors AuditorStaking.activeSubmissions: one lock per contract the
- * auditor holds an unexpired claim on or has a pending finding on. */
+ * auditor holds an unexpired claim on or has a pending finding on. A claim
+ * whose PoC'd finding was paid or rejected no longer holds one. */
 export function activeSubmissionsFor(auditorId: string): number {
   const locked = new Set<string>();
+  const released = new Set<string>();
+  const pocs = db.pocSubmissions.filter((p) => p.auditorId === auditorId);
+  for (const poc of pocs) {
+    const finding = findFindingById(poc.findingId);
+    if (!finding) continue;
+    if (LOCKING_STATUSES.has(finding.status)) locked.add(finding.contractId);
+    else if (RELEASING_STATUSES.has(finding.status)) released.add(finding.contractId);
+  }
   for (const [contractId, claim] of Object.entries(db.claims)) {
-    if (claim.auditorId === auditorId && new Date(claim.expiresAt).getTime() > Date.now()) {
+    if (
+      claim.auditorId === auditorId &&
+      new Date(claim.expiresAt).getTime() > Date.now() &&
+      !released.has(contractId)
+    ) {
       locked.add(contractId);
     }
-  }
-  for (const poc of db.pocSubmissions.filter((p) => p.auditorId === auditorId)) {
-    const finding = findFindingById(poc.findingId);
-    if (finding && LOCKING_STATUSES.has(finding.status)) locked.add(finding.contractId);
   }
   return locked.size;
 }
