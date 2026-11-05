@@ -30,6 +30,8 @@ describe("selectHandlers", () => {
         "GET */api/auditor/queue",
         "POST */api/auditor/claim",
         "POST */api/auditor/poc",
+        "POST */api/auditor/findings",
+        "PUT */api/findings/:id/note",
       ].sort(),
     );
   });
@@ -44,7 +46,7 @@ describe("selectHandlers", () => {
 
   it("lists the raw-output route as live even though it has no mock", () => {
     expect(LIVE_ROUTES).toContainEqual({ method: "GET", path: "/api/findings/:id/raw" });
-    expect(LIVE_ROUTES).toHaveLength(10);
+    expect(LIVE_ROUTES).toHaveLength(12);
   });
 });
 

@@ -14,6 +14,9 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   outputDir: "test-results",
   fullyParallel: true,
+  // The chain specs share the anvil role accounts, and an auditor holds one
+  // claim at a time, so they run one at a time.
+  workers: process.env.E2E_CHAIN ? 1 : undefined,
   forbidOnly: ci,
   retries: ci ? 1 : 0,
   timeout: 30_000,

@@ -70,15 +70,17 @@ point it at another namespace or env with analysis and the sandbox enabled:
 `e2e/lifecycle.spec.ts` drives the full on-chain lifecycle in the browser:
 payout (fund, stake, claim, passing PoC, Verified, Paid after the challenge
 window, withdraw) and dispute (disputed, arbiter rules against the auditor,
-Rejected, stake slashed). It is skipped unless `E2E_CHAIN=1`, because it needs
-the chain demo stack and the web app in live chain mode, which CI does not
-start. The two tests share one auditor account and run in order.
+Rejected, stake slashed). `e2e/features.spec.ts` covers the rest: a developer
+note that survives a reload, cancelling a funded bounty, the auditor's
+false-positive mark, and an auditor-reported finding that is verified and paid.
+Both are skipped unless `E2E_CHAIN=1`, because they need the chain demo stack
+and the web app against the real API, which CI does not start. They share the
+anvil role accounts, so with `E2E_CHAIN=1` Playwright runs one test at a time.
 
 ```sh
 pnpm stack:demo                # fresh database and chain, 60-second challenge window
-NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LIVE_CHAIN=enabled \
-  API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
-E2E_CHAIN=1 pnpm test:e2e -- lifecycle   # about 3 minutes
+NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
+E2E_CHAIN=1 pnpm test:e2e -- lifecycle features   # about 12 minutes
 pnpm demo:lifecycle            # the same two paths from the command line; prints LIFECYCLE OK
 ```
 
