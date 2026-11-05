@@ -85,14 +85,15 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   // itself; every finding on a given claimed contract shares the same
   // value, so the first one is representative.
   const claimExpiresAt = findings.find((f) => f.claimExpiresAt)?.claimExpiresAt ?? null;
+  // The claim comes from the auditor's profile (the API lists only active
+  // claims), not from findings: a contract Slither found nothing on has no
+  // finding to carry it, and that is exactly when a report matters. The
+  // contract reads back Open once a claim lapses, and the findings' expiry,
+  // when there are findings, hides the form on the second it lapses.
   const ownsClaim =
     contract.status === "Claimed" &&
-    findings.some(
-      (f) =>
-        f.claimedByAuditorId === auditorId &&
-        !!f.claimExpiresAt &&
-        new Date(f.claimExpiresAt).getTime() > now,
-    );
+    profile.claimedContractIds.includes(contractId) &&
+    (claimExpiresAt === null || new Date(claimExpiresAt).getTime() > now);
 
   return (
     <div className="flex flex-col gap-6">

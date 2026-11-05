@@ -25,7 +25,10 @@ so the worker, the chain actions and every view keep working unchanged:
 description (the views label it as the auditor's, not as AI output), and
 `GET /api/findings/:id/raw` returns the report as submitted. On-chain the
 finding is keyed by `onchainId(findingId)` like any other, so
-`recordSubmission`/`recordVerification` need no change.
+`recordSubmission`/`recordVerification` need no change. The reporting auditor
+chooses an auditor-reported finding's `severity`; like a Slither finding's,
+it is advisory (ordering and display only). Payout never depends on it: the
+first verified PoC is paid the bounty, whatever its severity.
 
 Developer notes (R16) are `developerNote` / `developerNoteUpdatedAt` on the
 `Finding` (both `null` when there is none). Only the contract's developer
