@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startPayoutKeeper } from "./payout-keeper.js";
+import { runKeeperPass, startPayoutKeeper } from "./payout-keeper.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -52,5 +52,49 @@ describe("startPayoutKeeper", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect(runOnce).toHaveBeenCalledTimes(2);
     await keeper.stop();
+  });
+});
+
+describe("runKeeperPass", () => {
+  const T = new Date("2026-11-05T12:00:00.000Z");
+
+  function deps(overrides: { unlocks?: () => Promise<number> } = {}) {
+    const chainActions = {
+      finishPendingUnlocks: vi.fn(overrides.unlocks ?? (async () => 0)),
+      runPayoutsOnce: vi.fn(async () => ({ due: 0, paid: 0, failed: 0 })),
+    };
+    const onError = vi.fn();
+    return { chainActions, onError, now: () => T, log: vi.fn() };
+  }
+
+  it("still pays out when the lapse pass fails", async () => {
+    const d = deps();
+    await runKeeperPass({ ...d, runLapses: async () => Promise.reject(new Error("rpc down")) });
+    expect(d.chainActions.runPayoutsOnce).toHaveBeenCalledWith(T);
+    expect(d.onError).toHaveBeenCalledWith("lapse pass failed", expect.any(Error));
+  });
+
+  it("still pays out when the unlock sweep fails", async () => {
+    const d = deps({ unlocks: async () => Promise.reject(new Error("rpc down")) });
+    await runKeeperPass(d);
+    expect(d.chainActions.runPayoutsOnce).toHaveBeenCalledWith(T);
+    expect(d.onError).toHaveBeenCalledWith("unlock sweep failed", expect.any(Error));
+  });
+
+  it("runs the lapse pass before the payout pass", async () => {
+    const d = deps();
+    const order: string[] = [];
+    d.chainActions.runPayoutsOnce.mockImplementation(async () => {
+      order.push("payouts");
+      return { due: 0, paid: 0, failed: 0 };
+    });
+    await runKeeperPass({
+      ...d,
+      runLapses: async () => {
+        order.push("lapses");
+        return { candidates: 0, lapsed: 0, failed: 0 };
+      },
+    });
+    expect(order).toEqual(["lapses", "payouts"]);
   });
 });

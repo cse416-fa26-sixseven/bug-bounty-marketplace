@@ -9,7 +9,8 @@ import { PgDisputeRepository } from "./disputes/pg-repository.js";
 import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
 import { createChainActions, type ChainActions } from "./chain/actions.js";
 import { PgChainActionStore } from "./chain/pg-action-store.js";
-import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
+import { runKeeperPass, startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
+import { runLapsesOnce } from "./chain/dispute-lapser.js";
 import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
 import { startEventIndexer, type EventIndexerHandle } from "./indexer/indexer.js";
 import { PgIndexerLock, PgIndexerRepository, listFindingIds } from "./indexer/pg-repository.js";
@@ -71,6 +72,7 @@ if (authOriginWarning) console.warn(`@bbm/api ${authOriginWarning}`);
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
 const bountyEscrowPort = chainConfig ? createBountyEscrowFromConfig(chainConfig) : undefined;
+const disputeResolutionPort = chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined;
 const actionStore =
   chainConfig && pool
     ? new PgChainActionStore(pool, { challengeWindowSeconds: chainConfig.challengeWindowSeconds })
@@ -112,7 +114,7 @@ const app = buildApp({
   sessionSecret,
   authConfig,
   bountyEscrow: bountyEscrowPort,
-  disputeResolution: chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined,
+  disputeResolution: disputeResolutionPort,
   auditorStaking: stakingPort ?? undefined,
   disputes: disputeRepository,
   findingStatus: actionStore,
@@ -182,15 +184,15 @@ async function start(): Promise<void> {
     const intervalSeconds = parseIntEnv(process.env.PAYOUT_KEEPER_INTERVAL_SECONDS, 60);
     payoutKeeper = startPayoutKeeper({
       intervalMs: intervalSeconds * 1000,
-      runOnce: async () => {
-        // Finish unlocks left in 'unlocking' first. A failure is logged here so
-        // the payout pass still runs.
-        await chainActions
-          .finishPendingUnlocks()
-          .catch((err: unknown) => console.error("@bbm/api unlock sweep failed", err));
-        const summary = await chainActions.runPayoutsOnce(new Date());
-        if (summary.due > 0) console.log(`@bbm/api payout pass: ${JSON.stringify(summary)}`);
-      },
+      runOnce: () =>
+        runKeeperPass({
+          chainActions,
+          runLapses:
+            disputeRepository && disputeResolutionPort
+              ? () => runLapsesOnce({ disputes: disputeRepository, disputeResolution: disputeResolutionPort })
+              : undefined,
+          now: () => new Date(),
+        }),
       onError: (err) => console.error("@bbm/api payout pass failed", err),
     });
   }

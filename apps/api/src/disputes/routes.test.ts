@@ -166,7 +166,7 @@ describe("false positive", () => {
 
 describe("disputes", () => {
   it("records a dispute only after it is open on-chain, idempotently", async () => {
-    const { app, seed, openOnChain, store } = setup();
+    const { app, seed, openOnChain, store, disputes } = setup();
     const { contractId, findingId } = await seed("Verified");
     const cookie = await signIn(app, DEVELOPER);
     const before = await app.inject({
@@ -202,6 +202,11 @@ describe("disputes", () => {
     const finding = store.findings.get(findingId)!;
     expect(finding.status).toBe("Disputed");
     expect(finding.statusHistory.filter((h) => h.status === "Disputed")).toHaveLength(1);
+    // The on-chain ruling window is kept for the lapse keeper.
+    const pastWindow = new Date(9_999_999_999_000 + 1000);
+    expect(await disputes.listLapseCandidates(pastWindow)).toEqual([
+      { id: first.json().id, findingId, contractId, ruleBy: new Date(9_999_999_999_000) },
+    ]);
   });
 
   it("only the developer can dispute", async () => {

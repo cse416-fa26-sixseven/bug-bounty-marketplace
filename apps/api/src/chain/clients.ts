@@ -45,10 +45,14 @@ export function createBountyEscrowFromConfig(config: ChainConfig): BountyEscrowP
   });
 }
 
-/** Read-only DisputeResolution port for disputes and rulings. */
+/** DisputeResolution port: reads disputes and rulings, and sends lapse()
+ * with the operator key. */
 export function createDisputeResolutionFromConfig(config: ChainConfig): DisputeResolutionPort {
+  const transport = http(config.rpcUrl);
+  const account = privateKeyToAccount(config.operatorPrivateKey);
   return createDisputeResolutionPort({
     address: config.disputeResolutionAddress,
-    publicClient: createPublicClient({ transport: http(config.rpcUrl) }),
+    publicClient: createPublicClient({ transport }),
+    walletClient: createWalletClient({ account, transport }),
   });
 }
