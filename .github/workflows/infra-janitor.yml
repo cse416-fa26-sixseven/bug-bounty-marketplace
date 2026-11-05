@@ -4,8 +4,10 @@ name: Infra janitor
 # Deletes expired ephemeral namespaces (run-<id>-<attempt>, pr-<n>;
 # annotation bbm.io/expires-on) on the test AKS cluster with
 # infra/terraform/scripts/janitor.sh, which skips cleanly while the cluster
-# is paused or down. Weekly it also purges old pr-*/sha-* images from
-# bbm/* and old PR-preview images from bbm-preview/* in ACR.
+# is paused or down; each expired namespace's PoC sandbox namespace
+# (<ns>-sandbox, ADR 0004) goes with it. Weekly it also purges old
+# pr-*/sha-* images from bbm/* (api, web, analysis, sandbox, contracts) and
+# old PR-preview images from bbm-preview/* in ACR.
 #
 #   every 6h          sweep, --apply
 #   Sun 03:30 UTC     sweep + ACR purge, --apply
@@ -278,7 +280,9 @@ jobs:
           echo "protected tags: ${protected[*]:-none}"
           if [[ "$APPLY" == "true" ]]; then
             for tag in "${protected[@]+"${protected[@]}"}"; do
-              for svc in api web analysis contracts; do
+              # Every image a deploy needs, incl. the sandbox image the
+              # analysis worker launches as Kata Jobs (ADR 0004).
+              for svc in api web analysis sandbox contracts; do
                 ref="bbm/$svc:$tag"
                 enabled=$(az acr repository show --name "$ACR_NAME" --image "$ref" \
                   --query changeableAttributes.deleteEnabled -o tsv --only-show-errors 2>/dev/null) || {
@@ -302,6 +306,8 @@ jobs:
           # bbm-preview/* holds only PR previews (pr-<n>-sha-<7>[-mocked]);
           # bbm/*:pr-* are leftovers from before previews had their own
           # repositories. Deployed tags are only ever in bbm/* (locked above).
+          # The repository regexes cover every service, so bbm/sandbox and
+          # bbm-preview/sandbox are purged like the others.
           purge_cmd="acr purge --filter 'bbm/.*:pr-.*' --filter 'bbm/.*:sha-.*' --filter 'bbm-preview/.*:pr-.*' --ago 30d --keep 10 --untagged"
           [[ "$APPLY" == "true" ]] || purge_cmd+=" --dry-run"
           echo "acr run on $ACR_NAME: $purge_cmd"

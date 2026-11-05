@@ -361,7 +361,13 @@ jobs:
           kubelogin-version: v0.1.4
 
       # Every image the release will pull (incl. the helm test mirror image)
-      # must exist in ACR before we touch the cluster.
+      # must exist in ACR before we touch the cluster. The analysis worker
+      # (a pod image, analysis.enabled in staging/prod) and the sandbox image
+      # it launches as Kata Jobs from its SANDBOX_IMAGE env value (not a pod
+      # image, ADR 0004) are added explicitly from the chart's
+      # analysis.image.repository / analysis.sandbox.image.repository
+      # (defaults bbm/analysis, bbm/sandbox), whether or not the grep below
+      # already caught them.
       - name: Verify images exist in ACR
         if: steps.gate.outputs.go == 'true'
         env:
@@ -369,10 +375,17 @@ jobs:
         run: |
           set -euo pipefail
           registry="$ACR_NAME.azurecr.io"
-          images=$(helm template bbm deploy/helm/bbm -n bbm \
+          rendered=$(helm template bbm deploy/helm/bbm -n bbm \
               -f "deploy/helm/bbm/values-$ENV_NAME.yaml" -f "$RUNNER_TEMP/values-infra.yaml" \
-              --set global.image.tag="$TAG" --set global.requireInfraValues=true |
-            { grep -Eo "$registry/[^\"' ]+" || true; } | sort -u)
+              --set global.image.tag="$TAG" --set global.requireInfraValues=true)
+          chart_values=$(helm show values deploy/helm/bbm)
+          analysis_repo=$(yq -r '.analysis.image.repository // "bbm/analysis"' <<<"$chart_values")
+          sandbox_repo=$(yq -r '.analysis.sandbox.image.repository // "bbm/sandbox"' <<<"$chart_values")
+          images=$({
+            grep -Eo "$registry/[^\"' ]+" <<<"$rendered" || true
+            echo "$registry/$analysis_repo:$TAG"
+            echo "$registry/$sandbox_repo:$TAG"
+          } | sort -u)
           [[ -n "$images" ]] || { echo "::error::No $registry images found in the rendered chart"; exit 1; }
           missing=0
           for ref in $images; do

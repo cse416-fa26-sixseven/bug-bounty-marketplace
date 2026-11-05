@@ -345,6 +345,18 @@ jobs:
           (umask 077 && printf 'postgres:\n  inCluster:\n    enabled: true\n    password: "%s"\n' "$pw" > "$secret_values")
           [[ "$IMAGE_PREFIX" =~ ^bbm(-preview)?$ ]] || { echo "::error::invalid image_repository_prefix"; exit 1; }
           extra=(--set "api.image.repository=$IMAGE_PREFIX/api" --set "web.image.repository=$IMAGE_PREFIX/web")
+          # values-test.yaml turns on the analysis worker, the Kata PoC
+          # sandbox (namespace <ns>-sandbox, ADR 0004) and the shared sources
+          # volume for the T18 pipeline tests. CI runs (kind=test) deploy
+          # them with the chart's default bbm/analysis and bbm/sandbox images
+          # (pushed by the same run). PR previews (kind=preview) run neither:
+          # previews only build api/web under bbm-preview/*, show a mocked UI
+          # and run the smoke suite, so they pay for no analysis pod, sandbox
+          # namespace or Azure Files share.
+          if [[ "$KIND" == preview ]]; then
+            extra+=(--set analysis.enabled=false --set sandbox.enabled=false
+              --set api.sourceStorage.persistentVolumeClaim.enabled=false)
+          fi
           if [[ -n "$WEB_TAG" ]]; then
             [[ "$WEB_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "::error::invalid web_image_tag"; exit 1; }
             extra+=(--set "web.image.tag=$WEB_TAG")
@@ -401,7 +413,10 @@ jobs:
             exit 0
           fi
           helm uninstall bbm -n "$NS" --wait --timeout 5m || echo "::warning::helm uninstall bbm -n $NS failed; deleting the namespace anyway"
-          kubectl delete namespace "$NS" --wait=true --timeout=10m
+          # A CI-run release also owns the PoC sandbox namespace <ns>-sandbox
+          # (ADR 0004; previews render none). helm uninstall removes it;
+          # delete it explicitly in case the uninstall failed half-way.
+          kubectl delete namespace "$NS" "$NS-sandbox" --ignore-not-found --wait=true --timeout=10m
 
       - name: Result
         id: result
