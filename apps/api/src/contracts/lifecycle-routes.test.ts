@@ -125,7 +125,7 @@ describe("contract lifecycle routes with a chain", () => {
     expect((await funded()).statusCode).toBe(200);
   });
 
-  it("adopts a later on-chain deadline for an unfunded bounty, but not a past one or a funded one's", async () => {
+  it("adopts a later on-chain deadline for an unfunded bounty, but not a past, earlier or funded one", async () => {
     const { app, upload, fundOnChain } = setup();
     const dev = await signIn(app, DEVELOPER);
     const funded = (id: string) =>
@@ -134,6 +134,11 @@ describe("contract lifecycle routes with a chain", () => {
     const past = (await upload(dev)).json().id as string;
     fundOnChain(past, 1, DEVELOPER.address, "2020-01-01T00:00:00.000Z");
     expect((await funded(past)).statusCode).toBe(409);
+
+    // Future, but earlier than the deadline entered at upload: not adopted.
+    const earlier = (await upload(dev)).json().id as string;
+    fundOnChain(earlier, 1, DEVELOPER.address, "2029-06-01T00:00:00.000Z");
+    expect((await funded(earlier)).statusCode).toBe(409);
 
     const id = (await upload(dev)).json().id as string;
     const LATER = "2031-06-01T00:00:00.000Z";
@@ -215,6 +220,43 @@ describe("contract lifecycle routes with a chain", () => {
       expect(closed.statusCode).toBe(200);
       expect(closed.json().status).toBe("Expired");
     }
+  });
+
+  it("refuses to cancel while the developer's own bounty is open on-chain and unrecorded", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "bounty not deleted on-chain" });
+  });
+
+  it("cancels despite a bounty someone else funded under the contract's id", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 1, AUDITOR.address);
+    // Not the developer's bounty: /funded refuses it, and cancel needs no on-chain step.
+    const funded = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    expect(funded.statusCode).toBe(409);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("Expired");
+  });
+
+  it("refuses to mark a cancelled contract funded, even when the chain holds its bounty", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    const cancel = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(cancel.json().status).toBe("Expired");
+    fundOnChain(id, 1);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "contract is not open" });
+    const queue = await app.inject({ method: "GET", url: "/api/auditor/queue" });
+    expect(queue.json().map((c: { id: string }) => c.id)).not.toContain(id);
   });
 
   it("cancels a contract never funded on-chain without an on-chain step, but never reclaims it", async () => {

@@ -58,6 +58,11 @@ export function registerContractLifecycleRoutes(
   app.post<{ Params: { id: string } }>("/api/contracts/:id/funded", async (request, reply) => {
     const contract = await developersContract(request, reply);
     if (!contract) return reply;
+    // A cancelled (Expired) or Resolved contract is never listed again, even
+    // if a bounty reached the chain after the cancel; the developer deletes it.
+    if (contract.status !== "Open" && contract.status !== "Claimed") {
+      return reply.code(409).send({ error: "contract is not open" });
+    }
     // Only an analysed contract is fundable: one that failed analysis (it does
     // not compile) never reaches auditors. A bounty funded on-chain anyway can
     // still be deleted by the developer.
@@ -79,9 +84,14 @@ export function registerContractLifecycleRoutes(
     } else {
       // Funding waits for the analysis, so the upload's deadline may have
       // passed: the developer funds with a later one and the API adopts it.
-      // A bounty already funded keeps its terms.
+      // Only a later deadline, still in the future, is adopted; a bounty
+      // already funded keeps its terms.
       const onchainDeadline = new Date(Number(onchain.deadline) * 1000);
-      if ((await contracts.isFunded(contract.id)) || onchainDeadline <= at) {
+      if (
+        (await contracts.isFunded(contract.id)) ||
+        onchain.deadline < storedDeadline ||
+        onchainDeadline <= at
+      ) {
         return reply.code(409).send({ error: "bounty not funded on-chain" });
       }
       await contracts.markFunded(contract.id, at, onchainDeadline);
@@ -96,11 +106,13 @@ export function registerContractLifecycleRoutes(
       const onchain = await bountyEscrow.readBounty(onchainId(contract.id));
       // Funding waits for the analysis, so a contract may never have been
       // funded (still analysing, or the analysis failed): cancelling it needs
-      // no on-chain step.
-      const neverFunded =
-        action === "cancel" &&
-        onchain.state === BOUNTY_STATE_NONE &&
-        !(await contracts.isFunded(contract.id));
+      // no on-chain step. Nor does a bounty someone else funded under this
+      // contract's id: it is not the developer's, and they could neither
+      // delete it nor fund their own.
+      const ours =
+        onchain.state !== BOUNTY_STATE_NONE &&
+        getAddress(onchain.developer) === getAddress(contract.developerAddress);
+      const neverFunded = action === "cancel" && !ours && !(await contracts.isFunded(contract.id));
       if (onchain.state !== BOUNTY_STATE_CLOSED && !neverFunded) {
         return reply.code(409).send({
           error:

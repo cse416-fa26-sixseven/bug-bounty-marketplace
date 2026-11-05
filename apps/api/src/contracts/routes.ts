@@ -25,8 +25,8 @@ export const CONTRACT_MULTIPART_LIMITS = {
 } as const;
 
 /** Registers `POST /api/contracts`, `GET /api/contracts`,
- * `GET /api/contracts/:id` and `GET /api/contracts/:id/bounty`. The app must already have @fastify/multipart
- * registered with CONTRACT_MULTIPART_LIMITS. */
+ * `GET /api/contracts/:id` and `GET /api/contracts/:id/bounty`. The app must
+ * already have @fastify/multipart registered with CONTRACT_MULTIPART_LIMITS. */
 export function registerContractRoutes(app: FastifyInstance, deps: ContractRouteDeps): void {
   const now = deps.now ?? (() => new Date());
 
