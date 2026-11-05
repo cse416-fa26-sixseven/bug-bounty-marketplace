@@ -5,6 +5,7 @@ import type { Auth } from "../auth/session.js";
 import type { ChainActions } from "../chain/actions.js";
 import {
   BOUNTY_STATE_CLOSED,
+  BOUNTY_STATE_NONE,
   BOUNTY_STATE_OPEN,
   type BountyEscrowPort,
 } from "../chain/bounty-escrow.js";
@@ -93,7 +94,14 @@ export function registerContractLifecycleRoutes(
       const contract = await developersContract(request, reply);
       if (!contract) return reply;
       const onchain = await bountyEscrow.readBounty(onchainId(contract.id));
-      if (onchain.state !== BOUNTY_STATE_CLOSED) {
+      // Funding waits for the analysis, so a contract may never have been
+      // funded (still analysing, or the analysis failed): cancelling it needs
+      // no on-chain step.
+      const neverFunded =
+        action === "cancel" &&
+        onchain.state === BOUNTY_STATE_NONE &&
+        !(await contracts.isFunded(contract.id));
+      if (onchain.state !== BOUNTY_STATE_CLOSED && !neverFunded) {
         return reply.code(409).send({
           error:
             action === "cancel" ? "bounty not deleted on-chain" : "bounty not refunded on-chain",

@@ -190,3 +190,22 @@ describe("POST /api/contracts", () => {
     expect(response.statusCode).toBe(400);
   });
 });
+
+describe("GET /api/contracts/:id/bounty", () => {
+  it("returns the bounty terms entered at upload, and 404 for an unknown contract", async () => {
+    const { app } = setup();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/contracts",
+      ...multipartBody(validFields, { name: "Vault.sol", content: source }),
+    });
+    const id = created.json().id as string;
+
+    const bounty = await app.inject({ method: "GET", url: `/api/contracts/${id}/bounty` });
+    expect(bounty.statusCode).toBe(200);
+    expect(bounty.json()).toMatchObject({ contractId: id, amount: "2", currency: "ETH", deadline });
+
+    const missing = await app.inject({ method: "GET", url: "/api/contracts/contract_missing/bounty" });
+    expect(missing.statusCode).toBe(404);
+  });
+});

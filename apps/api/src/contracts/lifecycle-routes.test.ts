@@ -217,6 +217,27 @@ describe("contract lifecycle routes with a chain", () => {
     }
   });
 
+  it("cancels a contract never funded on-chain without an on-chain step, but never reclaims it", async () => {
+    const { app, upload } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev, DEVELOPER.address, false)).json().id as string;
+
+    const reclaim = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/reclaim`,
+      headers: { cookie: dev },
+    });
+    expect(reclaim.statusCode).toBe(409);
+
+    const cancel = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/cancel`,
+      headers: { cookie: dev },
+    });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json().status).toBe("Expired");
+  });
+
   it("claims for the signed-in auditor and rejects a different body auditorId", async () => {
     const { app, upload, fundOnChain } = setup();
     const dev = await signIn(app, DEVELOPER);
