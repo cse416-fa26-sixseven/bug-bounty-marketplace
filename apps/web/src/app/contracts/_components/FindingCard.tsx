@@ -11,6 +11,7 @@ import {
   findingHeading,
   isAuditorReported,
 } from "@/components/FindingOrigin";
+import { FindingNoteEditor } from "./FindingNoteEditor";
 
 const SEVERITY_STYLES: Record<FindingSeverity, string> = {
   Critical: "bg-red-500/20 text-red-300 border-red-500/40",
@@ -102,6 +103,7 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
 
       <p className="mt-3 whitespace-pre-line text-sm text-slate-300">{finding.llmExplanation}</p>
       <FindingDescriptionNote finding={finding} />
+      <FindingNoteEditor finding={finding} developerAddress={developerAddress} />
       <details className="mt-4 text-xs text-slate-400">
         <summary className="text-emerald-300">Finding status history</summary>
         <ol className="mt-3 space-y-2">

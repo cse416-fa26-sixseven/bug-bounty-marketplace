@@ -58,6 +58,15 @@ export async function postJson<T>(
   return schema.parse(data);
 }
 
+export async function putJson<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T> {
+  const data = await request(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return schema.parse(data);
+}
+
 /** POSTs a `FormData` body (for `.sol` / `.t.sol` file uploads) and
  * validates the JSON response against `schema`. */
 export async function postForm<T>(path: string, form: FormData, schema: z.ZodType<T>): Promise<T> {

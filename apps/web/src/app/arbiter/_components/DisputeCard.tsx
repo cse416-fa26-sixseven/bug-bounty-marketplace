@@ -6,6 +6,7 @@ import {
   FindingOriginBadge,
   findingHeading,
 } from "@/components/FindingOrigin";
+import { DeveloperNoteView } from "@/components/DeveloperNote";
 
 const SEVERITY_STYLES: Record<string, string> = {
   Critical: "bg-red-500/20 text-red-300",
@@ -83,6 +84,7 @@ export function DisputeCard({ dispute, onRule, isRuling }: DisputeCardProps) {
               </div>
               <p className="whitespace-pre-line">{finding.llmExplanation}</p>
               <FindingDescriptionNote finding={finding} />
+              <DeveloperNoteView finding={finding} />
             </div>
           ) : (
             <p className="mt-2 text-sm text-slate-500">Finding not found.</p>

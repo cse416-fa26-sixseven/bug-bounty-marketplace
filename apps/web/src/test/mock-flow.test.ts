@@ -104,6 +104,48 @@ describe("auditor queue + claim", () => {
   });
 });
 
+describe("developer notes on findings", () => {
+  it("lets the contract's developer set, edit and clear a note", async () => {
+    const finding = (await developerApi.listFindings("contract_2"))[0]!;
+    const set = await developerApi.setFindingNote(finding.id, {
+      developerId: SEED_DEVELOPER_ADDRESS,
+      note: "  Known issue  ",
+    });
+    expect(set).toMatchObject({ developerNote: "Known issue" });
+    expect(set.developerNoteUpdatedAt).not.toBeNull();
+    await developerApi.setFindingNote(finding.id, {
+      developerId: SEED_DEVELOPER_ADDRESS,
+      note: "Fixed in v2",
+    });
+    expect((await developerApi.listFindings("contract_2"))[0]?.developerNote).toBe("Fixed in v2");
+    const cleared = await developerApi.setFindingNote(finding.id, {
+      developerId: SEED_DEVELOPER_ADDRESS,
+      note: "",
+    });
+    expect(cleared).toMatchObject({ developerNote: null, developerNoteUpdatedAt: null });
+  });
+
+  it("rejects a note from anyone else, an over-long note, and an unknown finding", async () => {
+    const finding = (await developerApi.listFindings("contract_2"))[0]!;
+    await expect(
+      developerApi.setFindingNote(finding.id, { developerId: SEED_AUDITOR_ID, note: "x" }),
+    ).rejects.toThrow(/Only the contract's developer/);
+    await expect(
+      developerApi.setFindingNote(finding.id, {
+        developerId: SEED_DEVELOPER_ADDRESS,
+        note: "a".repeat(2001),
+      }),
+    ).rejects.toThrow(/at most 2000/);
+    await expect(
+      developerApi.setFindingNote("finding_missing", {
+        developerId: SEED_DEVELOPER_ADDRESS,
+        note: "x",
+      }),
+    ).rejects.toThrow(/Not found/);
+    expect((await developerApi.listFindings("contract_2"))[0]?.developerNote).toBeNull();
+  });
+});
+
 describe("claim during analysis", () => {
   it("assigns later findings to the auditor who claimed before analysis completed", async () => {
     const contract = await developerApi.submitContract({

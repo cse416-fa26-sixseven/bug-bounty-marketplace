@@ -54,6 +54,19 @@ describe("DisputeCard", () => {
     expect(screen.queryByText(/AI explanation/)).not.toBeInTheDocument();
   });
 
+  it("shows the developer's note read-only", () => {
+    const view = dispute("slither");
+    view.finding = {
+      ...view.finding!,
+      developerNote: "Mitigated by the pause guard.",
+      developerNoteUpdatedAt: at,
+    };
+    render(<DisputeCard dispute={view} onRule={vi.fn()} isRuling={false} />);
+    expect(screen.getByText(/Developer.s note/)).toBeInTheDocument();
+    expect(screen.getByText("Mitigated by the pause guard.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /note/i })).not.toBeInTheDocument();
+  });
+
   it("labels a Slither finding's text as an AI explanation", () => {
     render(<DisputeCard dispute={dispute("slither")} onRule={vi.fn()} isRuling={false} />);
     expect(screen.getByText("Slither + AI")).toBeInTheDocument();
