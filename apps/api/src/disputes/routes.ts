@@ -137,6 +137,7 @@ export function registerFindingLifecycleRoutes(
         ruling: "Pending",
         ruledAt: null,
         arbiterId: null,
+        ruleBy: new Date(Number(onchain.ruleBy) * 1000),
       });
       await moveFinding(finding.id, "Disputed");
       return reply.code(201).send(dispute);

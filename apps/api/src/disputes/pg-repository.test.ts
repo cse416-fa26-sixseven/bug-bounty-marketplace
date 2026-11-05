@@ -73,5 +73,43 @@ for (const [name, make, skip] of [
       expect(await repo.setRuling(first.id, "AgainstAuditor", "x", new Date())).toBeNull();
       expect((await repo.list("Pending")).map((d) => d.id)).not.toContain(first.id);
     });
+
+    it("lists Pending disputes past their ruling window, or with none recorded, as lapse candidates", async () => {
+      const cutoff = new Date("2026-10-23T12:00:00.000Z");
+      const base = {
+        developerId: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        reason: "bad PoC",
+        openedAt: "2026-10-20T12:00:00.000Z",
+        challengeWindowExpiresAt: "2026-10-20T12:01:00.000Z",
+        ruling: "Pending" as const,
+        ruledAt: null,
+        arbiterId: null,
+      };
+      async function open(ruleBy?: Date) {
+        const { contractId, findingId } = await seedFinding();
+        const d = await repo.create({ ...base, id: `dispute_${findingId}`, findingId, contractId, ruleBy });
+        return { id: d.id, findingId, contractId };
+      }
+      const closed = await open(new Date(cutoff.getTime() - 1000));
+      const stillOpen = await open(cutoff);
+      const unknown = await open();
+      const ruled = await open(new Date(cutoff.getTime() - 1000));
+      await repo.setRuling(ruled.id, "AgainstAuditor", "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", cutoff);
+
+      // Other test files share the database, so only these rows are checked.
+      const mine = new Set([closed.id, stillOpen.id, unknown.id, ruled.id]);
+      const listed = (await repo.listLapseCandidates(cutoff)).filter((c) => mine.has(c.id));
+      expect(listed).toEqual(
+        expect.arrayContaining([
+          { ...closed, ruleBy: new Date(cutoff.getTime() - 1000) },
+          { ...unknown, ruleBy: null },
+        ]),
+      );
+      expect(listed).toHaveLength(2);
+
+      await repo.setRuleBy(unknown.id, new Date(cutoff.getTime() + 60_000));
+      const after = (await repo.listLapseCandidates(cutoff)).filter((c) => mine.has(c.id));
+      expect(after.map((c) => c.id)).toEqual([closed.id]);
+    });
   });
 }
