@@ -99,7 +99,9 @@ updates:
       # Majors (azurerm 5, azapi 3) need the `< N` caps in every
       # versions.tf raised together; do those by hand. `update-types` does
       # not catch requirement updates (`~> 4.0` -> `~> 5.12`, `< 5.0` ->
-      # `< 5.13`), so ignore the next major by version range instead.
+      # `< 5.13`), so ignore the next major by version range instead. When a
+      # major is adopted, raise its range here (>= 6.0, >= 4.0) along with
+      # the caps, or Dependabot stops offering that major's minors.
       - dependency-name: hashicorp/azurerm
         versions: [">= 5.0"]
       - dependency-name: Azure/azapi
