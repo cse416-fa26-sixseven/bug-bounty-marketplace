@@ -89,3 +89,21 @@ sandbox:
   # PoC Jobs on the Kata sandbox pool (terraform sandbox_pool_enabled), in
   # namespace bbm-sandbox (<release namespace>-sandbox).
   enabled: true
+
+# The Sepolia deployment (docs/contracts/sepolia.md, "Current deployment").
+# Only prod runs it: the operator key signs verdicts and payouts, and two
+# APIs sharing it would race each other's nonces. The key and the session
+# secret are set out of band in the prod Key Vault (chain-operator-key,
+# session-secret); see docs/contracts/sepolia.md.
+chain:
+  enabled: true
+  chainId: 11155111
+  rpcUrl: https://ethereum-sepolia-rpc.publicnode.com
+  addresses:
+    auditorStaking: "0xd9af438168B9179e22FC1EaCCca1119B2f9d2Bc7"
+    bountyEscrow: "0x8BB9117a886a5364C6d6c05e2E8ffbD37A5dDf43"
+    disputeResolution: "0x6004cedfB4c7cd39dCEb9e2B71bfD645Da79AA11"
+  arbiter: "0xE506507e9d6016EE856407061560322AF3F048Eb"
+  challengeWindowSeconds: 600
+  indexerStartBlock: 12066691
+  indexerConfirmations: 3

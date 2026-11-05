@@ -105,6 +105,51 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name }}
                   key: database-url
+            {{- with .Values.chain }}
+            {{- if .enabled }}
+            {{- include "bbm.validateChain" $ }}
+            {{- /* int64: Helm reads YAML numbers as floats, and quote alone
+            prints 12066691 as 1.2066691e+07, which the api rejects. */}}
+            - name: CHAIN_RPC_URL
+              value: {{ .rpcUrl | quote }}
+            - name: PUBLIC_CHAIN_RPC_URL
+              value: {{ .publicRpcUrl | default .rpcUrl | quote }}
+            - name: CHAIN_ID
+              value: {{ .chainId | int64 | quote }}
+            - name: AUDITOR_STAKING_ADDRESS
+              value: {{ .addresses.auditorStaking | quote }}
+            - name: BOUNTY_ESCROW_ADDRESS
+              value: {{ .addresses.bountyEscrow | quote }}
+            - name: DISPUTE_RESOLUTION_ADDRESS
+              value: {{ .addresses.disputeResolution | quote }}
+            {{- with .arbiter }}
+            - name: ARBITER_ADDRESS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CHALLENGE_WINDOW_SECONDS
+              value: {{ .challengeWindowSeconds | int64 | quote }}
+            - name: INDEXER_START_BLOCK
+              value: {{ .indexerStartBlock | int64 | quote }}
+            - name: INDEXER_CONFIRMATIONS
+              value: {{ .indexerConfirmations | int64 | quote }}
+            - name: INDEXER_POLL_MS
+              value: {{ .indexerPollMs | int64 | quote }}
+            - name: PAYOUT_KEEPER_INTERVAL_SECONDS
+              value: {{ .payoutKeeperIntervalSeconds | int64 | quote }}
+            - name: CLAIM_LOCK_ENABLED
+              value: {{ .claimLockEnabled | toString | quote }}
+            - name: OPERATOR_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: operator-private-key
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: session-secret
+            {{- end }}
+            {{- end }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
