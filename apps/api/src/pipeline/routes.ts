@@ -17,6 +17,7 @@ import type { ChainActions } from "../chain/actions.js";
 import type { PipelineConfig } from "./config.js";
 import { canTransitionFinding } from "../status/transitions.js";
 import { toFinding } from "./mapping.js";
+import { registerDeveloperNoteRoutes } from "./note-routes.js";
 import type { FindingRecord, NewJob, PipelineRepository } from "./repository.js";
 import type { PocVerdictSource } from "./verdict-source.js";
 import { resolveActor, type Auth } from "../auth/session.js";
@@ -68,6 +69,7 @@ export function pocStorageKey(pocId: string, sha256: string): string {
 export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRouteDeps): void {
   const { contracts, pipeline, storage, config, chainActions, stakeReader, verdicts } = deps;
   const identity = deps.identity ?? null;
+  registerDeveloperNoteRoutes(app, { pipeline, config, identity });
 
   app.get<{ Params: { id: string } }>("/api/contracts/:id/findings", async (request, reply) => {
     const now = config.now();
@@ -291,6 +293,8 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       source: "auditor",
       title: report.title,
       reportedByAuditorId: auditorId,
+      developerNote: null,
+      developerNoteUpdatedAt: null,
     };
     const outcome = await pipeline.submitAuditorFinding({
       finding,

@@ -29,11 +29,14 @@ interface FindingRow {
   source: FindingRecord["source"];
   title: string | null;
   reported_by_auditor_id: string | null;
+  developer_note: string | null;
+  developer_note_updated_at: Date | null;
 }
 
 const FINDING_COLUMNS = `id, contract_id, severity, slither_detector, slither_confidence,
   raw_output_reference, llm_explanation, explanation_source, status, status_history,
-  is_false_positive, challenge_window_expires_at, created_at, source, title, reported_by_auditor_id`;
+  is_false_positive, challenge_window_expires_at, created_at, source, title, reported_by_auditor_id,
+  developer_note, developer_note_updated_at`;
 
 /** Raw output is fetched separately (GET /api/findings/:id/raw), so list
  * queries leave the JSONB column out. */
@@ -56,6 +59,8 @@ function toRecord(row: FindingRow): FindingRecord {
     source: row.source,
     title: row.title,
     reportedByAuditorId: row.reported_by_auditor_id,
+    developerNote: row.developer_note,
+    developerNoteUpdatedAt: row.developer_note_updated_at?.toISOString() ?? null,
   };
 }
 
@@ -301,6 +306,17 @@ export class PgPipelineRepository implements PipelineRepository {
     if (result.rowCount === 1) return "ok";
     const exists = await this.pool.query("SELECT 1 FROM findings WHERE id = $1", [findingId]);
     return exists.rowCount === 1 ? "not_flagged" : "not_found";
+  }
+
+  async setDeveloperNote(findingId: string, note: string | null, updatedAt: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE findings
+          SET developer_note = $2::text,
+              developer_note_updated_at = CASE WHEN $2::text IS NULL THEN NULL ELSE $3::timestamptz END
+        WHERE id = $1`,
+      [findingId, note, updatedAt],
+    );
+    return result.rowCount === 1;
   }
 
   async findLatestPoc(findingId: string): Promise<PoCSubmission | null> {

@@ -196,6 +196,14 @@ export class MemoryPipelineRepository implements PipelineRepository {
     return "ok";
   }
 
+  async setDeveloperNote(findingId: string, note: string | null, updatedAt: string): Promise<boolean> {
+    const record = this.store.findings.get(findingId);
+    if (!record) return false;
+    record.developerNote = note;
+    record.developerNoteUpdatedAt = note === null ? null : updatedAt;
+    return true;
+  }
+
   async findLatestPoc(findingId: string): Promise<PoCSubmission | null> {
     const latest = [...this.store.pocs.values()]
       .filter((poc) => poc.findingId === findingId)

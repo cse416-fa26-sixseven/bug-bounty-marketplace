@@ -167,3 +167,5 @@ class Finding(BaseModel):
     source: Source
     title: Annotated[str | None, Field(min_length=1)]
     reportedByAuditorId: Annotated[str | None, Field(min_length=1)]
+    developerNote: Annotated[str | None, Field(min_length=1)]
+    developerNoteUpdatedAt: AwareDatetime | None

@@ -118,6 +118,8 @@ def run_analysis_job(
                 "source": "slither",
                 "title": None,
                 "reportedByAuditorId": None,
+                "developerNote": None,
+                "developerNoteUpdatedAt": None,
             }
         )
         conn.execute(

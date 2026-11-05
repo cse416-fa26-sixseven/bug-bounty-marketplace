@@ -10,6 +10,7 @@ import {
   FindingOriginBadge,
   findingHeading,
 } from "@/components/FindingOrigin";
+import { DeveloperNoteView } from "@/components/DeveloperNote";
 
 const SEVERITY_STYLES: Record<Finding["severity"], string> = {
   Critical: "bg-red-500/20 text-red-400",
@@ -105,6 +106,7 @@ export function FindingCard({
 
       <p className="mt-2 whitespace-pre-line text-sm text-slate-300">{finding.llmExplanation}</p>
       <FindingDescriptionNote finding={finding} />
+      <DeveloperNoteView finding={finding} />
       <details className="mt-4 text-xs text-slate-400">
         <summary className="text-emerald-300">Finding status history</summary>
         <ol className="mt-3 space-y-2">

@@ -85,6 +85,13 @@ export const FindingSchema = z.object({
   title: z.string().min(1).nullable().default(null),
   /** The auditor who reported the finding; null for Slither findings. */
   reportedByAuditorId: IdSchema.nullable().default(null),
+  /** The contract developer's note on this finding (R16). Only the developer
+   * writes it (PUT /api/findings/:id/note); it is shown read-only to the
+   * claiming auditor and the arbiter wherever the finding is shown. Null
+   * when there is no note. */
+  developerNote: z.string().min(1).nullable().default(null),
+  /** When the note was last saved; null exactly when developerNote is. */
+  developerNoteUpdatedAt: TimestampSchema.nullable().default(null),
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
@@ -110,6 +117,23 @@ export const AuditorFindingFieldsSchema = z.object({
     })
     .refine(hasNoNul, { error: "Description must not contain NUL characters" }),
 });
+
+export const DEVELOPER_NOTE_MAX_LENGTH = 2000;
+
+/** Body of PUT /api/findings/:id/note. Plain text, trimmed; a blank or null
+ * note clears it. `developerId` (no-chain dev mode only) is read separately. */
+export const DeveloperNoteInputSchema = z.object({
+  note: z
+    .string()
+    .trim()
+    .max(DEVELOPER_NOTE_MAX_LENGTH, {
+      error: `Note must be at most ${DEVELOPER_NOTE_MAX_LENGTH} characters`,
+    })
+    .refine(hasNoNul, { error: "Note must not contain NUL characters" })
+    .nullable()
+    .transform((note) => (note ? note : null)),
+});
+export type DeveloperNoteInput = z.infer<typeof DeveloperNoteInputSchema>;
 
 /** Postgres text and jsonb cannot hold U+0000. */
 function hasNoNul(value: string): boolean {

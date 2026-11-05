@@ -21,6 +21,8 @@ VALID_FINDING = {
     "source": "slither",
     "title": None,
     "reportedByAuditorId": None,
+    "developerNote": None,
+    "developerNoteUpdatedAt": None,
 }
 
 
@@ -36,6 +38,18 @@ def test_auditor_reported_finding_validates() -> None:
     assert finding.source == "auditor"
     with pytest.raises(ValidationError):
         Finding.model_validate({**VALID_FINDING, "source": "llm"})
+
+
+def test_developer_note_validates() -> None:
+    finding = Finding.model_validate(
+        {
+            **VALID_FINDING,
+            "developerNote": "Fixed in v2.",
+            "developerNoteUpdatedAt": "2026-01-02T00:00:00Z",
+        }
+    )
+    assert finding.developerNote == "Fixed in v2."
+    assert finding.model_dump(mode="json")["developerNoteUpdatedAt"] == "2026-01-02T00:00:00.000Z"
 
 
 def test_finding_round_trips() -> None:

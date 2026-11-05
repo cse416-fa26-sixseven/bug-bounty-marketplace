@@ -12,6 +12,8 @@ import {
   AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH,
   AUDITOR_FINDING_TITLE_MAX_LENGTH,
   AuditorFindingFieldsSchema,
+  DEVELOPER_NOTE_MAX_LENGTH,
+  DeveloperNoteInputSchema,
   FindingSchema,
   FindingStatusSchema,
   PoCSubmissionSchema,
@@ -232,6 +234,52 @@ describe("FindingSchema origin", () => {
 
   it("rejects an unknown source", () => {
     expect(FindingSchema.safeParse({ ...slither, source: "llm" }).success).toBe(false);
+  });
+});
+
+describe("developer notes", () => {
+  const base = {
+    id: "finding_1",
+    contractId: "contract_1",
+    severity: "High",
+    slitherDetector: "reentrancy-eth",
+    rawOutputReference: "/api/findings/finding_1/raw",
+    llmExplanation: "Re-entrancy in withdraw().",
+    status: "Flagged",
+  };
+
+  it("defaults a finding to no note", () => {
+    const parsed = FindingSchema.parse(base);
+    expect(parsed.developerNote).toBeNull();
+    expect(parsed.developerNoteUpdatedAt).toBeNull();
+  });
+
+  it("accepts a note with its update time", () => {
+    const parsed = FindingSchema.parse({
+      ...base,
+      developerNote: "Known issue, fixed in v2.",
+      developerNoteUpdatedAt: now,
+    });
+    expect(parsed.developerNote).toBe("Known issue, fixed in v2.");
+  });
+
+  it("trims a note and treats a blank or null note as clearing it", () => {
+    expect(DeveloperNoteInputSchema.parse({ note: "  fixed in v2  " }).note).toBe("fixed in v2");
+    expect(DeveloperNoteInputSchema.parse({ note: "   " }).note).toBeNull();
+    expect(DeveloperNoteInputSchema.parse({ note: null }).note).toBeNull();
+  });
+
+  it("limits a note's length and rejects NUL characters", () => {
+    const at = (n: number) => "a".repeat(n);
+    expect(DeveloperNoteInputSchema.safeParse({ note: at(DEVELOPER_NOTE_MAX_LENGTH) }).success).toBe(
+      true,
+    );
+    expect(
+      DeveloperNoteInputSchema.safeParse({ note: at(DEVELOPER_NOTE_MAX_LENGTH + 1) }).success,
+    ).toBe(false);
+    expect(DeveloperNoteInputSchema.safeParse({ note: "a\u0000b" }).success).toBe(false);
+    expect(DeveloperNoteInputSchema.safeParse({}).success).toBe(false);
+    expect(DeveloperNoteInputSchema.safeParse({ note: 5 }).success).toBe(false);
   });
 });
 
