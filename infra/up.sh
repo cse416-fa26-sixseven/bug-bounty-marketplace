@@ -123,6 +123,7 @@ done
 
 ENVS_DIR="$BBM_TF_ROOT/envs"
 BOOT_VARS="$ENVS_DIR/global/bootstrap.tfvars"
+LAST_SUB_FILE="$ENVS_DIR/global/.last-subscription" # gitignored
 GLOBAL_VARS="$ENVS_DIR/global/global.tfvars"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/bbm-up.XXXXXX")
@@ -164,6 +165,8 @@ if ! az account show -o none 2>/dev/null; then
 fi
 az account set --subscription "$SUB" || die "cannot select subscription $SUB (wrong tenant? az login --use-device-code --tenant <id>)"
 SUB_NAME=$(az account show --query name -o tsv)
+# tf.sh passes it to Terraform; it is never written into the committed tfvars.
+export TF_VAR_subscription_id=$SUB ARM_SUBSCRIPTION_ID=$SUB
 TENANT=$(az account show --query tenantId -o tsv)
 AZ_USER=$(az account show --query user.name -o tsv)
 ME=$(az ad signed-in-user show --query id -o tsv 2>/dev/null) ||
@@ -176,9 +179,32 @@ owner=$(az role assignment list --assignee "$ME" --scope "/subscriptions/$SUB" -
 
 # Account switch: bootstrap.tfvars still filled in for another subscription
 # (down.sh --all resets it; an old checkout or a skipped teardown does not).
-prev_sub=$(lower "$(tfvars_get_string "$BOOT_VARS" subscription_id)")
+# The ID is not committed (ADR 0003): up.sh remembers it in a gitignored file;
+# older checkouts still have subscription_id in bootstrap.tfvars.
+prev_sub=""
+if tfvars_has "$BOOT_VARS" subscription_id; then
+  prev_sub=$(lower "$(tfvars_get_string "$BOOT_VARS" subscription_id)")
+fi
+[[ -n "$prev_sub" ]] || prev_sub=$(lower "$(cat "$LAST_SUB_FILE" 2>/dev/null || true)")
+switch_msg=""
 if [[ -n "$prev_sub" && "$prev_sub" != "$PLACEHOLDER_GUID" && "$prev_sub" != "$SUB" ]]; then
-  warn "envs/global/bootstrap.tfvars is filled in for subscription $prev_sub, not $SUB (account switch?)"
+  switch_msg="envs/global/bootstrap.tfvars is filled in for subscription $prev_sub, not $SUB (account switch?)"
+elif [[ -z "$prev_sub" ]]; then
+  # No record of the last subscription (fresh clone): the committed state
+  # account must exist in this subscription unless it is still the placeholder.
+  prev_acct=$(tfvars_get_string "$ENVS_DIR/global/backend.hcl" storage_account_name 2>/dev/null || true)
+  if [[ -n "$prev_acct" && "$prev_acct" != "stbbmtfstate$PLACEHOLDER_SUFFIX" ]]; then
+    if acct_err=$(az storage account show -n "$prev_acct" --query id -o tsv 2>&1 >/dev/null); then
+      :
+    elif grep -qiE 'not ?found' <<<"$acct_err"; then
+      switch_msg="envs/** points at state account $prev_acct, which is not in subscription $SUB (account switch?)"
+    else
+      warn "could not check whether state account $prev_acct is in this subscription: $acct_err"
+    fi
+  fi
+fi
+if [[ -n "$switch_msg" ]]; then
+  warn "$switch_msg"
   warn "its object ids, suffix and state account belong to that subscription/tenant; bootstrap would fail with them"
   if confirm "Reset the per-tenant tfvars fields to placeholders first?"; then
     reset_tenant_fields
@@ -383,7 +409,7 @@ done
 sync_env_locations "${ENV_LOCS[@]}"
 tf_fmt -recursive "$ENVS_DIR"
 
-tfvars_set "$BOOT_VARS" subscription_id "$(hcl_quote "$SUB")"
+[[ "$DRY_RUN" == 1 ]] || printf '%s\n' "$SUB" >"$LAST_SUB_FILE"
 tfvars_list_add "$BOOT_VARS" admin_object_ids "$ME"
 
 # Providers bootstrap registers (parsed from its main.tf) ∩ already registered.
@@ -604,14 +630,13 @@ SUFFIX=$(tf_out bootstrap global suffix)
 info "TFSTATE_RG=$TFSTATE_RG TFSTATE_ACCOUNT=$TFSTATE_ACCOUNT suffix=$SUFFIX"
 
 # ---- 6. tfvars --------------------------------------------------------------
-step 6 "Write suffix, subscription and Key Vault officers into envs/**"
+step 6 "Write suffix and Key Vault officers into envs/**"
 
 tf_out bootstrap global global_tfvars_hint >"$WORK/hint.tfvars"
 tfvars_replace_block "$GLOBAL_VARS" "$WORK/hint.tfvars"
 [[ "$DRY_RUN" == 1 ]] || tfvars_check_dupes "$GLOBAL_VARS"
 
 while IFS= read -r f; do
-  tfvars_set_if_present "$f" subscription_id "$(hcl_quote "$SUB")"
   tfvars_set_if_present "$f" suffix "$(hcl_quote "$SUFFIX")"
 done < <(find "$ENVS_DIR" -name '*.tfvars' | sort)
 while IFS= read -r f; do

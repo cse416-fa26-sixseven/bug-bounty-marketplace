@@ -1,5 +1,7 @@
 # Monthly cost budget with email alerts. Scope is the subscription unless
 # resource_group_id is set. Azure allows at most 5 notifications per budget.
+# A subscription budget can be limited to some RGs with
+# filter_resource_group_names (counts only their spend; ADR 0003).
 
 locals {
   rg_scoped = var.resource_group_id != null
@@ -22,6 +24,17 @@ resource "azurerm_consumption_budget_subscription" "this" {
     start_date = var.start_date
   }
 
+  dynamic "filter" {
+    for_each = length(var.filter_resource_group_names) > 0 ? [1] : []
+    content {
+      dimension {
+        name     = "ResourceGroupName"
+        operator = "In"
+        values   = var.filter_resource_group_names
+      }
+    }
+  }
+
   dynamic "notification" {
     for_each = local.notifications
     content {
@@ -37,6 +50,11 @@ resource "azurerm_consumption_budget_subscription" "this" {
     # start_date forces replacement and Azure rejects past start dates outside
     # the current grain, so never touch it after creation.
     ignore_changes = [time_period[0].start_date]
+
+    precondition {
+      condition     = length(var.filter_resource_group_names) == 0 || !local.rg_scoped
+      error_message = "filter_resource_group_names only applies to subscription-scoped budgets."
+    }
 
     precondition {
       condition     = var.subscription_id != null

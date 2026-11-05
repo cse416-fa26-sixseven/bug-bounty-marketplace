@@ -1,9 +1,8 @@
 # stacks/data for prod — persistent data layer (VNet, PG, KV, storage, UAMIs, PIP, LAW).
-subscription_id = "b31dcf50-ff11-4bcb-905a-eaeeca6c1f1a"
-env             = "prod"
-location        = "northcentralus" # this env's region: infra/up.sh --env-location prod=<region>
-location_abbr   = "ncus"
-suffix          = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
+env           = "prod"
+location      = "northcentralus" # this env's region: infra/up.sh --env-location prod=<region>
+location_abbr = "ncus"
+suffix        = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.30.0.0/16"
 subnet_cidrs = {
