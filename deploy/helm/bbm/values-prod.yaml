@@ -41,12 +41,11 @@ web:
       memory: 512Mi
 
 api:
-  # !!! IMPORTANT: the api MUST stay at exactly 1 replica while uploads are
-  # !!! on the shared Azure Files claim below (SOURCE_STORAGE_DIR), an
-  # !!! interim way to hand them to the analysis worker that is not
-  # !!! validated for concurrent writers. Once prod follows staging onto
-  # !!! Blob storage (api.sourceStorage.blob), raise to minReplicas 2 /
-  # !!! maxReplicas 5 and enable the PDB.
+  # Uploads are stateless (Blob storage below), but the api still keeps
+  # wallet sign-in nonces in memory, so a second replica would fail logins
+  # whose nonce and login land on different pods. Stay at 1 until nonces
+  # move to Postgres; then raise to minReplicas 2 / maxReplicas 5 (the PDB
+  # below starts rendering at minReplicas > 1).
   hpa:
     enabled: true
     minReplicas: 1
@@ -56,9 +55,14 @@ api:
     enabled: true
     minAvailable: 1
   sourceStorage:
-    # ReadWriteMany Azure Files share: api writes uploads, analysis reads them.
-    persistentVolumeClaim:
+    # Uploads go to the env storage account's `sources` container
+    # (values-infra.yaml carries the endpoint): the api writes, the analysis
+    # worker reads, both with workload identity. The Azure Files claim that
+    # shared them before is off (and deleted with its share on upgrade).
+    blob:
       enabled: true
+    persistentVolumeClaim:
+      enabled: false
   resources:
     requests:
       cpu: 200m

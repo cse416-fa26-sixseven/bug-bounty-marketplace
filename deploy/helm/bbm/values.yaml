@@ -245,7 +245,7 @@ api:
     enabled: true
   # -- Where the api keeps uploaded sources (and auditors' PoCs) and the
   # analysis worker reads them. In order of precedence: the Blob container
-  # (blob.enabled; staging), the shared claim (persistentVolumeClaim.enabled;
+  # (blob.enabled; staging, prod), the shared claim (persistentVolumeClaim.enabled;
   # an interim arrangement), else a per-pod emptyDir at `path` (Compose,
   # kind, CI; the analysis pod then has no sources and its poller stays off).
   sourceStorage:
@@ -256,7 +256,7 @@ api:
     sizeLimit: 1Gi
     persistentVolumeClaim:
       # -- Mount one ReadWriteMany claim in the api (rw) and analysis (ro)
-      # pods instead of the emptyDir. true on test/staging/prod.
+      # pods instead of the emptyDir. true on the test cluster only.
       enabled: false
       # -- Name of a pre-created claim to use; empty = render
       # PersistentVolumeClaim <fullname>-sources from the fields below.

@@ -93,8 +93,8 @@ docker run --rm -p 8000:8000 bbm-analysis
 
 - Slither itself in an isolated Job (analysis jobs still run inside the
   analysis pod).
-- Blob storage for uploads on prod and the test cluster too (staging reads
-  `SOURCE_STORAGE_BLOB_CONTAINER_URL`; the others still mount the shared
-  `bbm-sources` PVC).
+- Blob storage for uploads on the test cluster too (staging and prod read
+  `SOURCE_STORAGE_BLOB_CONTAINER_URL`; CI-run namespaces still mount the
+  shared `bbm-sources` PVC).
 - Consume jobs from an Azure Storage Queue (`analysis-jobs`), scaled by KEDA,
   instead of polling the Postgres `jobs` table.
