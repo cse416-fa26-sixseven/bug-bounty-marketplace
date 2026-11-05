@@ -155,7 +155,7 @@ preview only holds pod resources on the test cluster.
 
 | Budget                             | Amount         | Scope                                                              | Notifications                        |
 | ---------------------------------- | -------------- | ------------------------------------------------------------------ | ------------------------------------ |
-| `budget-bbm-subscription`          | $50/month      | the whole subscription (`stacks/bootstrap`)                        | 50%, 80%, 100% actual; 100% forecast |
+| `budget-bbm-subscription`          | $50/month      | BBM's RGs only: tfstate, shared, every env data/compute RG and AKS node RG (`stacks/bootstrap`; the subscription is shared, ADR 0003) | 50%, 80%, 100% actual; 100% forecast |
 | `budget-rg-bbm-<env>-<layer>-<abbr>` | $20/month each | `rg-bbm-test-{data,compute}-cac`, `rg-bbm-staging-{data,compute}-dke`, `rg-bbm-prod-{data,compute}-ncus` (`stacks/global`) | same thresholds |
 
 Alerts go to `alert_emails` in `envs/global/*.tfvars`. Budgets only notify; they never stop
@@ -164,8 +164,8 @@ anything.
 **Gap:** AKS bills nodes, OS disks, the load balancer and the outbound IP in the **node** resource
 group `rg-bbm-<env>-aksnodes-<abbr>`, which has no per-RG budget. The `compute` RG holds only the
 cluster object, so its $20 budget sees little (prod's Standard-tier fee is billed on the cluster,
-so the prod compute budget does see that). Running cost is caught mainly by the subscription
-budget today. A filtered subscription budget (by `env` tag or by node RG) would close this.
+so the prod compute budget does see that). Running cost is caught by `budget-bbm-subscription`,
+whose resource-group filter includes the node RGs.
 
 ## Cost levers
 

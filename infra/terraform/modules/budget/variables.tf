@@ -21,6 +21,12 @@ variable "resource_group_id" {
   default     = null
 }
 
+variable "filter_resource_group_names" {
+  description = "Subscription budget only: count spend in these resource groups only. Empty = the whole subscription."
+  type        = list(string)
+  default     = []
+}
+
 variable "start_date" {
   description = "Budget start (first of a month, RFC3339). Changes are ignored after creation, so a stale value is harmless."
   type        = string
