@@ -22,6 +22,12 @@ export interface ChainConfig {
    * INDEXER_START_BLOCK, else the deployments file's deployBlock. Unset reads
    * from block 0, which is fine on anvil but far too slow on a testnet. */
   startBlock?: bigint;
+  /** Blocks behind the head the event indexer stops at
+   * (INDEXER_CONFIRMATIONS, default 0). Load-balanced public RPCs can answer
+   * eth_blockNumber from one backend and eth_getLogs from another a block
+   * behind, which rejects a range ending at the head; a few confirmations
+   * avoid that and ride out shallow reorgs. */
+  indexerConfirmations?: bigint;
 }
 
 /** BountyEscrow's default challenge window in Deploy.s.sol: 3 days. */
@@ -98,7 +104,7 @@ export function loadChainConfig(
       throw err;
     }
     const { deployBlock, ...deployment } = readDeployment(deploymentsFile, text, chainId);
-    return withStartBlock({ ...common, ...deployment }, env, deployBlock);
+    return withIndexerSettings({ ...common, ...deployment }, env, deployBlock);
   }
 
   const addresses = [
@@ -120,7 +126,7 @@ export function loadChainConfig(
     throw new Error("CHALLENGE_WINDOW_SECONDS must be a non-negative integer");
   }
 
-  return withStartBlock(
+  return withIndexerSettings(
     {
       ...common,
       auditorStakingAddress: env.AUDITOR_STAKING_ADDRESS as Address,
@@ -134,14 +140,25 @@ export function loadChainConfig(
   );
 }
 
-/** Adds startBlock: INDEXER_START_BLOCK when set, else the deploy block. */
-function withStartBlock(config: ChainConfig, env: NodeJS.ProcessEnv, deployBlock: bigint | undefined): ChainConfig {
+/** Adds the indexer settings: startBlock (INDEXER_START_BLOCK when set, else
+ * the deploy block) and indexerConfirmations (INDEXER_CONFIRMATIONS, default 0). */
+function withIndexerSettings(
+  config: ChainConfig,
+  env: NodeJS.ProcessEnv,
+  deployBlock: bigint | undefined,
+): ChainConfig {
+  const rawConfirmations = env.INDEXER_CONFIRMATIONS?.trim();
+  if (rawConfirmations && !/^\d+$/.test(rawConfirmations)) {
+    throw new Error("INDEXER_CONFIRMATIONS must be a non-negative integer number of blocks");
+  }
+  const withConfirmations = { ...config, indexerConfirmations: BigInt(rawConfirmations || "0") };
+
   const raw = env.INDEXER_START_BLOCK?.trim();
   if (raw) {
     if (!/^\d+$/.test(raw)) throw new Error("INDEXER_START_BLOCK must be a non-negative integer block number");
-    return { ...config, startBlock: BigInt(raw) };
+    return { ...withConfirmations, startBlock: BigInt(raw) };
   }
-  return deployBlock === undefined ? config : { ...config, startBlock: deployBlock };
+  return deployBlock === undefined ? withConfirmations : { ...withConfirmations, startBlock: deployBlock };
 }
 
 /** Parses the deploy script's deployments/<chainId>.json. */

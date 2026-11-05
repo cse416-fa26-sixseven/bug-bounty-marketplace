@@ -132,7 +132,11 @@ jobs:
           fi
           # --rpc-url is required: without it forge simulates in memory, even
           # with ETH_RPC_URL set (forge 1.3.5). The value is masked in logs.
-          forge script script/Deploy.s.sol --rpc-url "$ETH_RPC_URL" ${broadcast_args[@]+"${broadcast_args[@]}"}
+          # --gas-estimate-multiplier 800: forge 1.3.5 underestimates contract
+          # creation gas ~7x on current Sepolia (repriced creation/state costs),
+          # so creations run out of gas on-chain; 8x stays under the per-tx cap.
+          forge script script/Deploy.s.sol --rpc-url "$ETH_RPC_URL" --gas-estimate-multiplier 800 \
+            ${broadcast_args[@]+"${broadcast_args[@]}"}
           if [[ "$BROADCAST" == true && ! -f "deployments/$chain_id.json" ]]; then
             echo "::error::Broadcast finished but deployments/$chain_id.json was not written."
             exit 1

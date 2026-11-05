@@ -38,15 +38,36 @@ export ARBITER=0x...                                # the arbiter's address
 export CHALLENGE_WINDOW=600 REFUND_DELAY=600        # 10 minutes for a demo (defaults: 3 days, 3 hours)
 
 test "$(cast chain-id --rpc-url "$SEPOLIA_RPC_URL")" = 11155111
-forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL"                  # dry run, sends nothing
-forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL" --broadcast --slow
+# --gas-estimate-multiplier 800: forge 1.3.5 underestimates creation gas ~7x on current Sepolia
+forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL" --gas-estimate-multiplier 800                      # dry run, sends nothing
+forge script script/Deploy.s.sol --rpc-url "$SEPOLIA_RPC_URL" --gas-estimate-multiplier 800 --broadcast --slow
 cat deployments/11155111.json
 ```
 
 `--rpc-url` is required even with `ETH_RPC_URL` set; without it forge
-simulates in memory. Trust `deployments/11155111.json` only after the
-broadcast succeeds. Besides the addresses it records `arbiter`,
-`challengeWindow` and `deployBlock`, where the API's event indexer starts.
+simulates in memory.
+
+`--gas-estimate-multiplier 800` is required too. Sepolia now runs a newer
+fork (200M block gas limit, repriced contract-creation and state costs) that
+Foundry 1.3.5's local simulation doesn't model, so it sends creations with
+about a seventh of the gas they need (e.g. 855,540 for `AuditorStaking`
+where the node's `eth_estimateGas` says ~4.57M) and they fail on-chain with
+`status 0` and `gasUsed == gasLimit`. 400 is still too low; 800 works and
+stays under the ~16.7M per-transaction cap. Only gas actually used is
+charged, so the larger limit costs nothing extra.
+
+Load-balanced public RPCs (e.g. publicnode) intermittently fail forge with
+`block not found`, because consecutive calls hit different backends. Just
+re-run the command.
+
+The script writes `deployments/11155111.json` before the transactions are
+sent, and a failed creation is still mined and burns the deployer's nonce,
+so after a failure the file names addresses that hold no code (and the next
+attempt deploys to different ones). Trust the file only when forge ends with
+`ONCHAIN EXECUTION COMPLETE & SUCCESSFUL`; otherwise fix the cause and
+deploy again. Besides the addresses the file records
+`arbiter`, `challengeWindow` and `deployBlock`, where the API's event
+indexer starts.
 
 Check the wiring:
 
@@ -56,6 +77,32 @@ cast call "$(jq -r .bountyEscrow deployments/11155111.json)" "disputeResolution(
 ```
 
 and look the three addresses up on <https://sepolia.etherscan.io>.
+
+## Current deployment
+
+Deployed by hand on 2026-11-05 with Foundry 1.3.5 (`CHALLENGE_WINDOW=600`,
+`REFUND_DELAY=600`).
+
+| Contract / role     | Address                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `AuditorStaking`    | [`0xd9af438168B9179e22FC1EaCCca1119B2f9d2Bc7`](https://sepolia.etherscan.io/address/0xd9af438168B9179e22FC1EaCCca1119B2f9d2Bc7) |
+| `BountyEscrow`      | [`0x8BB9117a886a5364C6d6c05e2E8ffbD37A5dDf43`](https://sepolia.etherscan.io/address/0x8BB9117a886a5364C6d6c05e2E8ffbD37A5dDf43) |
+| `DisputeResolution` | [`0x6004cedfB4c7cd39dCEb9e2B71bfD645Da79AA11`](https://sepolia.etherscan.io/address/0x6004cedfB4c7cd39dCEb9e2B71bfD645Da79AA11) |
+| Operator / deployer | [`0xdea2B702BaF885F2388F02F285a8b5306c59c011`](https://sepolia.etherscan.io/address/0xdea2B702BaF885F2388F02F285a8b5306c59c011) |
+| Arbiter             | [`0xE506507e9d6016EE856407061560322AF3F048Eb`](https://sepolia.etherscan.io/address/0xE506507e9d6016EE856407061560322AF3F048Eb) |
+
+| Setting           | Value      |
+| ----------------- | ---------- |
+| `deployBlock`     | `12066691` |
+| `challengeWindow` | 600 s      |
+| `refundDelay`     | 600 s      |
+
+`deployments/*.json` is not committed, so this table is the shared record.
+To run the API against this deployment without the file, set
+`AUDITOR_STAKING_ADDRESS`, `BOUNTY_ESCROW_ADDRESS`,
+`DISPUTE_RESOLUTION_ADDRESS`, `ARBITER_ADDRESS`, `CHALLENGE_WINDOW_SECONDS=600`
+and `INDEXER_START_BLOCK=12066691` from it. The operator key stays with
+whoever deployed and is never committed.
 
 ## 2. Run the API against Sepolia
 
@@ -71,6 +118,7 @@ export OPERATOR_PRIVATE_KEY="$DEPLOYER_PRIVATE_KEY"  # must be the deployer (the
 export SESSION_SECRET="$(openssl rand -hex 32)"
 export AUTH_ORIGIN=http://localhost:3000            # the URL you browse; https://... in a deployment
 export CLAIM_LOCK_ENABLED=true
+export INDEXER_CONFIRMATIONS=3                       # see below; public RPCs need a few
 pnpm --filter @bbm/api dev
 ```
 
@@ -79,6 +127,12 @@ pnpm --filter @bbm/api dev
   `DISPUTE_RESOLUTION_ADDRESS` and `ARBITER_ADDRESS` instead.
 - `INDEXER_START_BLOCK` overrides the file's `deployBlock`. Without either,
   the indexer would scan Sepolia from block 0.
+- `INDEXER_CONFIRMATIONS` (default 0) keeps the indexer that many blocks
+  behind the head. Use 3 on Sepolia, and always with a load-balanced public
+  RPC: it can report the head from one backend and serve `eth_getLogs` from
+  another a block behind, which fails every indexer run with
+  `block range extends beyond current head block`. Status changes then show
+  up about 3 blocks (~36 s) after the transaction.
 - `PUBLIC_CHAIN_RPC_URL` is optional. Leave it unset unless you have a
   keyless public endpoint: `GET /api/chain` publishes it, and without it the
   browser reads through the user's wallet.

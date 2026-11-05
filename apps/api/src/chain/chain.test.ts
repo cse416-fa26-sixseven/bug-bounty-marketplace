@@ -140,6 +140,21 @@ describe("loadChainConfig", () => {
     ).toThrow(/deployBlock/);
   });
 
+  it("defaults the indexer's confirmations to 0 and reads INDEXER_CONFIRMATIONS", () => {
+    expect(loadChainConfig(VALID_ENV)?.indexerConfirmations).toBe(0n);
+    expect(loadChainConfig({ ...VALID_ENV, INDEXER_CONFIRMATIONS: "" })?.indexerConfirmations).toBe(0n);
+    expect(loadChainConfig({ ...VALID_ENV, INDEXER_CONFIRMATIONS: "3" })?.indexerConfirmations).toBe(3n);
+    expect(loadChainConfig({ ...VALID_ENV, INDEXER_CONFIRMATIONS: " 0 " })?.indexerConfirmations).toBe(0n);
+    expect(
+      loadChainConfig({ ...FILE_ENV, INDEXER_CONFIRMATIONS: "12" }, () => JSON.stringify(GOOD_FILE))
+        ?.indexerConfirmations,
+    ).toBe(12n);
+  });
+
+  it.each(["-1", "2.5", "abc", "1e3", "0x10"])("rejects INDEXER_CONFIRMATIONS=%j", (value) => {
+    expect(() => loadChainConfig({ ...VALID_ENV, INDEXER_CONFIRMATIONS: value })).toThrow(/INDEXER_CONFIRMATIONS/);
+  });
+
   it("rejects a deployments file that is not JSON", () => {
     expect(() => loadChainConfig(FILE_ENV, () => "not json")).toThrow(/not valid JSON/);
   });
