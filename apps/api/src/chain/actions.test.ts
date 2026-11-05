@@ -281,6 +281,33 @@ describe("claim lock expiry", () => {
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledWith(AUDITOR);
   });
 
+  it("keeps the stake locked past expiry while the auditor's finding is pending", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    advance(CLAIM_WINDOW_MS * 2);
+
+    // Unlocked here, the auditor could withdraw and the payout would revert.
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Verified");
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+  });
+
+  it("releases the kept lock once the pending finding is rejected", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    advance(CLAIM_WINDOW_MS * 2);
+
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
   it("does not unlock a claim that has not expired", async () => {
     const { actions, ports, seedContract, claim } = setup();
     const contractId = await seedContract();

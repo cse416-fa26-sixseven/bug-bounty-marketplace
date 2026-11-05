@@ -4,6 +4,9 @@ import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, Payout
 import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
 import { InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
 
+/** Findings whose claim lock must outlive the claim. */
+const PENDING_STATUSES: ReadonlySet<FindingStatus> = new Set(["Submitted", "Verified", "Disputed"]);
+
 /** In-memory ChainActionStore over the same MemoryStore the repositories use.
  * Tests and the no-DATABASE_URL setup. */
 export class MemoryChainActionStore implements ChainActionStore {
@@ -128,6 +131,7 @@ export class MemoryChainActionStore implements ChainActionStore {
       if (!stored.claimExpiresAt || stored.claimExpiresAt.getTime() > options.expiredBy.getTime()) {
         return null;
       }
+      if (this.holdsPendingFinding(contractId, stored.claimedByAuditorId)) return null;
     }
     stored.claimLock = "unlocking";
     return stored.claimedByAuditorId;
@@ -167,9 +171,22 @@ export class MemoryChainActionStore implements ChainActionStore {
       if (contractId !== undefined && id !== contractId) continue;
       if (stored.claimLock !== "locked" || !stored.claimedByAuditorId || !stored.claimExpiresAt) continue;
       if (stored.claimExpiresAt.getTime() > now.getTime()) continue;
+      if (this.holdsPendingFinding(id, stored.claimedByAuditorId)) continue;
       out.push({ contractId: id, auditorId: stored.claimedByAuditorId });
     }
     return out;
+  }
+
+  /** Same rule as the Postgres HOLDS_PENDING_FINDING. */
+  private holdsPendingFinding(contractId: string, auditorId: string): boolean {
+    const auditor = auditorId.toLowerCase();
+    for (const poc of this.store.pocs.values()) {
+      if (poc.auditorId.toLowerCase() !== auditor) continue;
+      const finding = this.store.findings.get(poc.findingId);
+      if (finding?.contractId !== contractId) continue;
+      if (PENDING_STATUSES.has(finding.status)) return true;
+    }
+    return false;
   }
 
   async listPayoutsDue(now: Date): Promise<PayoutDue[]> {

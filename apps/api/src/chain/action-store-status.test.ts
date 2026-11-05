@@ -26,6 +26,10 @@ beforeAll(async () => {
 afterAll(async () => {
   if (pool && createdContracts.length > 0) {
     await pool.query("DELETE FROM jobs WHERE subject_id = ANY($1)", [createdContracts]);
+    await pool.query(
+      "DELETE FROM poc_submissions WHERE finding_id IN (SELECT id FROM findings WHERE contract_id = ANY($1))",
+      [createdContracts],
+    );
     await pool.query("DELETE FROM findings WHERE contract_id = ANY($1)", [createdContracts]);
     await pool.query("DELETE FROM contracts WHERE id = ANY($1)", [createdContracts]);
     await pool.query("DELETE FROM bounties WHERE contract_id = ANY($1)", [createdContracts]);
@@ -37,19 +41,52 @@ interface Harness {
   store: ChainActionStore;
   contracts: ContractRepository;
   seed(record: FindingRecord): Promise<void>;
+  seedPoc(findingId: string, auditorId: string): Promise<void>;
+  /** Claims the contract until `expiresAt` and takes the claim to "locked". */
+  claimLocked(contractId: string, auditorId: string, expiresAt: Date): Promise<void>;
   finding(id: string): Promise<{ status: FindingStatus; history: number; window: string | null }>;
 }
 
 const WINDOW_SECONDS = 60;
 const AT = "2026-10-20T12:00:00.000Z";
 
+let pocCount = 0;
+function pocId() {
+  pocCount += 1;
+  return `poc_${process.pid}_${Date.now()}_${pocCount}`;
+}
+
+async function lock(store: ChainActionStore, contractId: string, auditorId: string) {
+  expect(await store.markClaimLocking(contractId, auditorId, 0n)).toBe(true);
+  expect(await store.markClaimLocked(contractId, auditorId)).toBe(true);
+}
+
 function memoryHarness(): Harness {
   const mem = new MemoryStore();
+  const store = new MemoryChainActionStore(mem, { challengeWindowSeconds: WINDOW_SECONDS });
+  const contracts = new MemoryContractRepository(mem);
   return {
-    store: new MemoryChainActionStore(mem, { challengeWindowSeconds: WINDOW_SECONDS }),
-    contracts: new MemoryContractRepository(mem),
+    store,
+    contracts,
     seed: async (record) => {
       mem.findings.set(record.id, structuredClone(record));
+    },
+    seedPoc: async (findingId, auditorId) => {
+      const id = pocId();
+      mem.pocs.set(id, {
+        id,
+        findingId,
+        auditorId,
+        testFileReference: `pocs/${id}/x.t.sol`,
+        submittedAt: AT,
+        sandboxStatus: "Pending",
+        sandboxLog: null,
+      });
+    },
+    claimLocked: async (contractId, auditorId, expiresAt) => {
+      const claimed = await contracts.claimContract(contractId, auditorId, expiresAt, new Date(AT));
+      expect(claimed.ok).toBe(true);
+      await lock(store, contractId, auditorId);
     },
     finding: async (id) => {
       const r = mem.findings.get(id)!;
@@ -62,8 +99,9 @@ function pgHarness(): Harness {
   const db = pool as Pool;
   const repo = new PgContractRepository(db);
   const pipeline = new PgPipelineRepository(db);
+  const store = new PgChainActionStore(db, { challengeWindowSeconds: WINDOW_SECONDS });
   return {
-    store: new PgChainActionStore(db, { challengeWindowSeconds: WINDOW_SECONDS }),
+    store,
     contracts: {
       ...repo,
       insertContract: async (record) => {
@@ -85,6 +123,19 @@ function pgHarness(): Harness {
           f.createdAt,
         ],
       );
+    },
+    seedPoc: async (findingId, auditorId) => {
+      const id = pocId();
+      await db.query(
+        `INSERT INTO poc_submissions (id, finding_id, auditor_id, test_file_reference, submitted_at, sandbox_status)
+         VALUES ($1, $2, $3, $4, $5, 'Pending')`,
+        [id, findingId, auditorId, `pocs/${id}/x.t.sol`, AT],
+      );
+    },
+    claimLocked: async (contractId, auditorId, expiresAt) => {
+      const claimed = await repo.claimContract(contractId, auditorId, expiresAt, new Date(AT));
+      expect(claimed.ok).toBe(true);
+      await lock(store, contractId, auditorId);
     },
     finding: async (id) => {
       const found = await pipeline.findFinding(id, new Date());
@@ -163,6 +214,76 @@ for (const [name, make, skip] of [
         InvalidTransitionError,
       );
       expect((await h.finding(findingId)).status).toBe("Paid");
+    });
+  });
+}
+
+for (const [name, make, skip] of [
+  ["Memory", memoryHarness, false],
+  ["Postgres", pgHarness, !pool],
+] as const) {
+  describe.skipIf(skip)(`${name} ChainActionStore expired claim locks`, () => {
+    const h = skip ? (undefined as unknown as Harness) : make();
+    // An auditor holds one claim at a time, so each case gets its own.
+    let auditors = 0;
+    function newAuditor() {
+      auditors += 1;
+      const tail = `${process.pid}${Date.now()}${auditors}`.slice(-40).padStart(40, "a");
+      return `0x${tail.replace(/a/g, "A")}`;
+    }
+    const EXPIRES = new Date(Date.parse(AT) + 60_000);
+    const AFTER = new Date(EXPIRES.getTime() + 1);
+
+    /** A contract claimed and locked by a fresh auditor until EXPIRES, with one
+     * finding in `status` carrying a PoC by `pocAuditor`. */
+    async function lockedWith(status: FindingStatus, pocAuditor?: (auditor: string) => string) {
+      const auditor = newAuditor();
+      const record = makeContract();
+      await h.contracts.insertContract(record);
+      const contractId = record.contract.id;
+      const finding = makeFinding(contractId, { status, statusHistory: [{ status, changedAt: AT }] });
+      await h.seed(finding);
+      await h.seedPoc(finding.id, pocAuditor ? pocAuditor(auditor) : auditor);
+      await h.claimLocked(contractId, auditor, EXPIRES);
+      return { contractId, auditor };
+    }
+
+    async function listed(contractId: string) {
+      return (await h.store.listExpiredLockedClaims(AFTER, contractId)).map((c) => c.contractId);
+    }
+
+    it.each(["Submitted", "Verified", "Disputed"] as const)(
+      "keeps the lock of an expired claim backing a %s finding",
+      async (status) => {
+        const { contractId } = await lockedWith(status);
+        expect(await listed(contractId)).toEqual([]);
+        await expect(h.store.takeClaimUnlock(contractId, { expiredBy: AFTER })).resolves.toBeNull();
+      },
+    );
+
+    it.each(["Flagged", "Rejected", "Paid"] as const)(
+      "releases the lock of an expired claim whose finding is %s",
+      async (status) => {
+        const { contractId, auditor } = await lockedWith(status);
+        expect(await listed(contractId)).toEqual([contractId]);
+        await expect(h.store.takeClaimUnlock(contractId, { expiredBy: AFTER })).resolves.toBe(auditor);
+      },
+    );
+
+    it("matches the PoC auditor case-insensitively", async () => {
+      const { contractId } = await lockedWith("Verified", (auditor) => auditor.toLowerCase());
+      expect(await listed(contractId)).toEqual([]);
+    });
+
+    it("ignores another auditor's pending finding on the contract", async () => {
+      const { contractId } = await lockedWith("Verified", () => newAuditor());
+      expect(await listed(contractId)).toEqual([contractId]);
+    });
+
+    it("still unlocks a pending finding's claim when no expiry is given", async () => {
+      // Verdict and dispute paths unlock by auditor, not by expiry.
+      const { contractId, auditor } = await lockedWith("Submitted");
+      await expect(h.store.takeClaimUnlock(contractId, { auditorId: auditor })).resolves.toBe(auditor);
     });
   });
 }

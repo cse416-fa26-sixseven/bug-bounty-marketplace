@@ -4,6 +4,14 @@ import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, Payout
 import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
 import { FINDING_TRANSITIONS, InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
 
+/** True when the claim on `contracts` backs a finding still waiting on its
+ * verdict, payout or dispute. The expiry sweep must not unlock that stake. */
+const HOLDS_PENDING_FINDING = `EXISTS (
+  SELECT 1 FROM findings f JOIN poc_submissions p ON p.finding_id = f.id
+   WHERE f.contract_id = contracts.id
+     AND lower(p.auditor_id) = lower(contracts.claimed_by_auditor_id)
+     AND f.status IN ('Submitted', 'Verified', 'Disputed'))`;
+
 /** Postgres ChainActionStore. Columns come from db/migrations/0005_claim_locks.sql. */
 export class PgChainActionStore implements ChainActionStore {
   private readonly challengeWindowSeconds: number;
@@ -181,7 +189,7 @@ export class PgChainActionStore implements ChainActionStore {
         WHERE id = $1
           AND claim_lock_status = 'locked'
           AND ($2::text IS NULL OR claimed_by_auditor_id = $2)
-          AND ($3::timestamptz IS NULL OR claim_expires_at <= $3)
+          AND ($3::timestamptz IS NULL OR (claim_expires_at <= $3 AND NOT ${HOLDS_PENDING_FINDING}))
         RETURNING claimed_by_auditor_id`,
       [contractId, options.auditorId ?? null, options.expiredBy ?? null],
     );
@@ -225,6 +233,7 @@ export class PgChainActionStore implements ChainActionStore {
       `SELECT id, claimed_by_auditor_id FROM contracts
         WHERE claim_lock_status = 'locked'
           AND claim_expires_at <= $1
+          AND NOT ${HOLDS_PENDING_FINDING}
           AND ($2::text IS NULL OR id = $2)
         ORDER BY id`,
       [now, contractId ?? null],

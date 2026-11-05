@@ -55,8 +55,9 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
    * Atomically flips a "locked" claim to "unlocking" and returns the auditor
    * whose lock must be unlocked. Returns null, changing nothing, when there is
    * no lock to take: never locked, already unlocking or released, held by
-   * someone else (when `auditorId` is given), or not yet expired (when
-   * `expiredBy` is given).
+   * someone else (when `auditorId` is given), or, when `expiredBy` is given,
+   * not yet expired or still backing a pending finding (see
+   * listExpiredLockedClaims).
    */
   takeClaimUnlock(
     contractId: string,
@@ -70,7 +71,11 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
   markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean>;
   /** Sets an "unlocking" claim held by `auditorId` to "released". */
   markClaimReleased(contractId: string, auditorId: string): Promise<void>;
-  /** Locked claims whose expiry is at or before `now`. */
+  /** Locked claims whose expiry is at or before `now`, except those whose
+   * auditor has a Submitted, Verified or Disputed finding on the contract.
+   * That lock keeps the stake in place until the finding is paid or
+   * rejected: unlocked, the auditor could withdraw and BountyEscrow would
+   * refuse the verification or payout (AuditorNotEligible). */
   listExpiredLockedClaims(
     now: Date,
     contractId?: string,
