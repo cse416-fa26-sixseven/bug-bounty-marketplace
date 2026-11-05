@@ -9,7 +9,7 @@ import {
   type Dispute,
   type Finding,
 } from "@bbm/shared";
-import { getJson, postForm, postJson, toQueryString } from "./http";
+import { getJson, postForm, postJson, putJson, toQueryString } from "./http";
 
 export interface SubmitContractInput {
   file: File;
@@ -67,6 +67,16 @@ export interface DisputeFindingInput {
  * Verified and its challenge window hasn't elapsed. */
 export function disputeFinding(findingId: string, input: DisputeFindingInput): Promise<Dispute> {
   return postJson(`/api/findings/${findingId}/dispute`, input, DisputeSchema);
+}
+
+/** PUT /api/findings/:id/note - the contract's developer sets (or, with a
+ * blank/null note, clears) their note on a finding. `developerId` is only
+ * used without a chain; with one the API uses the signed-in wallet. */
+export function setFindingNote(
+  findingId: string,
+  input: { developerId: string; note: string | null },
+): Promise<Finding> {
+  return putJson(`/api/findings/${findingId}/note`, input, FindingSchema);
 }
 
 /** POST /api/contracts/:id/reclaim - only valid once the bounty deadline

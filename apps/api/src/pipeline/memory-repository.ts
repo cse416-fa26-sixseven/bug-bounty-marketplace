@@ -12,6 +12,7 @@ import type {
   FindingRecord,
   JobKind,
   JobStatus,
+  NewAuditorFindingRecord,
   NewPocRecord,
   PipelineRepository,
   UnappliedVerdict,
@@ -136,6 +137,26 @@ export class MemoryPipelineRepository implements PipelineRepository {
     return "ok";
   }
 
+  async submitAuditorFinding({
+    finding,
+    poc,
+    job,
+    now,
+  }: NewAuditorFindingRecord): Promise<"ok" | "no_claim"> {
+    const claim = this.store.activeClaim(finding.contractId, new Date(now));
+    if (claim?.auditorId !== poc.auditorId) return "no_claim";
+    this.store.findings.set(finding.id, structuredClone(finding));
+    this.store.pocs.set(poc.id, { ...poc });
+    this.store.jobs.set(job.id, {
+      ...job,
+      status: "queued",
+      attempts: 0,
+      lastError: null,
+      updatedAt: job.createdAt,
+    });
+    return "ok";
+  }
+
   async recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void> {
     const poc = this.store.pocs.get(pocId);
     if (!poc) throw new Error(`Unknown PoC ${pocId}`);
@@ -173,6 +194,14 @@ export class MemoryPipelineRepository implements PipelineRepository {
     record.isFalsePositive = true;
     record.statusHistory = [...record.statusHistory, { status: "Rejected", changedAt }];
     return "ok";
+  }
+
+  async setDeveloperNote(findingId: string, note: string | null, updatedAt: string): Promise<boolean> {
+    const record = this.store.findings.get(findingId);
+    if (!record) return false;
+    record.developerNote = note;
+    record.developerNoteUpdatedAt = note === null ? null : updatedAt;
+    return true;
   }
 
   async findLatestPoc(findingId: string): Promise<PoCSubmission | null> {

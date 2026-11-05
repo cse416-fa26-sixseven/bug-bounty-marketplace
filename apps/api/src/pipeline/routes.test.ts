@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { Address, Hash } from "viem";
 import {
   AnalysisStatusSchema,
+  AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH,
+  AUDITOR_FINDING_TITLE_MAX_LENGTH,
+  AuditorFindingReportSchema,
   ContractSchema,
   FindingSchema,
   PoCSubmissionSchema,
@@ -67,7 +70,11 @@ function setup(options: SetupOptions = {}) {
     const body = multipartBody(fields, file);
     return app.inject({ method: "POST", url: "/api/auditor/poc", ...body });
   }
-  return { app, store, storage, advance, seedContract, seedFinding, claim, submitPoc };
+  function reportFinding(fields: Record<string, string>, file?: { name: string; content: Buffer }) {
+    const body = multipartBody(fields, file);
+    return app.inject({ method: "POST", url: "/api/auditor/findings", ...body });
+  }
+  return { app, store, storage, advance, seedContract, seedFinding, claim, submitPoc, reportFinding };
 }
 
 describe("GET /api/contracts", () => {
@@ -666,5 +673,282 @@ describe("POST /api/auditor/poc verdicts and stake gate", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("POST /api/auditor/findings", () => {
+  const report = {
+    title: "  Unprotected sweep()  ",
+    severity: "Critical",
+    description: "Anyone can call sweep() and take the whole balance.",
+  };
+  const pocFile = { name: "Sweep.t.sol", content: poc };
+
+  async function claimed(ctx: ReturnType<typeof setup>, auditorId = "auditor_1") {
+    const { contract } = await ctx.seedContract();
+    await ctx.claim(contract.id, auditorId);
+    return contract;
+  }
+
+  it("creates a Submitted auditor finding with its PoC and queues the sandbox", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+
+    expect(response.statusCode).toBe(201);
+    const { finding, poc: created } = AuditorFindingReportSchema.parse(response.json());
+    expect(finding).toMatchObject({
+      contractId: contract.id,
+      source: "auditor",
+      title: "Unprotected sweep()",
+      severity: "Critical",
+      llmExplanation: report.description,
+      slitherDetector: "auditor-reported",
+      reportedByAuditorId: "auditor_1",
+      status: "Submitted",
+      claimedByAuditorId: "auditor_1",
+      isFalsePositive: false,
+    });
+    expect(finding.statusHistory).toEqual([{ status: "Submitted", changedAt: T0.toISOString() }]);
+    expect(finding.rawOutputReference).toBe(`/api/findings/${finding.id}/raw`);
+    expect(created).toMatchObject({
+      findingId: finding.id,
+      auditorId: "auditor_1",
+      sandboxStatus: "Pending",
+    });
+    const sha = createHash("sha256").update(poc).digest("hex");
+    expect(created.testFileReference).toBe(`pocs/${created.id}/${sha}.t.sol`);
+    expect(await ctx.storage.get(created.testFileReference)).toEqual(poc);
+    expect(
+      [...ctx.store.jobs.values()].some((j) => j.kind === "sandbox" && j.subjectId === created.id),
+    ).toBe(true);
+
+    // Listed with the contract's other findings; the report is its raw output.
+    const listed = await ctx.app.inject({ url: `/api/contracts/${contract.id}/findings` });
+    expect(FindingSchema.array().parse(listed.json()).map((f) => f.id)).toEqual([finding.id]);
+    const raw = await ctx.app.inject({ url: finding.rawOutputReference });
+    expect(raw.json()).toEqual({
+      source: "auditor",
+      reportedByAuditorId: "auditor_1",
+      title: "Unprotected sweep()",
+      severity: "Critical",
+      description: report.description,
+    });
+  });
+
+  it("records a decided sandbox verdict like any PoC", async () => {
+    const verdicts = new FixedVerdictSource("Passed");
+    const ctx = setup({ verdicts });
+    const contract = await claimed(ctx);
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(201);
+    const { poc: created } = AuditorFindingReportSchema.parse(response.json());
+    expect(created.sandboxStatus).toBe("Passed");
+    expect(verdicts.requested.map((p) => p.id)).toEqual([created.id]);
+    expect(ctx.store.pocs.get(created.id)?.sandboxStatus).toBe("Passed");
+  });
+
+  it("requires contractId, auditorId, title, severity, description and file", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+    const full: Record<string, string> = { contractId: contract.id, auditorId: "auditor_1", ...report };
+    for (const key of Object.keys(full)) {
+      const fields = { ...full };
+      delete fields[key];
+      const response = await ctx.reportFinding(fields, pocFile);
+      expect(response.statusCode, key).toBe(400);
+    }
+    const noFile = await ctx.reportFinding(full);
+    expect(noFile.statusCode).toBe(400);
+    expect(ctx.store.findings.size).toBe(0);
+  });
+
+  it("rejects a non-multipart body with 400", async () => {
+    const ctx = setup();
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: "/api/auditor/findings",
+      payload: { contractId: "contract_x" },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  for (const [label, override, issue] of [
+    ["a blank title", { title: "   " }, "Title is required"],
+    [
+      "an over-long title",
+      { title: "a".repeat(AUDITOR_FINDING_TITLE_MAX_LENGTH + 1) },
+      `Title must be at most ${AUDITOR_FINDING_TITLE_MAX_LENGTH} characters`,
+    ],
+    [
+      "an over-long description",
+      { description: "a".repeat(AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH + 1) },
+      `Description must be at most ${AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH} characters`,
+    ],
+    ["an unknown severity", { severity: "Severe" }, undefined],
+  ] as const) {
+    it(`rejects ${label} with 400 and stores nothing`, async () => {
+      const ctx = setup();
+      const contract = await claimed(ctx);
+      const put = vi.spyOn(ctx.storage, "put");
+      const response = await ctx.reportFinding(
+        { contractId: contract.id, auditorId: "auditor_1", ...report, ...override },
+        pocFile,
+      );
+      expect(response.statusCode).toBe(400);
+      const body = response.json() as { error: string; issues: string[] };
+      expect(body.error).toBe("Invalid finding report");
+      if (issue) expect(body.issues).toContain(issue);
+      expect(put).not.toHaveBeenCalled();
+      expect(ctx.store.findings.size).toBe(0);
+    });
+  }
+
+  it("rejects a non-.t.sol filename with 400", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      { name: "Sweep.sol", content: poc },
+    );
+    expect(response.statusCode).toBe(400);
+    expect((response.json() as { issues: string[] }).issues).toContain(
+      "Filename must end in .t.sol",
+    );
+  });
+
+  it("rejects a PoC file over the limit with 413", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      { name: "Sweep.t.sol", content: Buffer.alloc(POC_SOURCE_MAX_BYTES + 1, 0x61) },
+    );
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toEqual({ error: "PoC file exceeds the 100 KB limit" });
+  });
+
+  it("returns 404 for an unknown contract", async () => {
+    const ctx = setup();
+    const response = await ctx.reportFinding(
+      { contractId: "contract_missing", auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("returns 403 when the auditor holds no claim", async () => {
+    const ctx = setup();
+    const { contract } = await ctx.seedContract();
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "You do not hold an active claim on this contract" });
+  });
+
+  it("returns 403 when another auditor holds the claim", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx, "auditor_2");
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(403);
+    expect(ctx.store.findings.size).toBe(0);
+  });
+
+  it("returns 403 once the claim has expired", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+    ctx.advance(CLAIM_WINDOW_SECONDS);
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("answers 403 when the repository's in-transaction claim check fails", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+    const pipeline = new MemoryPipelineRepository(ctx.store);
+    pipeline.submitAuditorFinding = async () => "no_claim";
+    const app = buildApp({
+      repository: new MemoryContractRepository(ctx.store),
+      pipeline,
+      storage: ctx.storage,
+      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
+    });
+    const body = multipartBody(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    const response = await app.inject({ method: "POST", url: "/api/auditor/findings", ...body });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "You do not hold an active claim on this contract" });
+    expect(ctx.store.findings.size).toBe(0);
+  });
+
+  it("rejects a stake below the requirement with 403 and stores nothing", async () => {
+    const stakeOf = vi.fn(async () => 99_999_999_999_999_999n);
+    const ctx = setup({ stakeOf });
+    const contract = await claimed(ctx, auditorWallet);
+    const put = vi.spyOn(ctx.storage, "put");
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: auditorWallet, ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(stakeOf).toHaveBeenCalledWith(auditorWallet);
+    expect(put).not.toHaveBeenCalled();
+    expect(ctx.store.findings.size).toBe(0);
+    expect(ctx.store.pocs.size).toBe(0);
+  });
+
+  it("accepts a stake equal to the requirement", async () => {
+    const ctx = setup({ stakeOf: async () => 100_000_000_000_000_000n });
+    const contract = await claimed(ctx, auditorWallet);
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: auditorWallet, ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(201);
+  });
+
+  it("rejects a non-address auditorId when the stake check is on, without reading stake", async () => {
+    const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
+    const ctx = setup({ stakeOf });
+    const contract = await claimed(ctx, auditorWallet);
+    const response = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    expect(response.statusCode).toBe(400);
+    expect(stakeOf).not.toHaveBeenCalled();
+  });
+
+  it("is not Flagged, so POST /api/auditor/poc cannot submit a second PoC against it", async () => {
+    const ctx = setup();
+    const contract = await claimed(ctx);
+    const created = await ctx.reportFinding(
+      { contractId: contract.id, auditorId: "auditor_1", ...report },
+      pocFile,
+    );
+    const { finding } = AuditorFindingReportSchema.parse(created.json());
+    const second = await ctx.submitPoc(
+      { findingId: finding.id, auditorId: "auditor_1" },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    expect(second.statusCode).toBe(409);
   });
 });

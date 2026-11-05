@@ -1,6 +1,12 @@
 "use client";
 
 import type { ArbiterDisputeView } from "@/lib/api/arbiter";
+import {
+  FindingDescriptionNote,
+  FindingOriginBadge,
+  findingHeading,
+} from "@/components/FindingOrigin";
+import { DeveloperNoteView } from "@/components/DeveloperNote";
 
 const SEVERITY_STYLES: Record<string, string> = {
   Critical: "bg-red-500/20 text-red-300",
@@ -73,9 +79,12 @@ export function DisputeCard({ dispute, onRule, isRuling }: DisputeCardProps) {
                 >
                   {finding.severity}
                 </span>
-                <span className="text-xs text-slate-500">{finding.slitherDetector}</span>
+                <span className="text-xs text-slate-500">{findingHeading(finding)}</span>
+                <FindingOriginBadge finding={finding} />
               </div>
-              <p>{finding.llmExplanation}</p>
+              <p className="whitespace-pre-line">{finding.llmExplanation}</p>
+              <FindingDescriptionNote finding={finding} />
+              <DeveloperNoteView finding={finding} />
             </div>
           ) : (
             <p className="mt-2 text-sm text-slate-500">Finding not found.</p>

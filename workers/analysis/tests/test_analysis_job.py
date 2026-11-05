@@ -68,6 +68,13 @@ def _to_shared(row) -> dict:
         "claimExpiresAt": None,
         "isFalsePositive": row["is_false_positive"],
         "challengeWindowExpiresAt": None,
+        # Columns from migration 0009; worker findings default to slither.
+        "source": row["source"],
+        "title": row["title"],
+        "reportedByAuditorId": row["reported_by_auditor_id"],
+        # Migration 0010; a new finding has no developer note.
+        "developerNote": row["developer_note"],
+        "developerNoteUpdatedAt": row["developer_note_updated_at"],
     }
 
 

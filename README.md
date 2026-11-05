@@ -11,9 +11,12 @@ a successful reproduction marks a finding **Verified**. After the challenge
 window passes with no dispute, escrow pays the auditor (first verified PoC
 wins, and the bounty closes). The developer can dispute a Verified finding
 during the challenge window; an admin arbiter rules, and a losing auditor's
-stake is slashed. Auditors can also mark AI findings as false positives.
+stake is slashed. Auditors can also mark AI findings as false positives, or
+report a vulnerability Slither missed together with the PoC that proves it.
 
 Finding statuses: `Flagged → Submitted → Verified → Disputed/Rejected → Paid`.
+An auditor-reported finding (`source: "auditor"`) starts at `Submitted` and
+then follows the same path.
 
 ## Repository layout
 

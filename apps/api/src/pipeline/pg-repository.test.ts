@@ -75,8 +75,9 @@ describeRepositories(
         await db.query(
           `INSERT INTO findings (id, contract_id, severity, slither_detector, slither_confidence, raw_output,
              raw_output_reference, llm_explanation, explanation_source, status, status_history,
-             is_false_positive, challenge_window_expires_at, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+             is_false_positive, challenge_window_expires_at, created_at,
+             source, title, reported_by_auditor_id, developer_note, developer_note_updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
           [
             f.id,
             f.contractId,
@@ -92,6 +93,11 @@ describeRepositories(
             f.isFalsePositive,
             f.challengeWindowExpiresAt,
             f.createdAt,
+            f.source,
+            f.title,
+            f.reportedByAuditorId,
+            f.developerNote,
+            f.developerNoteUpdatedAt,
           ],
         );
       },

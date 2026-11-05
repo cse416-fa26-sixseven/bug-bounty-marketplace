@@ -71,6 +71,12 @@ describe("rate limiting", () => {
     expect(pocStatuses[2]).toBe(429);
   });
 
+  it("limits auditor finding reports as an upload route", async () => {
+    const app = buildApp({ rateLimit: LIMITS });
+    const report: InjectOptions = { ...upload, url: "/api/auditor/findings" };
+    expect(await statuses(app, 3, report)).toEqual([400, 400, 429]);
+  });
+
   it("gives sign-in routes their own limit", async () => {
     const app = buildApp({ rateLimit: LIMITS, sessionSecret: SESSION_SECRET });
     expect(await statuses(app, 4, nonce)).toEqual([200, 200, 200, 429]);
