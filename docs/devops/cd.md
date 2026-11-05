@@ -53,8 +53,8 @@ flowchart LR
   it retries transient Azure API errors (2s, 4s, 8s backoff), and if it still fails the deploy
   stays green with a **Deployed tag not recorded** warning. The tag then still names the previous
   release, so set it with the `az tag update` command from the warning (or re-run the job) before an env-power `up` or the weekly ACR purge.
-- CI's integration tests run the **arm64** images on the test cluster, while staging and prod run
-  **amd64**, so an amd64-only regression first shows up in the staging smoke checks.
+- CI's integration tests, staging and prod all run the **amd64** images (every cluster is x86,
+  ADR 0003 §4). `_build-push.yml` still builds `linux/arm64` too, which no env uses any more.
 
 ## Approving prod
 

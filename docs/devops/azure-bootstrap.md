@@ -101,10 +101,12 @@ restricted for the subscription in that env's region, and prints warnings for qu
 it can't raise quota. Check early, because quota requests can take time.
 
 All three envs run in one region ([ADR 0003](../adr/0003-shared-subscription-isolation.md) §4),
-each cluster on one 4 vCPU / 16 GiB B-series node (`system_vm_size` in
-`envs/<env>/compute.tfvars`). So that one region needs **about 12 B-series vCPUs** (more with a
-surge node for upgrades, or the prod `apps` pool) and PostgreSQL Flexible `Standard_B1ms` for
-staging and prod.
+each cluster on `Standard_D4as_v7` nodes (4 vCPU / 16 GiB, x86; the subscription offers no
+B-series) that autoscale from 1 to `system_max_count` (2 for test and staging, 3 for prod, in
+`envs/<env>/compute.tfvars`). Size the quota from the maxima: **28 vCPUs** in that one region
+((2 + 2 + 3) × 4; the extra node also covers the upgrade surge), plus PostgreSQL Flexible
+`Standard_B1ms` for staging and prod. The prod `apps` pool (`Standard_D2als_v7`) is off and would
+need more.
 
 ### vCPU quota
 
@@ -112,17 +114,17 @@ staging and prod.
 az vm list-usage -l <region> -o table
 ```
 
-| Row                                   | Needed for                                                                    | Rough need (in the one region)                      |
-| ------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------- |
-| Total Regional vCPUs                  | everything                                                                    | 12 (three 4 vCPU nodes), +4 per surge node          |
-| Family of each env's `system_vm_size` | e.g. BASv2 for `Standard_B4as_v2` (x86), BPSv2 for `Standard_B4ps_v2` (arm64) | 4 per env on that family (12 if all three share it) |
-| Standard DSv5 Family vCPUs            | Kata sandbox pool (disabled by default)                                       | 0 until the sandbox is enabled                      |
+| Row                                   | Needed for                                              | Rough need (in the one region)                   |
+| ------------------------------------- | ------------------------------------------------------- | ------------------------------------------------ |
+| Total Regional vCPUs                  | everything                                              | 28 at max scale (12 at min: three 4 vCPU nodes)  |
+| Family of each env's `system_vm_size` | `StandardDasv7Family` for `Standard_D4as_v7`            | 28 at max scale (8 test, 8 staging, 12 prod)     |
+| Standard DSv5 Family vCPUs            | Kata sandbox pool (disabled by default)                 | 0 until the sandbox is enabled                   |
 
 `up.sh` compares each region's free quota with the needs of the envs brought up there (clusters
 that already exist are already in the usage). New subscriptions often show a low regional limit
 (sometimes 4–10) and 0 for some families. To ask for more: **Portal → Quotas → Compute**, filter
-by the region, pick the family, **New quota request**. Small B-series increases are usually
-approved within minutes. To check that the node size is offered in a region:
+by the region, pick the family, **New quota request**. Small increases are often approved within
+minutes. To check that the node size is offered in a region:
 `az vm list-skus -l <region> --size <system_vm_size> -o table` (no `Restrictions`).
 
 ### PostgreSQL Flexible Server SKU

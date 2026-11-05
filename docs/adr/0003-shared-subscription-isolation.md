@@ -4,8 +4,10 @@
 - **Date:** 2026-11-04
 - **Scope:** `infra/terraform/stacks/bootstrap/**`, `infra/up.sh`, `infra/down.sh`,
   `infra/terraform/envs/**`, `docs/devops/**`
-- **Amends:** [ADR 0002](0002-aks-everywhere-and-azure-dns.md) §7 (home region rationale) and §8
-  (one region per environment). Everything else in 0001 and 0002 still holds.
+- **Amends:** [ADR 0002](0002-aks-everywhere-and-azure-dns.md) §6 (`subscription_id` no longer
+  committed), §7 (home region rationale) and §8 (one region per environment, node layout,
+  upgrades), and [ADR 0001](0001-azure-environment-topology.md)'s `global_tfvars_hint` (no
+  `subscription_id`). Everything else in 0001 and 0002 still holds.
 
 ## Context
 
@@ -48,6 +50,10 @@
 - **Teammates get Owner or Contributor on the BBM RGs only**, assigned by that Owner, not on the
   subscription. Everything after bootstrap (`tf.sh` on `global` / `data` / `compute`, `env-power`,
   Key Vault secrets, `kubectl`) works with RG-scoped roles.
+- **The subscription ID is not committed** (the repo is public and the subscription is shared).
+  `scripts/tf.sh` takes it from `TF_VAR_subscription_id` / `ARM_SUBSCRIPTION_ID` (CI:
+  `vars.AZURE_SUBSCRIPTION_ID`); `up.sh` remembers the last one in the gitignored
+  `envs/global/.last-subscription` to detect an account switch.
 
 ### 3. Subscription-level objects BBM still owns
 
@@ -76,11 +82,18 @@
 - Each env keeps its own cluster, RGs, Key Vault and Gateway (the isolation argued for in ADR 0002
   §8 "Why not one shared cluster"); only the region is shared. Prod no longer pulls images across
   regions, and there is one region to watch.
-- **Quota:** one region now needs about **12 B-series vCPUs** (three 4 vCPU nodes) plus a surge
-  node per upgrade if automatic upgrades are turned back on, and PostgreSQL Flexible
-  `Standard_B1ms` for staging and prod. `up.sh` checks it per region as before.
-- Node sizes and upgrade channels stay per env in `envs/<env>/compute.tfvars`; this ADR does not
-  change them.
+- **Nodes:** every cluster runs x86 `Standard_D4as_v7` (4 vCPU / 16 GiB), because the new
+  subscription offers no B-series sizes. The system pool autoscales from `system_min_count = 1` to
+  `system_max_count` 2 (test, staging) or 3 (prod); the `apps` pool stays off (prod's
+  `apps_vm_size` is `Standard_D2als_v7`). The test cluster is no longer arm64; `_build-push.yml`
+  still builds the multi-arch images (removing `linux/arm64` there is a separate change).
+- **Upgrades:** automatic upgrades are back on the defaults (`automatic_upgrade_channel = "patch"`,
+  `node_os_upgrade_channel = "NodeImage"`), now that the quota leaves room for a surge node. This
+  replaces "Automatic upgrades stay off" in ADR 0002 §8.
+- **Quota** is sized from the maxima: (2 + 2 + 3) nodes × 4 vCPU = **28 vCPUs** in the Dasv7 family
+  (and Total Regional vCPUs) in the one region, which also covers the upgrade surge node, plus
+  PostgreSQL Flexible `Standard_B1ms` for staging and prod. `up.sh` checks it per region as
+  before (node vCPUs × max count).
 
 ## Alternatives considered
 

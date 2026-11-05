@@ -468,7 +468,8 @@ and `infra/lib/` drive bring-up and teardown._
 - **`global` takes bootstrap outputs as tfvars, not remote state.** Bootstrap's `global_tfvars_hint`
   output provides `subscription_id`, `suffix`, `ephemeral_ci_principal_id` and
   `secret_officer_sp_object_ids` (ADR 0002 adds `dns_zone_name`). Admin users go in `secret_officer_user_object_ids`, applied locally
-  by an Owner.
+  by an Owner. _(Amended by ADR 0003: the hint no longer provides `subscription_id`; no tfvars
+  commits it, and `scripts/tf.sh` takes it from `TF_VAR_subscription_id` / `ARM_SUBSCRIPTION_ID`.)_
 
 ### Stack `bootstrap` outputs
 
