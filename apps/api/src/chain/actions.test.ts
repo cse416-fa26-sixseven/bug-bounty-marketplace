@@ -4,7 +4,7 @@ import type { FindingStatus, PoCSubmission } from "@bbm/shared";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemoryStore } from "../pipeline/memory-repository.js";
 import { makeContract, makeFinding } from "../testing/repository-suite.js";
-import { createChainActions, type ChainActionsDeps } from "./actions.js";
+import { VerdictDeferredError, createChainActions, type ChainActionsDeps } from "./actions.js";
 import type { AuditorStakingPort } from "./auditor-staking.js";
 import type { BountyEscrowPort, OnchainBounty } from "./bounty-escrow.js";
 import { onchainId } from "./ids.js";
@@ -58,16 +58,21 @@ function fakePorts() {
 }
 
 /** Makes the BountyEscrow fake keep state, so writes change what reads return,
- * as the contract does. A payout marks the bounty Paid for its finding. */
+ * as the contract does. A payout marks the bounty Paid for its finding. Like
+ * the contract, recordVerification reverts while another finding is verified.
+ * Returns controls for the chain changes no operator call makes. */
 function statefulBounty(ports: ReturnType<typeof fakePorts>) {
   let submissions = 0n;
   let verified: Hex = ZERO_HASH;
   let paid = false;
+  let closed = false;
   ports.bountyEscrow.recordSubmission.mockImplementation(async () => {
     submissions += 1n;
     return HASH;
   });
   ports.bountyEscrow.recordVerification.mockImplementation(async (_c, finding) => {
+    if (paid || closed) throw new Error("BountyNotOpen()");
+    if (verified !== ZERO_HASH) throw new Error("AlreadyVerified()");
     verified = finding;
     return HASH;
   });
@@ -80,12 +85,22 @@ function statefulBounty(ports: ReturnType<typeof fakePorts>) {
     developer: AUDITOR,
     amount: 0n,
     deadline: 0n,
-    state: paid ? 2 : 1,
+    state: paid ? 2 : closed ? 3 : 1,
     submissionCount: submissions,
     verifiedFinding: verified,
     verifiedAuditor: AUDITOR,
     frozen: false,
   }));
+  return {
+    /** unfreeze(..., auditorWon=false): a lost dispute clears the verification. */
+    clearVerification() {
+      verified = ZERO_HASH;
+    },
+    /** The developer refunded (or deleted) the bounty: it is Closed. */
+    close() {
+      closed = true;
+    },
+  };
 }
 
 function setup(options: { lockEnabled?: boolean; withChain?: boolean } = {}) {
@@ -228,6 +243,100 @@ describe("applyVerdict with Passed", () => {
 
     await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Verified");
     expect(ports.bountyEscrow.recordVerification).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyVerdict with Passed on a bounty that verified another finding", () => {
+  it("rejects the finding without a send once the bounty is Paid for another finding, and releases the lock", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const first = seedFinding(contractId, "Submitted");
+    const second = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(first, "Passed")).resolves.toBe("Verified");
+    await ports.bountyEscrow.payout(onchainId(contractId), onchainId(first), AUDITOR);
+    store.findings.get(first)!.status = "Paid";
+    ports.bountyEscrow.recordSubmission.mockClear();
+    ports.bountyEscrow.recordVerification.mockClear();
+
+    await expect(actions.applyVerdict(second, "Passed")).resolves.toBe("Rejected");
+    expect(store.findings.get(second)?.status).toBe("Rejected");
+    expect(ports.bountyEscrow.recordSubmission).not.toHaveBeenCalled();
+    expect(ports.bountyEscrow.recordVerification).not.toHaveBeenCalled();
+    // The Failed branch's release: nothing else of the auditor's is pending.
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("rejects the finding without a send once the bounty is Closed (refunded)", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    const bounty = statefulBounty(ports);
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    bounty.close();
+
+    await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Rejected");
+    expect(store.findings.get(findingId)?.status).toBe("Rejected");
+    expect(ports.bountyEscrow.recordSubmission).not.toHaveBeenCalled();
+    expect(ports.bountyEscrow.recordVerification).not.toHaveBeenCalled();
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers the verdict without a send while another finding is verified on the open bounty", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const first = seedFinding(contractId, "Submitted");
+    const second = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(first, "Passed")).resolves.toBe("Verified");
+
+    await expect(actions.applyVerdict(second, "Passed")).rejects.toBeInstanceOf(VerdictDeferredError);
+    await expect(actions.applyVerdict(second, "Passed")).rejects.toBeInstanceOf(VerdictDeferredError);
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
+    expect(store.findings.get(second)?.status).toBe("Submitted");
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+  });
+
+  it("applies a deferred verdict once the other finding's verification is cleared", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    const bounty = statefulBounty(ports);
+    const contractId = await seedContract();
+    const first = seedFinding(contractId, "Submitted");
+    const second = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await actions.applyVerdict(first, "Passed");
+    await expect(actions.applyVerdict(second, "Passed")).rejects.toBeInstanceOf(VerdictDeferredError);
+
+    // The first finding lost its dispute: unfreeze cleared the verification.
+    bounty.clearVerification();
+    store.findings.get(first)!.status = "Rejected";
+
+    await expect(actions.applyVerdict(second, "Passed")).resolves.toBe("Verified");
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenLastCalledWith(
+      onchainId(contractId),
+      onchainId(second),
+      AUDITOR,
+    );
+    expect(ports.bountyEscrow.recordSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("still marks the finding Verified when the bounty was Paid for this finding", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await ports.bountyEscrow.recordSubmission(onchainId(contractId));
+    await ports.bountyEscrow.payout(onchainId(contractId), onchainId(findingId), AUDITOR);
+    ports.bountyEscrow.recordVerification.mockClear();
+
+    await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Verified");
+    expect(store.findings.get(findingId)?.status).toBe("Verified");
+    expect(ports.bountyEscrow.recordVerification).not.toHaveBeenCalled();
+    expect((await chainStore.findFinding(findingId))?.verificationRecorded).toBe(true);
   });
 });
 
