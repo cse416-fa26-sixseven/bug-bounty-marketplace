@@ -351,10 +351,10 @@ describe("CLAIM_LOCK_ENABLED off", () => {
 });
 
 describe("dispute resolution", () => {
-  it("unlocks the claim lock once when the dispute is resolved", async () => {
+  it("unlocks the claim lock once when the dispute goes against the auditor", async () => {
     const { actions, ports, seedFinding, seedContract, claim } = setup();
     const contractId = await seedContract();
-    const findingId = seedFinding(contractId, "Disputed");
+    const findingId = seedFinding(contractId, "Rejected");
     await claim(contractId);
 
     await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(true);
@@ -362,6 +362,33 @@ describe("dispute resolution", () => {
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledWith(AUDITOR);
 
     await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["Verified", "Disputed"] as const)(
+    "keeps the claim lock while the finding is %s: the payout still needs the stake",
+    async (status) => {
+      // Verified: the auditor won the dispute and the finding awaits payout.
+      const { actions, ports, seedFinding, seedContract, claim } = setup();
+      const contractId = await seedContract();
+      const findingId = seedFinding(contractId, status);
+      await claim(contractId);
+
+      await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
+      expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+      expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+    },
+  );
+
+  it("releases a won dispute's lock once the finding is paid", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Verified");
+    await claim(contractId);
+    await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
+
+    store.findings.get(findingId)!.status = "Paid";
+    await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(true);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
   });
 

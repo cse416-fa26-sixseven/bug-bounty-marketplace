@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { DisputeRulingSchema, type AuditorProfile, type Dispute } from "@bbm/shared";
 import { getAddress, isAddress, type Address } from "viem";
 import type { Auth } from "../auth/session.js";
@@ -175,12 +175,7 @@ export function registerFindingLifecycleRoutes(
       // succeeds, and still retries the stake unlock (idempotent) in case the
       // indexer's attempt failed.
       if (dispute.ruling === ruling) {
-        await deps.chainActions?.applyDisputeResolved(dispute.findingId).catch((err: unknown) => {
-          request.log.error(
-            { err, findingId: dispute.findingId },
-            "applyDisputeResolved failed; the expiry sweep will release it",
-          );
-        });
+        await releaseLockIfLost(request, dispute.findingId, ruling);
         return dispute;
       }
       if (dispute.ruling !== "Pending")
@@ -207,15 +202,25 @@ export function registerFindingLifecycleRoutes(
         return reply.code(409).send({ error: "Dispute already ruled" });
       }
       await moveFinding(finding.id, auditorWon ? "Verified" : "Rejected");
-      await deps.chainActions?.applyDisputeResolved(finding.id).catch((err: unknown) => {
-        request.log.error(
-          { err, findingId: finding.id },
-          "applyDisputeResolved failed; the expiry sweep will release it",
-        );
-      });
+      await releaseLockIfLost(request, finding.id, ruling);
       return ruled;
     },
   );
+
+  /** A ruling against the auditor rejects the finding, so its claim lock is
+   * released. A ruling for the auditor returns it to Verified: the lock stays
+   * until PayoutCredited, since the payout reverts AuditorNotEligible if the
+   * auditor withdrew the stake in between. */
+  async function releaseLockIfLost(
+    request: FastifyRequest,
+    findingId: string,
+    ruling: "ForAuditor" | "AgainstAuditor",
+  ): Promise<void> {
+    if (ruling !== "AgainstAuditor") return;
+    await deps.chainActions?.applyDisputeResolved(findingId).catch((err: unknown) => {
+      request.log.error({ err, findingId }, "applyDisputeResolved failed; the expiry sweep will release it");
+    });
+  }
 
   /** The signed-in arbiter's address, or sends 401/403. */
   function requireArbiter(

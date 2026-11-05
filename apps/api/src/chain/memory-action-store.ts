@@ -1,11 +1,12 @@
 import type { FindingStatus } from "@bbm/shared";
 import type { MemoryStore } from "../pipeline/memory-repository.js";
 import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, PayoutDue } from "./action-store.js";
-import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
+import {
+  DEFAULT_CHALLENGE_WINDOW_SECONDS,
+  PENDING_FINDING_STATUSES,
+  challengeWindowEnd,
+} from "./action-store.js";
 import { InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
-
-/** Findings whose claim lock must outlive the claim. */
-const PENDING_STATUSES: ReadonlySet<FindingStatus> = new Set(["Submitted", "Verified", "Disputed"]);
 
 /** In-memory ChainActionStore over the same MemoryStore the repositories use.
  * Tests and the no-DATABASE_URL setup. */
@@ -184,7 +185,7 @@ export class MemoryChainActionStore implements ChainActionStore {
       if (poc.auditorId.toLowerCase() !== auditor) continue;
       const finding = this.store.findings.get(poc.findingId);
       if (finding?.contractId !== contractId) continue;
-      if (PENDING_STATUSES.has(finding.status)) return true;
+      if (PENDING_FINDING_STATUSES.has(finding.status)) return true;
     }
     return false;
   }

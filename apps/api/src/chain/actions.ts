@@ -1,6 +1,6 @@
 import type { Address } from "viem";
 import type { FindingStatus } from "@bbm/shared";
-import type { ChainActionStore, PayoutDue } from "./action-store.js";
+import { PENDING_FINDING_STATUSES, type ChainActionStore, type PayoutDue } from "./action-store.js";
 import type { AuditorStakingPort } from "./auditor-staking.js";
 import { BOUNTY_STATE_PAID, type BountyEscrowPort } from "./bounty-escrow.js";
 import { onchainId } from "./ids.js";
@@ -55,8 +55,12 @@ export interface ChainActions {
    * the call can be retried.
    */
   applyVerdict(findingId: string, verdict: Verdict): Promise<FindingStatus>;
-  /** Called when a dispute on the finding is resolved (the Unfrozen event).
-   * Unlocks the claim lock once. Returns true if this call released a lock. */
+  /** Called once nothing more can happen to the finding: it was paid
+   * (PayoutCredited) or a dispute went against the auditor (Rejected). Unlocks
+   * the claim lock once. Does nothing while the finding is Submitted, Verified
+   * or Disputed (a dispute the auditor won returns it to Verified, awaiting
+   * payout), since the payout still needs the stake. Returns true if this
+   * call released a lock. */
   applyDisputeResolved(findingId: string): Promise<boolean>;
   /** Pays every Verified finding whose challenge window has closed. A failed
    * payout is logged and left for the next run. Does not set Paid: that
@@ -373,6 +377,9 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
     async applyDisputeResolved(findingId) {
       const ref = await store.findFinding(findingId);
       if (!ref) throw new FindingNotFoundError(findingId);
+      // A won dispute returns the finding to Verified: its payout still needs
+      // the stake, so the lock stays until PayoutCredited.
+      if (PENDING_FINDING_STATUSES.has(ref.status)) return false;
       return unlock(ref.contractId, { auditorId: ref.auditorId ?? undefined });
     },
 

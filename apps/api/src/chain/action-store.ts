@@ -1,6 +1,16 @@
 import type { FindingStatus } from "@bbm/shared";
 import type { FindingStatusReader, FindingStatusWriter } from "../status/finding-writer.js";
 
+/** Finding statuses that still need the auditor's stake: the verdict, the
+ * payout or the dispute is outstanding, and BountyEscrow refuses the
+ * verification or payout (AuditorNotEligible) if the stake was withdrawn. The
+ * claim lock backing such a finding stays in place. */
+export const PENDING_FINDING_STATUSES: ReadonlySet<FindingStatus> = new Set([
+  "Submitted",
+  "Verified",
+  "Disputed",
+]);
+
 /** A finding as the chain actions need it. */
 export interface FindingChainRef {
   findingId: string;
