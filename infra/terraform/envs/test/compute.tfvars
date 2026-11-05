@@ -2,8 +2,8 @@
 #   TF_VAR_tfstate_account (= TFSTATE_ACCOUNT repo var), optional TF_VAR_tfstate_resource_group.
 # Do not set tfstate_* here: -var-file values would override the TF_VAR_* that CI exports.
 env           = "test"
-location      = "canadacentral" # this env's region: infra/up.sh --env-location test=<region>
-location_abbr = "cac"
+location      = "eastus2" # this env's region: infra/up.sh --env-location test=<region>
+location_abbr = "eus2"
 
 # Minor version only (patch channel keeps the patch current). Check GA versions
 # before the first apply: az aks get-versions -l <location> -o table (infra/up.sh checks it)

@@ -1,8 +1,8 @@
 # stacks/data for staging — persistent data layer (VNet, PG, KV, storage, UAMIs, PIP, LAW).
 env           = "staging"
-location      = "denmarkeast" # this env's region: infra/up.sh --env-location staging=<region>
-location_abbr = "dke"
-suffix        = "xx3m" # bootstrap output: suffix (same as envs/global/global.tfvars)
+location      = "centralus" # this env's region: infra/up.sh --env-location staging=<region>
+location_abbr = "cus"
+suffix        = "t9vd" # bootstrap output: suffix (same as envs/global/global.tfvars)
 
 vnet_cidr = "10.20.0.0/16"
 subnet_cidrs = {
@@ -25,4 +25,4 @@ secret_officer_sp_object_ids = [] # extra service principals (CI can apply)
 # (az keyvault secret set --vault-name <kv> --name llm-api-key --value ...).
 # principal_type User: CI cannot grant these, so apply changes to this list
 # locally as a subscription Owner first; CI then sees no diff.
-secret_officer_user_object_ids = ["bf41ada0-7cb4-48ca-9c34-c2616abf5b54"]
+secret_officer_user_object_ids = ["3f8bfd5e-e047-4cf0-9783-19f68e694eba"]

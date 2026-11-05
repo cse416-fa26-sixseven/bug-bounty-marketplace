@@ -2,30 +2,30 @@
 # infra/up.sh with `./scripts/tf.sh bootstrap global output -raw global_tfvars_hint`
 # (or paste that output there by hand). Keep the marker lines.
 # >>> bootstrap hint (written by infra/up.sh)
-suffix                       = "xx3m"
-ephemeral_ci_principal_id    = "3deb6616-bf5d-403c-a401-f28957c251e3"
-preview_ci_principal_id      = "eb6cf570-6af3-401e-9a0b-f904b7f0f3b7"
-secret_officer_sp_object_ids = ["bfeebc0c-850f-4e18-910d-e3ece29814a3"]
+suffix                       = "t9vd"
+ephemeral_ci_principal_id    = "ad249478-f491-4046-bb65-5ddf9a3b1c37"
+preview_ci_principal_id      = "b240e98b-c064-4c8d-811c-c511b1a44f21"
+secret_officer_sp_object_ids = ["025ed226-eac7-4c74-ad13-4a01cf3bc356"]
 dns_zone_name                = "bug-bounty.cse416-group.pranavjothivel.com"
 # <<< bootstrap hint
 
-location      = "northcentralus" # home region: infra/up.sh --location (same as bootstrap.tfvars)
-location_abbr = "ncus"
+location      = "eastus2" # home region: infra/up.sh --location (same as bootstrap.tfvars)
+location_abbr = "eus2"
 
 # Env regions (same as bootstrap.tfvars; infra/up.sh copies them from
 # envs/<env>/data.tfvars). Used to find the env RGs for their budgets.
 env_locations = {
-  test    = { location = "canadacentral", location_abbr = "cac" }
-  staging = { location = "denmarkeast", location_abbr = "dke" }
-  prod    = { location = "northcentralus", location_abbr = "ncus" }
+  test    = { location = "eastus2", location_abbr = "eus2" }
+  staging = { location = "centralus", location_abbr = "cus" }
+  prod    = { location = "centralus", location_abbr = "cus" }
 }
 
 alert_emails       = ["alerts@bug-bounty.cse416-group.pranavjothivel.com"]
 rg_budget_amount   = 20
-budget_start_date  = "2026-10-01T00:00:00Z"
+budget_start_date  = "2026-11-01T00:00:00Z"
 law_daily_quota_gb = 0.25
 
 # Admin users who run `az keyvault secret set`. principal_type User: CI cannot
 # grant these, so apply changes to this list locally as a subscription Owner.
-secret_officer_user_object_ids = ["bf41ada0-7cb4-48ca-9c34-c2616abf5b54"]
+secret_officer_user_object_ids = ["3f8bfd5e-e047-4cf0-9783-19f68e694eba"]
 acr_push_principal_ids         = [] # build identities (service principals) only
