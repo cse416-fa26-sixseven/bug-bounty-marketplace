@@ -10,6 +10,7 @@ import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
 import { createChainActions, type ChainActions } from "./chain/actions.js";
 import { PgChainActionStore } from "./chain/pg-action-store.js";
 import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
+import { runLapsesOnce } from "./chain/dispute-lapser.js";
 import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
 import { startEventIndexer, type EventIndexerHandle } from "./indexer/indexer.js";
 import { PgIndexerLock, PgIndexerRepository, listFindingIds } from "./indexer/pg-repository.js";
@@ -71,6 +72,7 @@ if (authOriginWarning) console.warn(`@bbm/api ${authOriginWarning}`);
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
 const bountyEscrowPort = chainConfig ? createBountyEscrowFromConfig(chainConfig) : undefined;
+const disputeResolutionPort = chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined;
 const actionStore =
   chainConfig && pool
     ? new PgChainActionStore(pool, { challengeWindowSeconds: chainConfig.challengeWindowSeconds })
@@ -112,7 +114,7 @@ const app = buildApp({
   sessionSecret,
   authConfig,
   bountyEscrow: bountyEscrowPort,
-  disputeResolution: chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined,
+  disputeResolution: disputeResolutionPort,
   auditorStaking: stakingPort ?? undefined,
   disputes: disputeRepository,
   findingStatus: actionStore,
@@ -188,6 +190,19 @@ async function start(): Promise<void> {
         await chainActions
           .finishPendingUnlocks()
           .catch((err: unknown) => console.error("@bbm/api unlock sweep failed", err));
+        // Lapse disputes the arbiter left unruled past the ruling window, so
+        // their payouts unfreeze. A failure is logged and payouts still run.
+        if (disputeRepository && disputeResolutionPort) {
+          const lapses = await runLapsesOnce({
+            disputes: disputeRepository,
+            disputeResolution: disputeResolutionPort,
+          }).catch((err: unknown) => {
+            console.error("@bbm/api lapse pass failed", err);
+            return null;
+          });
+          if (lapses && lapses.lapsed + lapses.failed > 0)
+            console.log(`@bbm/api lapse pass: ${JSON.stringify(lapses)}`);
+        }
         const summary = await chainActions.runPayoutsOnce(new Date());
         if (summary.due > 0) console.log(`@bbm/api payout pass: ${JSON.stringify(summary)}`);
       },

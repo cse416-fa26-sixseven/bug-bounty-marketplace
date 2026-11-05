@@ -1,5 +1,6 @@
-import type { Address, Hex, PublicClient } from "viem";
+import type { Account, Address, Chain, Hash, Hex, PublicClient, Transport, WalletClient } from "viem";
 import { disputeResolutionAbi } from "@bbm/shared";
+import { awaitSuccess } from "./tx.js";
 
 export interface OnchainDispute {
   developer: Address;
@@ -9,20 +10,28 @@ export interface OnchainDispute {
   resolved: boolean;
 }
 
-/** The read-only view of DisputeResolution the API needs. Rulings and
- * disputes are sent by the arbiter and developer in their own wallets, so
- * the API only reads them. */
+/** The view of DisputeResolution the API needs. Disputes and rulings are
+ * sent by the developer and arbiter from their own wallets, so the API only
+ * reads them. The one write is lapse(), which anyone may send once the
+ * ruling window has closed; the operator sends it so a dispute the arbiter
+ * never rules on does not freeze the payout forever. */
 export interface DisputeResolutionPort {
   getDispute(contractId: Hex, findingId: Hex): Promise<OnchainDispute | null>;
+  /** Unix seconds of the latest block: the clock lapse() is checked against. */
+  latestBlockTime(): Promise<bigint>;
+  /** Resolves an unruled dispute past its ruling window in the auditor's favour. */
+  lapse(contractId: Hex, findingId: Hex): Promise<Hash>;
 }
 
 export interface DisputeResolutionDeps {
   address: Address;
-  publicClient: Pick<PublicClient, "readContract">;
+  publicClient: Pick<PublicClient, "readContract" | "getBlock" | "waitForTransactionReceipt">;
+  /** Needed only for lapse(); signs with the operator account. */
+  walletClient?: Pick<WalletClient<Transport, Chain | undefined, Account>, "writeContract">;
 }
 
 export function createDisputeResolutionPort(deps: DisputeResolutionDeps): DisputeResolutionPort {
-  const { address, publicClient } = deps;
+  const { address, publicClient, walletClient } = deps;
 
   return {
     async getDispute(contractId, findingId) {
@@ -46,6 +55,22 @@ export function createDisputeResolutionPort(deps: DisputeResolutionDeps): Disput
         return null;
       }
       return { developer, auditor, ruleBy, resolved };
+    },
+
+    async latestBlockTime() {
+      return (await publicClient.getBlock()).timestamp;
+    },
+
+    async lapse(contractId, findingId) {
+      if (!walletClient) throw new Error("DisputeResolution.lapse needs a wallet client");
+      const hash = await walletClient.writeContract({
+        address,
+        abi: disputeResolutionAbi,
+        functionName: "lapse",
+        args: [contractId, findingId],
+        chain: undefined,
+      });
+      return awaitSuccess(publicClient, hash, "DisputeResolution.lapse");
     },
   };
 }
