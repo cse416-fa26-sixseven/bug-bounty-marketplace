@@ -61,7 +61,8 @@ const READABLE_REVERTS: Record<string, string> = {
   RulingWindowClosed: "The ruling window for this dispute has closed.",
   NothingToWithdraw: "There is no payout to withdraw.",
   InsufficientStake: "Your stake is below the amount this action needs.",
-  ActiveSubmissions: "Your stake is locked by an active claim.",
+  ActiveSubmissions:
+    "Your stake is locked by an active claim or a finding still awaiting its verdict, payout or ruling.",
   ZeroAmount: "Enter an amount greater than zero.",
 };
 
@@ -243,6 +244,14 @@ export function chainCalls(
         ["BountyNotOpen"],
         closed(contractId),
       ),
+    /** AuditorStaking.withdraw: reverts while any claim or finding holds a lock. */
+    withdrawStake: (amountWei: string) =>
+      send({
+        address: auditorStaking,
+        abi: auditorStakingAbi as Abi,
+        functionName: "withdraw",
+        args: [BigInt(amountWei)],
+      }),
     withdrawPayout: () =>
       send({
         address: bountyEscrow,

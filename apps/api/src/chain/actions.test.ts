@@ -266,6 +266,25 @@ describe("applyVerdict with Failed", () => {
     await actions.applyVerdict(findingId, "Failed");
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps the lock while another finding of the auditor's on the contract awaits payout", async () => {
+    // Unlocked here, the auditor could withdraw, the Verified finding's payout
+    // would revert AuditorNotEligible on every run and the refund AlreadyVerified.
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    const contractId = await seedContract();
+    const verified = seedFinding(contractId, "Verified");
+    const failing = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+
+    await expect(actions.applyVerdict(failing, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+
+    // PayoutCredited on the Verified finding then releases it.
+    store.findings.get(verified)!.status = "Paid";
+    await expect(actions.applyDisputeResolved(verified)).resolves.toBe(true);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("claim lock expiry", () => {
@@ -279,6 +298,33 @@ describe("claim lock expiry", () => {
     await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(0);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledWith(AUDITOR);
+  });
+
+  it("keeps the stake locked past expiry while the auditor's finding is pending", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    advance(CLAIM_WINDOW_MS * 2);
+
+    // Unlocked here, the auditor could withdraw and the payout would revert.
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Verified");
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+  });
+
+  it("releases the kept lock once the pending finding is rejected", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    advance(CLAIM_WINDOW_MS * 2);
+
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
   });
 
   it("does not unlock a claim that has not expired", async () => {
@@ -324,10 +370,10 @@ describe("CLAIM_LOCK_ENABLED off", () => {
 });
 
 describe("dispute resolution", () => {
-  it("unlocks the claim lock once when the dispute is resolved", async () => {
+  it("unlocks the claim lock once when the dispute goes against the auditor", async () => {
     const { actions, ports, seedFinding, seedContract, claim } = setup();
     const contractId = await seedContract();
-    const findingId = seedFinding(contractId, "Disputed");
+    const findingId = seedFinding(contractId, "Rejected");
     await claim(contractId);
 
     await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(true);
@@ -335,6 +381,59 @@ describe("dispute resolution", () => {
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledWith(AUDITOR);
 
     await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["Verified", "Disputed"] as const)(
+    "keeps the claim lock while the finding is %s: the payout still needs the stake",
+    async (status) => {
+      // Verified: the auditor won the dispute and the finding awaits payout.
+      const { actions, ports, seedFinding, seedContract, claim } = setup();
+      const contractId = await seedContract();
+      const findingId = seedFinding(contractId, status);
+      await claim(contractId);
+
+      await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
+      expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+      expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+    },
+  );
+
+  it("releases a won dispute's lock once the finding is paid", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Verified");
+    await claim(contractId);
+    await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
+
+    store.findings.get(findingId)!.status = "Paid";
+    await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(true);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("a lost dispute keeps the lock while another finding of the auditor's on the contract is pending", async () => {
+    const { actions, ports, seedFinding, seedContract, claim } = setup();
+    const contractId = await seedContract();
+    const lost = seedFinding(contractId, "Rejected");
+    const pending = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+
+    await expect(actions.applyDisputeResolved(lost)).resolves.toBe(false);
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+    // Once the other finding is settled too, the lock goes.
+    await expect(actions.applyVerdict(pending, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("a payout releases the lock even with another finding of the auditor's still Submitted", async () => {
+    // The bounty is paid, so that finding can never be verified or paid.
+    const { actions, ports, seedFinding, seedContract, claim } = setup();
+    const contractId = await seedContract();
+    const paid = seedFinding(contractId, "Paid");
+    seedFinding(contractId, "Submitted");
+    await claim(contractId);
+
+    await expect(actions.applyDisputeResolved(paid)).resolves.toBe(true);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
   });
 

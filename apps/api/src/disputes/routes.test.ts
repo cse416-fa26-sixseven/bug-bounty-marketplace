@@ -54,6 +54,7 @@ function setup() {
   const auditorStaking = {
     stakeOf: vi.fn(async () => 10n ** 17n),
     reputation: vi.fn(async () => 3n),
+    activeSubmissions: vi.fn(async () => 1n),
   };
   const chainActions = { applyDisputeResolved: vi.fn(async () => true) };
   const disputes = new MemoryDisputeRepository();
@@ -111,7 +112,7 @@ function setup() {
 }
 
 describe("auditor profile", () => {
-  it("reads stake, reputation and pending payout from the chain for the signed-in auditor", async () => {
+  it("reads stake, reputation, active locks and pending payout from the chain for the signed-in auditor", async () => {
     const { app } = setup();
     const res = await app.inject({
       method: "GET",
@@ -125,6 +126,7 @@ describe("auditor profile", () => {
       stake: "100000000000000000",
       reputation: 3,
       pendingPayout: "7",
+      activeSubmissions: 1,
       claimedContractIds: [],
     });
   });
@@ -310,5 +312,32 @@ describe("disputes", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(store.findings.get(findingId)?.status).toBe("Verified");
+  });
+
+  it("a ruling for the auditor keeps the stake lock until the payout", async () => {
+    // The finding still awaits its payout, which reverts AuditorNotEligible if
+    // the auditor withdrew in between.
+    const { app, seed, openOnChain, setVerified, chainActions } = setup();
+    const { contractId, findingId } = await seed("Verified");
+    openOnChain(contractId, findingId);
+    const opened = await app.inject({
+      method: "POST",
+      url: `/api/findings/${findingId}/dispute`,
+      headers: { cookie: await signIn(app, DEVELOPER) },
+      payload: { reason: "bad PoC" },
+    });
+    openOnChain(contractId, findingId, true);
+    setVerified(findingId);
+    const arbiter = await signIn(app, ARBITER);
+    const rule = () =>
+      app.inject({
+        method: "POST",
+        url: `/api/arbiter/disputes/${opened.json().id}/rule`,
+        headers: { cookie: arbiter },
+        payload: { ruling: "ForAuditor" },
+      });
+    expect((await rule()).statusCode).toBe(200);
+    expect((await rule()).statusCode).toBe(200); // the idempotent repeat must not unlock either
+    expect(chainActions.applyDisputeResolved).not.toHaveBeenCalled();
   });
 });
