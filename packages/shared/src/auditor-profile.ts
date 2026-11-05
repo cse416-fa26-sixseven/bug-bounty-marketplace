@@ -12,5 +12,8 @@ export const AuditorProfileSchema = z.object({
   claimedContractIds: z.array(IdSchema).default([]),
   /** Wei credited to the auditor by BountyEscrow and not yet withdrawn. */
   pendingPayout: WeiSchema.optional(),
+  /** AuditorStaking locks held: claims and findings awaiting a verdict,
+   * payout or ruling. Stake cannot be withdrawn while this is above 0. */
+  activeSubmissions: z.number().int().nonnegative().optional(),
 });
 export type AuditorProfile = z.infer<typeof AuditorProfileSchema>;

@@ -1,6 +1,16 @@
 import type { FindingStatus } from "@bbm/shared";
 import type { FindingStatusReader, FindingStatusWriter } from "../status/finding-writer.js";
 
+/** Finding statuses that still need the auditor's stake: the verdict, the
+ * payout or the dispute is outstanding, and BountyEscrow refuses the
+ * verification or payout (AuditorNotEligible) if the stake was withdrawn. The
+ * claim lock backing such a finding stays in place. */
+export const PENDING_FINDING_STATUSES: ReadonlySet<FindingStatus> = new Set([
+  "Submitted",
+  "Verified",
+  "Disputed",
+]);
+
 /** A finding as the chain actions need it. */
 export interface FindingChainRef {
   findingId: string;
@@ -55,12 +65,16 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
    * Atomically flips a "locked" claim to "unlocking" and returns the auditor
    * whose lock must be unlocked. Returns null, changing nothing, when there is
    * no lock to take: never locked, already unlocking or released, held by
-   * someone else (when `auditorId` is given), or not yet expired (when
-   * `expiredBy` is given).
+   * someone else (when `auditorId` is given), or, when `expiredBy` is given,
+   * not yet expired or still backing a pending finding (see
+   * listExpiredLockedClaims). When `settling` (a finding id) is given, also
+   * null while the auditor has another Submitted, Verified or Disputed
+   * finding on the contract: a Failed verdict or lost dispute on one finding
+   * must not free the stake another one still needs.
    */
   takeClaimUnlock(
     contractId: string,
-    options: { auditorId?: string; expiredBy?: Date },
+    options: { auditorId?: string; expiredBy?: Date; settling?: string },
   ): Promise<string | null>;
   /** Claims in "unlocking": an unlock was intended but is not yet confirmed.
    * Filtered to one contract when `contractId` is given. */
@@ -70,7 +84,11 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
   markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean>;
   /** Sets an "unlocking" claim held by `auditorId` to "released". */
   markClaimReleased(contractId: string, auditorId: string): Promise<void>;
-  /** Locked claims whose expiry is at or before `now`. */
+  /** Locked claims whose expiry is at or before `now`, except those whose
+   * auditor has a Submitted, Verified or Disputed finding on the contract.
+   * That lock keeps the stake in place until the finding is paid or
+   * rejected: unlocked, the auditor could withdraw and BountyEscrow would
+   * refuse the verification or payout (AuditorNotEligible). */
   listExpiredLockedClaims(
     now: Date,
     contractId?: string,

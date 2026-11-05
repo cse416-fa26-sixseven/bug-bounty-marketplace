@@ -5,14 +5,17 @@ import {
   listQueue,
   markFalsePositive,
   postStake,
+  profileView,
   reportFinding,
   submitPoc,
+  withdrawStake,
 } from "../db/auditors";
 import { errorResponse } from "./util";
 
 /**
- * Auditor-flow routes: queue, claim, stake, PoC submission, auditor-reported
- * findings, false-positive flagging, own profile. Owns no routes outside this area.
+ * Auditor-flow routes: queue, claim, stake and stake withdrawal, PoC submission,
+ * auditor-reported findings, false-positive flagging, own profile. Owns no
+ * routes outside this area.
  */
 export const auditorHandlers = [
   http.get("*/api/auditor/queue", ({ request }) => {
@@ -51,7 +54,7 @@ export const auditorHandlers = [
     }
     const profile = findAuditorById(auditorId);
     if (!profile) return HttpResponse.json({ error: "Not found" }, { status: 404 });
-    return HttpResponse.json(profile);
+    return HttpResponse.json(profileView(profile));
   }),
 
   http.post("*/api/auditor/stake", async ({ request }) => {
@@ -67,6 +70,24 @@ export const auditorHandlers = [
     }
     try {
       return HttpResponse.json(postStake(body.auditorId, body.amount));
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.post("*/api/auditor/stake/withdraw", async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as {
+      auditorId?: string;
+      amount?: string;
+    };
+    if (!body.auditorId || typeof body.amount !== "string") {
+      return HttpResponse.json(
+        { error: "auditorId and a wei amount string are required" },
+        { status: 400 },
+      );
+    }
+    try {
+      return HttpResponse.json(withdrawStake(body.auditorId, body.amount));
     } catch (err) {
       return errorResponse(err);
     }

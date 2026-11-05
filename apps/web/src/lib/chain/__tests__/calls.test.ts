@@ -64,7 +64,7 @@ describe("chainCalls", () => {
     });
   });
 
-  it("stakes, disputes, rules, deletes, refunds and withdraws against the right contracts", async () => {
+  it("stakes, disputes, rules, deletes, refunds and withdraws payout and stake against the right contracts", async () => {
     const client = fakeClient();
     const calls = chainCalls(INFO, ANVIL_ACCOUNTS.auditor, client);
     await calls.stake("100000000000000000");
@@ -73,6 +73,7 @@ describe("chainCalls", () => {
     await calls.deleteBounty("contract_1");
     await calls.refund("contract_1");
     await calls.withdrawPayout();
+    await calls.withdrawStake("50000000000000000");
     expect(client.writes.map((w) => [w.address, w.functionName])).toEqual([
       [INFO.addresses.auditorStaking, "stake"],
       [INFO.addresses.disputeResolution, "openDispute"],
@@ -80,7 +81,9 @@ describe("chainCalls", () => {
       [INFO.addresses.bountyEscrow, "deleteBounty"],
       [INFO.addresses.bountyEscrow, "refund"],
       [INFO.addresses.bountyEscrow, "withdrawPayout"],
+      [INFO.addresses.auditorStaking, "withdraw"],
     ]);
+    expect(client.writes[6]!.args).toEqual([50000000000000000n]);
     expect(client.writes[0]!.value).toBe(100000000000000000n);
     expect(client.writes[2]!.args).toEqual([
       onchainId("contract_1"),

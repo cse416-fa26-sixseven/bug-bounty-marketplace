@@ -4,6 +4,18 @@ import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, Payout
 import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
 import { FINDING_TRANSITIONS, InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
 
+/** True when the claim on `contracts` backs a finding still waiting on its
+ * verdict, payout or dispute. The expiry sweep must not unlock that stake.
+ * `except` is a SQL expression for a finding id left out (NULL: none). */
+function holdsPendingFinding(except = "NULL::text"): string {
+  return `EXISTS (
+  SELECT 1 FROM findings f JOIN poc_submissions p ON p.finding_id = f.id
+   WHERE f.contract_id = contracts.id
+     AND f.id IS DISTINCT FROM ${except}
+     AND lower(p.auditor_id) = lower(contracts.claimed_by_auditor_id)
+     AND f.status IN ('Submitted', 'Verified', 'Disputed'))`;
+}
+
 /** Postgres ChainActionStore. Columns come from db/migrations/0005_claim_locks.sql. */
 export class PgChainActionStore implements ChainActionStore {
   private readonly challengeWindowSeconds: number;
@@ -172,7 +184,7 @@ export class PgChainActionStore implements ChainActionStore {
 
   async takeClaimUnlock(
     contractId: string,
-    options: { auditorId?: string; expiredBy?: Date },
+    options: { auditorId?: string; expiredBy?: Date; settling?: string },
   ): Promise<string | null> {
     // One UPDATE decides the race: of two concurrent takes, only the one
     // that still sees 'locked' on the row gets a row back.
@@ -182,8 +194,9 @@ export class PgChainActionStore implements ChainActionStore {
           AND claim_lock_status = 'locked'
           AND ($2::text IS NULL OR claimed_by_auditor_id = $2)
           AND ($3::timestamptz IS NULL OR claim_expires_at <= $3)
+          AND (($3::timestamptz IS NULL AND $4::text IS NULL) OR NOT ${holdsPendingFinding("$4::text")})
         RETURNING claimed_by_auditor_id`,
-      [contractId, options.auditorId ?? null, options.expiredBy ?? null],
+      [contractId, options.auditorId ?? null, options.expiredBy ?? null, options.settling ?? null],
     );
     return result.rows[0]?.claimed_by_auditor_id ?? null;
   }
@@ -225,6 +238,7 @@ export class PgChainActionStore implements ChainActionStore {
       `SELECT id, claimed_by_auditor_id FROM contracts
         WHERE claim_lock_status = 'locked'
           AND claim_expires_at <= $1
+          AND NOT ${holdsPendingFinding()}
           AND ($2::text IS NULL OR id = $2)
         ORDER BY id`,
       [now, contractId ?? null],
