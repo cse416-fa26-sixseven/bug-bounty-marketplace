@@ -19,7 +19,7 @@ import { nextId } from "./ids";
 import { scheduleOnce } from "./scheduler";
 import { SANDBOX_DELAY_MS, CLAIM_WINDOW_MS } from "./timing";
 import { MockApiError } from "./errors";
-import { armChallengeWindow, findContractById, findFindingById } from "./contracts";
+import { armChallengeWindow, findContractById, findFindingById, isAnalysisDone } from "./contracts";
 
 /** Fixed id of the single seeded auditor profile. Exported so db/contracts.ts
  * can pre-assign claims to this auditor in its own seed data. */
@@ -99,8 +99,10 @@ export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] 
         auditor.claimedContractIds = auditor.claimedContractIds.filter((id) => id !== contract.id);
     }
   }
+  // As the API does: auditors only see contracts whose analysis is done.
   const open = db.contracts.filter(
-    (c) => c.status === "Open" && new Date(c.deadline).getTime() > Date.now(),
+    (c) =>
+      c.status === "Open" && new Date(c.deadline).getTime() > Date.now() && isAnalysisDone(c.id),
   );
   const items: QueueItem[] = open.map((c) => {
     const bounty = db.bounties.find((b) => b.contractId === c.id);
@@ -120,6 +122,7 @@ export function claimContract(contractId: string, auditorId: string): Contract {
   listQueue();
   const contract = findContractById(contractId);
   if (!contract) throw new MockApiError(404, `Contract ${contractId} not found`);
+  if (!isAnalysisDone(contractId)) throw new MockApiError(409, "analysis not finished");
   if (contract.status !== "Open") {
     throw new MockApiError(409, `Contract ${contractId} is not open to claim`);
   }

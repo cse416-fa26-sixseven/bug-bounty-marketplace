@@ -120,6 +120,13 @@ function startAnalysis(contractId: string, filename: string): void {
   });
 }
 
+/** Finishes the contract's analysis now, with no findings (a clean report).
+ * For tests and fixtures that need a contract auditors can claim. */
+export function completeAnalysisClean(contractId: string): void {
+  cancelScheduled(`analysis:${contractId}`);
+  analysisRuns.delete(contractId);
+}
+
 /** Mirrors GET /api/contracts/:id/analysis. */
 export function analysisStatusFor(contract: Contract): AnalysisStatus {
   const run = analysisRuns.get(contract.id);

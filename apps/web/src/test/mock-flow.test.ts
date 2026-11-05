@@ -90,7 +90,15 @@ describe("seeded failing PoC", () => {
 });
 
 describe("auditor queue + claim", () => {
-  it("lists the open contract and lets the seed auditor claim it", async () => {
+  it("lists no contract while its analysis runs, and refuses to claim it", async () => {
+    expect(await auditorApi.listQueue()).toHaveLength(0);
+    await expect(
+      auditorApi.claimContract({ contractId: "contract_1", auditorId: SEED_AUDITOR_ID }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("lists the open contract once analysed and lets the seed auditor claim it", async () => {
+    await vi.advanceTimersByTimeAsync(3000);
     const queue = await auditorApi.listQueue();
     expect(queue).toHaveLength(1);
     expect(queue[0]?.status).toBe("Open");
@@ -147,21 +155,38 @@ describe("developer notes on findings", () => {
   });
 });
 
-describe("claim during analysis", () => {
-  it("assigns later findings to the auditor who claimed before analysis completed", async () => {
+describe("claim and analysis", () => {
+  it("refuses a claim during analysis, then gives the claimant every finding", async () => {
     const contract = await developerApi.submitContract({
       file: new File(["contract Demo {}"], "Demo.sol"),
       developerAddress: SEED_DEVELOPER_ADDRESS,
       bountyAmount: "1000000000000000000",
       deadline: new Date(Date.now() + 86_400_000).toISOString(),
     });
-    await auditorApi.claimContract({ contractId: contract.id, auditorId: SEED_AUDITOR_ID });
+    await expect(
+      auditorApi.claimContract({ contractId: contract.id, auditorId: SEED_AUDITOR_ID }),
+    ).rejects.toMatchObject({ status: 409 });
     await vi.advanceTimersByTimeAsync(3000);
+    await auditorApi.claimContract({ contractId: contract.id, auditorId: SEED_AUDITOR_ID });
     const findings = await developerApi.listFindings(contract.id);
     expect(findings).toHaveLength(2);
     expect(
       findings.every((f) => f.claimedByAuditorId === SEED_AUDITOR_ID && !!f.claimExpiresAt),
     ).toBe(true);
+  });
+
+  it("never lists a contract whose analysis failed", async () => {
+    const contract = await developerApi.submitContract({
+      file: new File(["contract Demo {"], "BrokenDemo.sol"),
+      developerAddress: SEED_DEVELOPER_ADDRESS,
+      bountyAmount: "1000000000000000000",
+      deadline: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await auditorApi.listQueue()).map((c) => c.id)).not.toContain(contract.id);
+    await expect(
+      auditorApi.claimContract({ contractId: contract.id, auditorId: SEED_AUDITOR_ID }),
+    ).rejects.toMatchObject({ status: 409 });
   });
   it("completes analysis for the seeded open contract", async () => {
     await vi.advanceTimersByTimeAsync(3000);

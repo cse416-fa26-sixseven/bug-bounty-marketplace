@@ -6,7 +6,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { auditorApi } from "@/lib/api";
 import { ethToWei } from "@/lib/money";
-import { cancelAllScheduled, cancelScheduled, createContract, db, resetMockDb } from "@/mocks/db";
+import {
+  cancelAllScheduled,
+  completeAnalysisClean,
+  createContract,
+  db,
+  resetMockDb,
+} from "@/mocks/db";
 import { QueueList } from "../../_components/QueueList";
 import ClaimedContractPage from "./page";
 
@@ -33,7 +39,7 @@ function contractWithNoFindings(): string {
     currency: "ETH",
     deadline: new Date(Date.now() + 86_400_000).toISOString(),
   });
-  cancelScheduled(`analysis:${contract.id}`);
+  completeAnalysisClean(contract.id);
   return contract.id;
 }
 
