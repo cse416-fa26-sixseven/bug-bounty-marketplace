@@ -487,4 +487,34 @@ describe("startEventIndexer", () => {
     expect(handle).toBeNull();
     expect(createClient).not.toHaveBeenCalled();
   });
+
+  it("stops reading at head minus the configured confirmations", async () => {
+    const chain = fakeChain(10n, []);
+    const config = loadChainConfig({
+      CHAIN_RPC_URL: "http://127.0.0.1:8545",
+      CHAIN_ID: String(CHAIN_ID),
+      OPERATOR_PRIVATE_KEY: `0x${"11".repeat(32)}`,
+      AUDITOR_STAKING_ADDRESS: UNWATCHED,
+      BOUNTY_ESCROW_ADDRESS: ESCROW,
+      DISPUTE_RESOLUTION_ADDRESS: DISPUTES,
+      INDEXER_CONFIRMATIONS: "3",
+    });
+
+    const handle = startEventIndexer({
+      config,
+      repository: new MemoryIndexerRepository(),
+      findingStatus: new RecordingFindingStatus(),
+      listFindingIds: async () => [],
+      lock: new MemoryIndexerLock(),
+      startBlock: 5n,
+      confirmations: config?.indexerConfirmations,
+      createClient: () => chain.client,
+      onError: (err) => {
+        throw err;
+      },
+    });
+    await handle?.stop();
+
+    expect(chain.getLogs.mock.calls.map(([args]) => [args.fromBlock, args.toBlock])).toEqual([[5n, 7n]]);
+  });
 });
