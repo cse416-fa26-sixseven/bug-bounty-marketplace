@@ -110,7 +110,7 @@ spec:
             # On-chain mode (ADR 0005). The deployments JSON (addresses,
             # arbiter, challenge window, deployBlock) is read as a file.
             - name: CHAIN_ID
-              value: {{ $chain.chainId | quote }}
+              value: {{ $chain.chainId | int | quote }}
             - name: CHAIN_DEPLOYMENTS_FILE
               value: {{ printf "%s/%s" $chain.mountPath $chain.objects.deployment | quote }}
             {{- with $chain.publicRpcUrl }}
@@ -120,9 +120,9 @@ spec:
             - name: CLAIM_LOCK_ENABLED
               value: {{ $chain.claimLockEnabled | toString | quote }}
             - name: INDEXER_BATCH_SIZE
-              value: {{ $chain.indexer.batchSize | quote }}
+              value: {{ $chain.indexer.batchSize | int | quote }}
             - name: INDEXER_CONFIRMATIONS
-              value: {{ $chain.indexer.confirmations | quote }}
+              value: {{ $chain.indexer.confirmations | int | quote }}
             - name: CHAIN_RPC_URL
               valueFrom:
                 secretKeyRef:
