@@ -2,6 +2,7 @@
 {{- $name := include "bbm.componentName" (dict "root" $ "component" "api") -}}
 {{- $csi := include "bbm.csi" . -}}
 {{- $sources := include "bbm.sourcesClaim" . -}}
+{{- $chain := .Values.chain -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -105,6 +106,39 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name }}
                   key: database-url
+            {{- if $chain.enabled }}
+            # On-chain mode (ADR 0004). The deployments JSON (addresses,
+            # arbiter, challenge window, deployBlock) is read as a file.
+            - name: CHAIN_ID
+              value: {{ $chain.chainId | quote }}
+            - name: CHAIN_DEPLOYMENTS_FILE
+              value: {{ printf "%s/%s" $chain.mountPath $chain.objects.deployment | quote }}
+            {{- with $chain.publicRpcUrl }}
+            - name: PUBLIC_CHAIN_RPC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CLAIM_LOCK_ENABLED
+              value: {{ $chain.claimLockEnabled | toString | quote }}
+            - name: INDEXER_BATCH_SIZE
+              value: {{ $chain.indexer.batchSize | quote }}
+            - name: INDEXER_CONFIRMATIONS
+              value: {{ $chain.indexer.confirmations | quote }}
+            - name: CHAIN_RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $chain.secretName }}
+                  key: chain-rpc-url
+            - name: OPERATOR_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $chain.secretName }}
+                  key: operator-private-key
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $chain.secretName }}
+                  key: session-secret
+            {{- end }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -141,6 +175,11 @@ spec:
               mountPath: {{ .Values.secrets.csi.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if $chain.enabled }}
+            - name: chain-secrets
+              mountPath: {{ $chain.mountPath }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -154,6 +193,24 @@ spec:
           {{- end }}
         {{- if $csi }}
         {{- include "bbm.csiVolume" (dict "spc" .Values.secrets.csi.secretProviderClassName) | nindent 8 }}
+        {{- end }}
+        {{- if $chain.enabled }}
+        {{- /* CSI: the mount also makes the driver sync chain.secretName. Otherwise
+        the pre-created Secret's deployments JSON is mounted as the file. */}}
+        - name: chain-secrets
+          {{- if $csi }}
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Values.secrets.csi.secretProviderClassName }}-chain
+          {{- else }}
+          secret:
+            secretName: {{ $chain.secretName }}
+            items:
+              - key: chain-deployment
+                path: {{ $chain.objects.deployment }}
+          {{- end }}
         {{- end }}
 ---
 apiVersion: v1

@@ -104,7 +104,7 @@ module "keyvault" {
   tags = local.tags
 }
 
-# Chain vault (ADR 0003): the operator key and the rest of the API's chain
+# Chain vault (ADR 0004): the operator key and the rest of the API's chain
 # settings. Separate from the env vault because the worker identity reads that
 # one and sits next to the PoC sandbox; only the api identity gets this one.
 # Terraform generates session-secret (the API's sign-in cookie key). Set the

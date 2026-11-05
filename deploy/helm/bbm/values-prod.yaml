@@ -89,3 +89,12 @@ sandbox:
   # PoC Jobs on the Kata sandbox pool (terraform sandbox_pool_enabled), in
   # namespace bbm-sandbox (<release namespace>-sandbox).
   enabled: true
+
+# On-chain mode on Sepolia (ADR 0004): this env's own contracts and operator
+# key. SecretProviderClass bbm-kv-chain syncs the chain vault
+# (azure.chainKeyVaultName, from values-infra.yaml). Off until the chain vault
+# holds operator-private-key, chain-rpc-url and chain-deployment (Contracts
+# deploy writes it); with it on and those missing, the api refuses to start.
+# Turn on with enabled: true (docs/devops/azure-bootstrap.md §12).
+chain:
+  enabled: false

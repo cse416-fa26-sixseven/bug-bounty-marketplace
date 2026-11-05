@@ -783,7 +783,7 @@ for e in "${ENVS[@]}"; do
     tf_plan_apply data "$e" || die "data/$e apply failed"
   fi
   ensure_placeholder "$(tf_out data "$e" key_vault_name)" llm-api-key
-  # Chain vault (ADR 0003): chain-deployment is written by contracts-deploy.yml.
+  # Chain vault (ADR 0004): chain-deployment is written by contracts-deploy.yml.
   chain_kv=$(tf_out data "$e" chain_key_vault_name)
   for secret in operator-private-key chain-rpc-url chain-deployment; do
     ensure_placeholder "$chain_kv" "$secret"

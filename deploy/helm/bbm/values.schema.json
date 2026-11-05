@@ -104,12 +104,96 @@
         },
         "queueName": {
           "type": "string"
+        },
+        "chainKeyVaultName": {
+          "type": "string"
         }
       },
       "required": [
         "workloadIdentity"
       ],
       "additionalProperties": true
+    },
+    "chain": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "chainId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "publicRpcUrl": {
+          "type": "string"
+        },
+        "claimLockEnabled": {
+          "type": "boolean"
+        },
+        "indexer": {
+          "type": "object",
+          "properties": {
+            "batchSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "confirmations": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "batchSize",
+            "confirmations"
+          ],
+          "additionalProperties": false
+        },
+        "secretName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mountPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objects": {
+          "type": "object",
+          "properties": {
+            "operatorPrivateKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "rpcUrl": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionSecret": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deployment": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "operatorPrivateKey",
+            "rpcUrl",
+            "sessionSecret",
+            "deployment"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "enabled",
+        "chainId",
+        "indexer",
+        "secretName",
+        "mountPath",
+        "objects"
+      ],
+      "additionalProperties": false
     },
     "config": {
       "type": "object",

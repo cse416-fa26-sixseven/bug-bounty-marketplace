@@ -54,8 +54,9 @@ Expected keys (see `docs/adr/0001-azure-environment-topology.md`):
 
 ```yaml
 global:   { image: { registry: <acr>.azurecr.io } }
-azure:    { tenantId, keyVaultName, apiClientId, workerClientId, migrationsClientId,
-            sandboxClientId, storageAccountName, storageBlobEndpoint, queueName }
+azure:    { tenantId, keyVaultName, chainKeyVaultName, apiClientId, workerClientId,
+            migrationsClientId, sandboxClientId, storageAccountName, storageBlobEndpoint,
+            queueName }                                             # chainKeyVaultName: ADR 0004
 ingress:  { host, publicIpName, publicIpResourceGroup, trustedProxyCidr }
 networkPolicy: { postgresCidr }
 dns:      { zone, envZones, internalZone }                          # ADR 0002, bbm-platform only
@@ -114,6 +115,24 @@ ServiceAccount of the pods that mount it:
 | `bbm-kv` | `apiClientId` | `bbm-secrets` | api |
 | `bbm-kv-migrations` (hook) | `migrationsClientId` | `bbm-secrets-migrations` | migrations Job |
 | `bbm-kv-analysis` | `workerClientId` | `bbm-secrets-analysis` | analysis (only when enabled) |
+| `bbm-kv-chain` | `apiClientId` | `bbm-chain-secrets` | api (only when `chain.enabled`) |
+
+## On-chain mode (`chain.enabled`)
+
+ADR 0004. Off everywhere until the env's chain vault is filled (staging and prod flip it on in their values file; the test env has no chain). The
+api reads `operator-private-key`, `chain-rpc-url` and `session-secret` from
+Secret `chain.secretName`, and the deployments JSON (addresses, arbiter,
+challenge window, `deployBlock`) as the file
+`<chain.mountPath>/chain-deployment` (`CHAIN_DEPLOYMENTS_FILE`). With
+`secrets.provider=csi` that comes from the env's chain vault
+(`azure.chainKeyVaultName`, readable by the api identity only) through
+`bbm-kv-chain`; otherwise the Secret must already exist with those four keys.
+Other settings: `chain.chainId`, `chain.publicRpcUrl` (empty = not
+published), `chain.claimLockEnabled`, `chain.indexer.{batchSize,confirmations}`.
+
+The api refuses to start while `chain-deployment` is still the `up.sh`
+placeholder, so run **Contracts deploy** for the env first
+(docs/devops/azure-bootstrap.md §12).
 
 ## Analysis and the PoC sandbox
 

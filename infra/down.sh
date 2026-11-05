@@ -182,7 +182,7 @@ step 3 "Environments: ${ENVS[*]}"
 PURGE_VAULTS=()
 env_short() { case "$1" in test) echo tst ;; staging) echo stg ;; prod) echo prd ;; global) echo shared ;; esac; }
 note_vault() { # note_vault <stack> <env> [chain]
-  # chain: the data stack's api-only chain vault (ADR 0003), kv-bbm-<short>c-<suffix>.
+  # chain: the data stack's api-only chain vault (ADR 0004), kv-bbm-<short>c-<suffix>.
   local s=$1 e=$2 kind=${3:-} out=key_vault_name infix vars kv="" sfx
   infix=$(env_short "$e")
   if [[ "$s" == global ]]; then

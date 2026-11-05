@@ -222,7 +222,7 @@ run "plan_names_and_settings" {
     error_message = "env KV secrets wrong"
   }
 
-  # ADR 0003: the operator key lives in a vault only the api identity reads;
+  # ADR 0004: the operator key lives in a vault only the api identity reads;
   # Terraform generates only session-secret there.
   assert {
     condition = (
