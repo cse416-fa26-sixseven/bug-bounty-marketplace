@@ -1,9 +1,9 @@
 apiVersion: v2
 name: bbm
 description: >-
-  Bug-bounty marketplace (web, api, optional analysis worker and sandbox
-  runner, throwaway in-cluster Postgres for test namespaces) for the test,
-  staging and prod AKS clusters.
+  Bug-bounty marketplace (web, api, analysis worker with its Kata-isolated
+  PoC sandbox namespace, throwaway in-cluster Postgres for test namespaces)
+  for the test, staging and prod AKS clusters.
 type: application
 version: 0.2.0
 appVersion: "0.0.0"

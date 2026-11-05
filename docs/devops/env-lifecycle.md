@@ -1,13 +1,16 @@
 # Environment lifecycle: turning environments on and off
 
 There are three AKS environments, each on its own cluster, all in one region (ADR 0003 §4), on
-x86 `Standard_D4as_v7` nodes (4 vCPU / 16 GiB) that autoscale from 1 node to `system_max_count`:
+x86 `Standard_D4as_v7` nodes (4 vCPU / 16 GiB) that autoscale from 1 node to `system_max_count`,
+plus a Kata `sandbox` pool of 0–1 `Standard_D2as_v7` nodes that exists only while an auditor's
+PoC runs (ADR 0004; `az aks stop` stops it like any other pool, and it is already at 0 nodes
+when idle, so nothing below changes for it):
 
-| Env       | Nodes (min–max)              | Cluster                 | Runs                                                                 |
-| --------- | ---------------------------- | ----------------------- | -------------------------------------------------------------------- |
-| `test`    | 1–2 × `Standard_D4as_v7`     | `aks-bbm-test-<abbr>`   | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
-| `staging` | 1–2 × `Standard_D4as_v7`     | `aks-bbm-staging-<abbr>` | one release in namespace `bbm`                                      |
-| `prod`    | 1–3 × `Standard_D4as_v7`     | `aks-bbm-prod-<abbr>`   | one release in namespace `bbm`                                       |
+| Env       | Nodes (min–max)                                     | Cluster                  | Runs                                                                 |
+| --------- | --------------------------------------------------- | ------------------------ | -------------------------------------------------------------------- |
+| `test`    | 1–2 × `Standard_D4as_v7` + 0–1 × `Standard_D2as_v7` | `aks-bbm-test-<abbr>`    | CI-run and PR-preview namespaces (see [The test env](#the-test-env)) |
+| `staging` | 1–2 × `Standard_D4as_v7` + 0–1 × `Standard_D2as_v7` | `aks-bbm-staging-<abbr>` | one release in namespace `bbm` (+ `bbm-sandbox` for PoC Jobs)        |
+| `prod`    | 1–3 × `Standard_D4as_v7` + 0–1 × `Standard_D2as_v7` | `aks-bbm-prod-<abbr>`    | one release in namespace `bbm` (+ `bbm-sandbox` for PoC Jobs)        |
 
 Below, `<abbr>` is the region's code (map in `modules/naming`).
 `infra/terraform/scripts/env-region.sh <env>` prints the env's region and its `DATA_RG`,
@@ -74,11 +77,11 @@ every action. On `test` every Postgres step is a no-op: it has no Postgres serve
 
 What each state still bills (see [cost.md](cost.md) for estimates):
 
-| state     | still billed                                                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `running` | the nodes (1 or more D4as_v7 per env), Postgres B1ms compute (not test), prod's Standard-tier control plane, plus everything below |
-| `paused`  | the Standard load balancer and its frontend IP, the static public IP, Postgres storage, managed disks, Key Vault, storage, logs             |
-| `down`    | the static public IP, Postgres storage, Key Vault, storage, logs                                                                            |
+| state     | still billed                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running` | the nodes (1 or more D4as_v7 per env, plus a D2as_v7 sandbox node only while a PoC runs), Postgres B1ms compute (not test), prod's Standard-tier control plane, plus everything below |
+| `paused`  | the Standard load balancer and its frontend IP, the static public IP, Postgres storage, managed disks, Key Vault, storage, logs                                                       |
+| `down`    | the static public IP, Postgres storage, Key Vault, storage, logs                                                                                                                      |
 
 The Standard load balancer bills at its full hourly rate while the cluster is stopped, so `paused`
 is far from free.
@@ -107,7 +110,11 @@ overwrite the `bbm/*` images staging and prod deploy. Each namespace gets:
 - labels `bbm.io/ephemeral=true` and `bbm.io/kind=test|preview`, and the annotation
   `bbm.io/expires-on=<RFC3339>`;
 - release `bbm` with `values-test.yaml`, in-cluster Postgres
-  (`<acr>/mirror/postgres:16-alpine`, `emptyDir`, a random password per namespace);
+  (`<acr>/mirror/postgres:16-alpine`, `emptyDir`, a random password per namespace). CI runs
+  also get the analysis worker, the PoC sandbox namespace `<ns>-sandbox` and an Azure Files
+  sources share (ADR 0004) for the pipeline tests; previews turn those off
+  (`analysis.enabled=false`, `sandbox.enabled=false`, no claim) and only run the smoke suite.
+  Teardown and the janitor delete `<ns>-sandbox` together with `<ns>`;
 - the env's wildcard certificate, served by Gateway `bbm` (gatewayClass `approuting-istio`) in
   `bbm-platform`, so no per-namespace certificate is issued;
 - the namespace label `bbm.io/gateway-access=true`, without which the Gateway does not accept the
@@ -282,7 +289,7 @@ infra/terraform/scripts/env-power.sh staging resume
 | symptom                                                       | cause / fix                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Deploy run is green but says "skipped: env is paused/down"    | Expected for manual deploys. Run `resume` (or `up`) and deploy again, or set `resume_if_paused`. CD resumes on its own. `up` redeploys automatically.                                                                                            |
-| `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr> --query provisioningState`.                                                                                                   |
+| `refusing to stop ...: provisioningState is 'Upgrading'`      | Maintenance or another operation is running. Wait: `az aks show -g rg-bbm-<env>-compute-<abbr> -n aks-bbm-<env>-<abbr> --query provisioningState`.                                                                                               |
 | `cluster ... not found: <env> is down`                        | The compute stack was destroyed. Use `up`, not `resume`.                                                                                                                                                                                         |
 | Resume finished but `/health` never answers                   | Pods are still starting or crash-looping. `kubectl -n bbm get pods`, `kubectl -n bbm describe pod ...`. Check Postgres is `Ready`. A failing Key Vault CSI mount usually means a broken federated credential: run `up`, which reapplies compute. |
 | `Postgres ... is 'Updating'; cannot stop it now`              | Azure maintenance on the server. Retry later.                                                                                                                                                                                                    |

@@ -13,11 +13,13 @@ name: Build and push images
 # Multi-platform images are built natively, one job per platform (amd64 on
 # ubuntu-24.04, arm64 on ubuntu-24.04-arm; no QEMU), pushed by digest, and
 # joined into one tag by a merge job per image. api and web are amd64+arm64
-# (the test cluster is arm64, ADR 0002 §8); analysis and contracts amd64.
+# (the test cluster was arm64, ADR 0002 §8); analysis, sandbox (the Kata PoC
+# runner image, ADR 0004) and contracts amd64.
 #
 # Layer cache: amd64 uses the same GHA cache scopes as ci.yml's containers
 # job (api/web/analysis/contracts), so a main push reuses the layers CI
-# just built; arm64 uses <scope>-arm64. A registry cache
+# just built; sandbox has its own scope (ci.yml's sandbox job uses a plain
+# docker build, no shared cache); arm64 uses <scope>-arm64. A registry cache
 # (<prefix>/<svc>:buildcache[-mocked][-arm64]) survives GHA cache eviction.
 # Images carry max provenance and an SBOM.
 #
@@ -33,10 +35,10 @@ on:
         required: true
         type: string
       services:
-        description: JSON array of services to build (subset of api, web, analysis, contracts).
+        description: JSON array of services to build (subset of api, web, analysis, sandbox, contracts).
         required: false
         type: string
-        default: '["api","web","analysis","contracts"]'
+        default: '["api","web","analysis","sandbox","contracts"]'
       web-mocked:
         description: Also build web with NEXT_PUBLIC_API_MOCKING=enabled, tagged <tag>-mocked.
         required: false
@@ -109,9 +111,14 @@ jobs:
           images=$(jq -cn --argjson services "$SERVICES" --arg tag "$TAG" --arg mocked "$WEB_MOCKED" '
             def spec:
               # api and web also run on the arm64 test cluster (ADR 0002 §8).
+              # sandbox: the PoC runner image that the analysis worker launches as
+              # Kata Jobs (ADR 0004); its context is workers/ for the shared
+              # solc list, like the sandbox job in ci.yml. amd64 only, no mocked
+              # variant.
               { api:       { context: ".",                file: "apps/api/Dockerfile",            platforms: ["linux/amd64", "linux/arm64"] },
                 web:       { context: ".",                file: "apps/web/Dockerfile",            platforms: ["linux/amd64", "linux/arm64"] },
                 analysis:  { context: "workers/analysis", file: "workers/analysis/Dockerfile",    platforms: ["linux/amd64"] },
+                sandbox:   { context: "workers",          file: "workers/sandbox/Dockerfile",     platforms: ["linux/amd64"] },
                 contracts: { context: "contracts",        file: "contracts/Dockerfile",           platforms: ["linux/amd64"] } };
             ($services | if type == "array" and length > 0 then . else error("services must be a non-empty JSON array") end) as $s
             | ($s - (spec | keys)) as $unknown

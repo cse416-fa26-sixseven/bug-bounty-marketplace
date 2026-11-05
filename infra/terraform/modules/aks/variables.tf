@@ -172,10 +172,10 @@ variable "apps_pool" {
 }
 
 variable "sandbox_pool" {
-  description = "Optional Kata VM-isolated user node pool `sandbox` (label bbm.io/pool=sandbox, taint bbm.io/sandbox=true:NoSchedule). VM size must support nested virtualisation (Dsv5)."
+  description = "Optional Kata VM-isolated user node pool `sandbox` (label bbm.io/pool=sandbox, taint bbm.io/sandbox=true:NoSchedule). The VM size must be Gen2 with nested virtualisation, e.g. Standard_D2as_v7 (Dasv7 family). Autoscales from min_count (0 when idle) to max_count."
   type = object({
     enabled         = optional(bool, false)
-    vm_size         = optional(string, "Standard_D2s_v5")
+    vm_size         = optional(string, "Standard_D2as_v7")
     min_count       = optional(number, 0)
     max_count       = optional(number, 1)
     os_disk_size_gb = optional(number, 64)

@@ -91,15 +91,18 @@ jobs:
               - 'apps/api/src/db/migrations/**'
               - '.github/workflows/ci.yml'
 
-            # PoC sandbox image and the worker code that drives it.
+            # PoC sandbox image and the worker code that drives it (the
+            # Docker backend for Compose and the Kubernetes backend for AKS).
             sandbox:
               - 'workers/sandbox/**'
               - 'workers/analysis/src/analysis/solc-versions.txt'
               - 'workers/analysis/src/analysis/sandbox.py'
+              - 'workers/analysis/src/analysis/sandbox_k8s.py'
               - 'workers/analysis/src/analysis/sandbox_job.py'
               - 'workers/analysis/src/analysis/paths.py'
               - 'workers/analysis/src/analysis/config.py'
               - 'workers/analysis/tests/test_sandbox.py'
+              - 'workers/analysis/tests/test_sandbox_k8s.py'
               - 'workers/analysis/tests/fixtures/**'
               - 'workers/analysis/pyproject.toml'
               - 'workers/analysis/uv.lock'
@@ -750,10 +753,14 @@ jobs:
           helm template bbm "$CHART" -n run-1-1 "${args[@]}" |
             kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default \
               -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
-          # PR previews pull from bbm-preview/* (the preview identity cannot push bbm/*).
+          # PR previews pull from bbm-preview/* (the preview identity cannot push bbm/*)
+          # and run no analysis / sandbox / shared sources volume (same --set as
+          # _ephemeral-env.yml for kind=preview); CI runs (run-1-1 above) keep them on.
           preview=$(helm template bbm "$CHART" -n pr-1 "${args[@]}" \
             --set ingress.host=pr-1.preview.bbm.example.com \
-            --set api.image.repository=bbm-preview/api --set web.image.repository=bbm-preview/web)
+            --set api.image.repository=bbm-preview/api --set web.image.repository=bbm-preview/web \
+            --set analysis.enabled=false --set sandbox.enabled=false \
+            --set api.sourceStorage.persistentVolumeClaim.enabled=false)
           for svc in api web; do
             grep -q "image: \"\?acrbbm[a-z0-9]*\.azurecr\.io/bbm-preview/$svc:" <<<"$preview" ||
               { echo "::error::preview render does not use bbm-preview/$svc"; exit 1; }

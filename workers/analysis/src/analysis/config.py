@@ -10,6 +10,10 @@ from pathlib import Path
 # solc-versions.txt (shipped inside this package) is the single list of solc
 # versions the worker and the sandbox image support.
 _SOLC_VERSIONS_FILE = Path(__file__).resolve().parent / "solc-versions.txt"
+# Where the Helm chart mounts the sandbox Job template (ConfigMap
+# bbm-sandbox-job-template, key job.yaml).
+_SANDBOX_JOB_TEMPLATE = Path("/etc/bbm/sandbox/job.yaml")
+SANDBOX_BACKENDS = ("docker", "kubernetes")
 
 
 def load_supported_solc(path: Path | None = None) -> tuple[str, ...]:
@@ -40,6 +44,11 @@ class Settings:
     sandbox_image: str
     challenge_window_s: int
     sandbox_enabled: bool
+    #: `docker` runs PoCs in throwaway containers on the Docker socket
+    #: (Compose); `kubernetes` runs them as Jobs in `sandbox_namespace` (AKS).
+    sandbox_backend: str
+    sandbox_namespace: str | None
+    sandbox_job_template: Path
     #: With a chain, the API applies sandbox verdicts on-chain and moves the
     #: finding; the worker only records the PoC's result.
     chain_enabled: bool
@@ -64,6 +73,9 @@ class Settings:
             challenge_window_s=int(env.get("CHALLENGE_WINDOW_SECONDS", "86400")),
             sandbox_enabled=env.get("SANDBOX_ENABLED", "").strip().lower()
             in {"1", "true", "yes", "on"},
+            sandbox_backend=(_opt(env, "SANDBOX_BACKEND") or "docker").lower(),
+            sandbox_namespace=_opt(env, "SANDBOX_NAMESPACE"),
+            sandbox_job_template=Path(_opt(env, "SANDBOX_JOB_TEMPLATE") or _SANDBOX_JOB_TEMPLATE),
             chain_enabled=env.get("CHAIN_ENABLED", "").strip().lower()
             in {"1", "true", "yes", "on"},
             supported_solc=load_supported_solc(),
@@ -76,10 +88,25 @@ class Settings:
 
     @property
     def job_kinds(self) -> tuple[str, ...]:
-        """Job kinds this worker claims. Sandbox jobs need Docker access, so
-        they are only taken when SANDBOX_ENABLED is set (otherwise they stay
-        queued for a worker that has it)."""
+        """Job kinds this worker claims. Sandbox jobs need a sandbox backend
+        (the Docker socket, or Kubernetes Job access), so they are only taken
+        when SANDBOX_ENABLED is set (otherwise they stay queued for a worker
+        that has it)."""
         return ("analysis", "sandbox") if self.sandbox_enabled else ("analysis",)
+
+    @property
+    def sandbox_config_error(self) -> str | None:
+        """Why sandbox jobs cannot run with these settings, or None. Logged at
+        start-up; every sandbox job then fails as a (retryable) infra error
+        rather than the worker refusing to start, so analysis jobs still run."""
+        if self.sandbox_backend not in SANDBOX_BACKENDS:
+            return (
+                f"SANDBOX_BACKEND={self.sandbox_backend!r} is not one of "
+                f"{', '.join(SANDBOX_BACKENDS)}"
+            )
+        if self.sandbox_backend == "kubernetes" and not self.sandbox_namespace:
+            return "SANDBOX_BACKEND=kubernetes needs SANDBOX_NAMESPACE"
+        return None
 
     @property
     def llm_configured(self) -> bool:

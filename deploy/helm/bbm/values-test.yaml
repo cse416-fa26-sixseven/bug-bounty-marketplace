@@ -18,20 +18,26 @@
 #     --wait --atomic --timeout 15m
 #
 # PR previews also set --set api.image.repository=bbm-preview/api
-# --set web.image.repository=bbm-preview/web (the preview identity can only
-# push bbm-preview/*) and host pr-<n>.preview.<zone>.
+# --set web.image.repository=bbm-preview/web
+# --set analysis.image.repository=bbm-preview/analysis
+# --set analysis.sandbox.image.repository=bbm-preview/sandbox (the preview
+# identity can only push bbm-preview/*) and host pr-<n>.preview.<zone>.
 #
 # Optional: --set web.image.tag=<tag> for the mocked web image,
 # --set-string secrets.plain.llmApiKey=... .
 #
 # Everything lives in the namespace: a throwaway in-cluster Postgres
 # (emptyDir), plain secrets (clear text in the Helm release, fine for a
-# disposable namespace), migrations on api boot. TLS terminates at the
-# bbm-platform Gateway with its wildcard (test.<zone> / preview.<zone>), so
-# no per-namespace certificate is issued.
+# disposable namespace), migrations on api boot, an Azure Files share for
+# uploads (dynamically provisioned, gone with the namespace) and the
+# analysis worker with its PoC sandbox in <namespace>-sandbox (deleted with
+# the release). TLS terminates at the bbm-platform Gateway with its wildcard
+# (test.<zone> / preview.<zone>), so no per-namespace certificate is issued.
 
 global:
-  # The test cluster has a single (system) pool.
+  # App pods run on the test cluster's system pool (no apps pool). Its only
+  # other pool is the Kata sandbox pool, reached solely by the PoC Jobs
+  # through sandbox.jobTemplate's nodeSelector and toleration.
   nodeSelector: {}
 
 config:
@@ -91,6 +97,10 @@ api:
     limits:
       cpu: 500m
       memory: 384Mi
+  sourceStorage:
+    # Shared with the analysis worker (ReadWriteMany Azure Files share).
+    persistentVolumeClaim:
+      enabled: true
 
 migrations:
   enabled: false
@@ -108,6 +118,9 @@ networkPolicy:
   restrictEgress: true
 
 analysis:
-  enabled: false
+  # Slither + LLM worker and PoC runner (T18 pipeline tests run here).
+  enabled: true
+  topologySpread: false
 sandbox:
-  enabled: false
+  # Kubernetes Jobs on the Kata sandbox pool, in namespace <namespace>-sandbox.
+  enabled: true

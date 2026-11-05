@@ -7,8 +7,9 @@ import pytest
 
 from analysis.config import Settings
 from analysis.jobs import claim_next
-from analysis.sandbox import SandboxResult
-from analysis.sandbox_job import run_sandbox_job
+from analysis.sandbox import SandboxResult, run_poc
+from analysis.sandbox_job import pick_runner, run_sandbox_job
+from analysis.sandbox_k8s import run_poc_k8s
 
 from .conftest import insert_contract, insert_finding, insert_job
 
@@ -221,3 +222,30 @@ def test_chain_enabled_records_the_result_only(pg_conn, tmp_path, status):
     assert finding["status_history"] == before["status_history"]
     assert finding["challenge_window_expires_at"] is None
     assert _row(pg_conn, "jobs", job.id)["status"] == "done"
+
+
+def test_runner_is_picked_from_the_backend_setting():
+    assert pick_runner(Settings.from_env({})) is run_poc
+    assert pick_runner(Settings.from_env({"SANDBOX_BACKEND": "docker"})) is run_poc
+    k8s = Settings.from_env({"SANDBOX_BACKEND": "kubernetes", "SANDBOX_NAMESPACE": "bbm-sandbox"})
+    assert pick_runner(k8s) is run_poc_k8s
+
+
+def test_misconfigured_sandbox_fails_the_job_as_a_retryable_infra_error(pg_conn, tmp_path):
+    # SANDBOX_BACKEND=kubernetes without a namespace: a deployment bug, not a
+    # bad PoC. The PoC stays Pending and the finding Submitted.
+    settings = Settings.from_env(
+        {"SOURCE_STORAGE_DIR": str(tmp_path), "SANDBOX_BACKEND": "kubernetes"}
+    )
+    finding_id, poc_id = _submitted_poc(pg_conn, tmp_path)
+    job = claim_next(pg_conn, 600, 3)
+    runner = FakeRunner(SandboxResult(status="Passed", log="", infra_error=None))
+
+    outcome = run_sandbox_job(pg_conn, job, settings, runner=runner)
+
+    assert (outcome.ok, outcome.retryable) == (False, True)
+    assert outcome.reason == "SANDBOX_BACKEND=kubernetes needs SANDBOX_NAMESPACE"
+    assert runner.calls == []
+    pg_conn.rollback()
+    assert _row(pg_conn, "findings", finding_id)["status"] == "Submitted"
+    assert _row(pg_conn, "poc_submissions", poc_id)["sandbox_status"] == "Pending"

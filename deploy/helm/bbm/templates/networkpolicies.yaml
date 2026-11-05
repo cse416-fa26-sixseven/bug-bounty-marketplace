@@ -5,14 +5,15 @@ Ingress: default-deny; allow the bbm-platform Gateway's Envoy pods
 (namespace ingress.gateway.namespace, label
 gateway.networking.k8s.io/gateway-name=<ingress.gateway.name>, provisioned
 by the app routing Gateway API control plane) -> web/api, web -> api, helm
-test pod -> web/api, api/migrations -> in-cluster postgres (when
+test pod -> web/api, api/migrations/analysis -> in-cluster postgres (when
 postgres.inCluster.enabled).
 Egress (only when networkPolicy.restrictEgress): default-deny; allow DNS
 for everything, plus per component:
   api        -> Postgres (5432 to postgresCidr and/or the in-cluster postgres
                 pods), HTTPS 443 anywhere (Entra, Storage)
   web        -> api
-  analysis   -> HTTPS 443 anywhere
+  analysis   -> Postgres (jobs table), HTTPS 443 anywhere (LLM endpoint,
+                the Kubernetes API server for sandbox Jobs)
   migrations -> Postgres
   test       -> web, api
 */ -}}
@@ -107,6 +108,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "bbm.selectorLabels" (dict "root" $ "component" "migrations") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "bbm.selectorLabels" (dict "root" $ "component" "analysis") | nindent 14 }}
       ports:
         - port: 5432
           protocol: TCP
@@ -218,6 +222,7 @@ spec:
   policyTypes:
     - Egress
   egress:
+    {{- include "bbm.postgresEgressRules" $ | nindent 4 }}
     - ports:
         - port: 443
           protocol: TCP

@@ -77,9 +77,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------
-  # Build and push all four images as sha-<7>. Later deploys (staging,
-  # prod) promote these same tags, so all services are built even though
-  # the test env does not run analysis/contracts.
+  # Build and push all five images (api, web, analysis, sandbox,
+  # contracts) as sha-<7>. Later deploys (staging, prod) promote these same
+  # tags, so all services are built even though the test env does not run
+  # contracts.
   # ---------------------------------------------------------------------
   build:
     name: Build images
@@ -113,19 +114,26 @@ jobs:
   # ---------------------------------------------------------------------
   # System test tiers against the namespace's https host (web, /api and
   # /health on one host). No Azure access needed. Analysis has no external
-  # ingress (BBM_SKIP_ANALYSIS=1) and there is no chain, so the chain
-  # tests skip on the missing deployments file. Each suite runs even if
-  # an earlier one failed, as long as the env came up healthy.
+  # ingress, so the direct /analyze tests skip (BBM_SKIP_ANALYSIS=1); the
+  # pipeline tier (BBM_PIPELINE=1, T18) drives it through the API instead:
+  # upload -> Flagged, then claim -> PoC on the Kata sandbox pool ->
+  # Verified / Rejected (ADR 0004). There is no chain, so the chain tests
+  # skip on the missing deployments file and the PoC path runs in no-chain
+  # mode. Each suite runs even if an earlier one failed, as long as the env
+  # came up healthy.
   # ---------------------------------------------------------------------
   test:
     name: System tests
     needs: deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The pipeline tier alone can take ~25 min when the sandbox pool scales
+    # up from zero (tests/README.md); the other tiers add about 10.
+    timeout-minutes: 75
     env:
       BBM_API_URL: ${{ needs.deploy.outputs.url }}
       BBM_WEB_URL: ${{ needs.deploy.outputs.url }}
       BBM_SKIP_ANALYSIS: '1'
+      BBM_PIPELINE: '1'
       BBM_WAIT_MS: '60000'
       CI: 'true'
     steps:
@@ -170,9 +178,13 @@ jobs:
           BBM_SMOKE_WRITE: '1'
         run: pnpm --filter @bbm/system-tests run test:smoke
 
+      # Includes the pipeline tier (BBM_PIPELINE=1): Slither warm-up plus two
+      # PoC runs, the first waiting for a sandbox node (0 -> 1), so this step
+      # gets most of the job's time.
       - name: Integration tests
         id: integration
         if: ${{ !cancelled() && steps.health.outcome == 'success' }}
+        timeout-minutes: 45
         run: pnpm --filter @bbm/system-tests run test:integration
 
       # Browser cached per Playwright version; system libs only via apt if

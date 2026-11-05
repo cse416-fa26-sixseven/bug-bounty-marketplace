@@ -361,7 +361,12 @@ jobs:
           kubelogin-version: v0.1.4
 
       # Every image the release will pull (incl. the helm test mirror image)
-      # must exist in ACR before we touch the cluster.
+      # must exist in ACR before we touch the cluster. The registry grep
+      # catches every pod image (api, web, analysis, the helm test image);
+      # the sandbox image the analysis worker launches as Kata Jobs is only
+      # the SANDBOX_IMAGE env value of the analysis Deployment (ADR 0004), so
+      # it is read from the rendered template with the same values layering
+      # and added explicitly.
       - name: Verify images exist in ACR
         if: steps.gate.outputs.go == 'true'
         env:
@@ -369,10 +374,20 @@ jobs:
         run: |
           set -euo pipefail
           registry="$ACR_NAME.azurecr.io"
-          images=$(helm template bbm deploy/helm/bbm -n bbm \
+          rendered=$(helm template bbm deploy/helm/bbm -n bbm \
               -f "deploy/helm/bbm/values-$ENV_NAME.yaml" -f "$RUNNER_TEMP/values-infra.yaml" \
-              --set global.image.tag="$TAG" --set global.requireInfraValues=true |
-            { grep -Eo "$registry/[^\"' ]+" || true; } | sort -u)
+              --set global.image.tag="$TAG" --set global.requireInfraValues=true)
+          sandbox_image=$(helm template bbm deploy/helm/bbm -n bbm \
+              -f "deploy/helm/bbm/values-$ENV_NAME.yaml" -f "$RUNNER_TEMP/values-infra.yaml" \
+              --set global.image.tag="$TAG" --set global.requireInfraValues=true \
+              --show-only templates/analysis.yaml |
+            yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[].env[] | select(.name == "SANDBOX_IMAGE") | .value' |
+            head -n1)
+          [[ -n "$sandbox_image" ]] || { echo "::error::rendered analysis Deployment has no SANDBOX_IMAGE env value"; exit 1; }
+          images=$({
+            grep -Eo "$registry/[^\"' ]+" <<<"$rendered" || true
+            echo "$sandbox_image"
+          } | sort -u)
           [[ -n "$images" ]] || { echo "::error::No $registry images found in the rendered chart"; exit 1; }
           missing=0
           for ref in $images; do

@@ -16,6 +16,9 @@
 #      bbm.io/expires-on annotation (RFC3339, UTC) is in the past. Only names
 #      run-<run_id>-<attempt> and pr-<n> are ever deleted; anything else, or a
 #      namespace without the annotation, is reported and left alone.
+#   4. Each release also owns a PoC sandbox namespace <ns>-sandbox (ADR 0004).
+#      It is deleted together with its expired <ns>, and an orphaned
+#      <ns>-sandbox whose <ns> is already gone is deleted too.
 #
 # Any failed `az` / `kubectl` listing (auth, throttling, ...) fails the run.
 #
@@ -39,6 +42,7 @@ abbr=${BBM_REGION_ABBR:-$("$here/env-region.sh" test --get abbr)} || { echo "jan
 compute_rg="rg-bbm-test-compute-$abbr"
 cluster="aks-bbm-test-$abbr"
 name_re='^(run-[0-9]+-[0-9]+|pr-[0-9]+)$'
+sandbox_re='^(run-[0-9]+-[0-9]+|pr-[0-9]+)-sandbox$'
 
 dry_run=true
 
@@ -106,11 +110,21 @@ out=$(kubectl get namespaces -l bbm.io/ephemeral=true \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.bbm\.io/expires-on}{"\t"}{.status.phase}{"\n"}{end}') ||
   die "listing namespaces failed"
 
+# Every namespace, for the <ns>-sandbox companions (which carry the chart's
+# labels, not the workflow's bbm.io/ephemeral label).
+all_ns=$(kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}') ||
+  die "listing namespaces failed"
+ns_phase() { # ns_phase <name> → phase, empty when missing
+  awk -F '\t' -v n="$1" '$1 == n { print $2 }' <<<"$all_ns"
+}
+
 expired=()
 total=0
 while IFS=$'\t' read -r ns expires phase; do
   [[ -n "$ns" ]] || continue
   total=$((total + 1))
+  # <ns>-sandbox companions carry the chart's labels, not bbm.io/ephemeral,
+  # so they never appear here; they are handled with their <ns> below.
   if [[ ! "$ns" =~ $name_re ]]; then
     log "skip (name is not run-<id>-<attempt> or pr-<n>): $ns"
     continue
@@ -126,10 +140,30 @@ while IFS=$'\t' read -r ns expires phase; do
   if [[ "${expires:0:19}" < "$now" ]]; then
     log "delete namespace: $ns (expired $expires)"
     expired+=("$ns")
+    case "$(ns_phase "$ns-sandbox")" in
+      "") ;;
+      Terminating) log "already terminating: $ns-sandbox" ;;
+      *)
+        log "delete namespace: $ns-sandbox (sandbox of $ns)"
+        expired+=("$ns-sandbox")
+        ;;
+    esac
   else
     log "keep: $ns (expires $expires)"
   fi
 done <<<"$out"
+
+# 4. Orphaned sandbox namespaces: <ns>-sandbox whose <ns> no longer exists
+# (a teardown that deleted <ns> but failed before <ns>-sandbox).
+while IFS=$'\t' read -r ns phase; do
+  [[ -n "$ns" && "$ns" =~ $sandbox_re ]] || continue
+  [[ "$phase" != "Terminating" ]] || continue
+  parent=${ns%-sandbox}
+  if [[ -z "$(ns_phase "$parent")" ]]; then
+    log "delete namespace: $ns (orphan: $parent is gone)"
+    expired+=("$ns")
+  fi
+done <<<"$all_ns"
 
 if [[ ${#expired[@]} -eq 0 ]]; then
   log "nothing expired ($total ephemeral namespaces)"

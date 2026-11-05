@@ -11,9 +11,13 @@ cluster (`values-test.yaml`). It contains:
   Secrets Store CSI driver.
 - An `HTTPRoute` on the platform Gateway `bbm-platform/bbm` and
   NetworkPolicies.
-- Off by default: the `analysis` worker (with KEDA), the `sandbox`
-  namespace stub and a throwaway in-cluster Postgres (`postgres.inCluster`,
-  test namespaces only).
+- The `analysis` worker (Slither + LLM, and the PoC runner) with its
+  per-release `sandbox` namespace where auditors' PoCs run as Kata-isolated
+  Jobs, and a ReadWriteMany `sources` claim shared by api and analysis. Off
+  in `values.yaml`, on in every env file (see "Analysis and the PoC
+  sandbox").
+- Off by default: KEDA scaling of the worker and a throwaway in-cluster
+  Postgres (`postgres.inCluster`, test namespaces only).
 
 The cluster-wide pieces (cert-manager, the Let's Encrypt ClusterIssuers, the
 env wildcard certificate and the Gateway API `Gateway` `bbm` that binds the
@@ -68,14 +72,17 @@ SecretProviderClass or HTTPRoute.
 
 | file | used by | highlights |
 |---|---|---|
-| `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot |
-| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1 |
-| `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1 |
-| `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown |
+| `values.yaml` | everything | plain Secret, no WI/ingress/netpol/HPA, 1 replica, migrations on api boot, analysis/sandbox/sources claim off (emptyDir uploads) |
+| `values-staging.yaml` | `deploy.yml` (staging) | csi + WI, HTTPRoute on the platform Gateway, netpol + egress lockdown, migrations hook, web HPA 1–3, api pinned to 1, analysis + sandbox + sources claim |
+| `values-prod.yaml` | `deploy.yml` (prod) | as staging + `bbm.io/pool=apps` nodeSelector, web HPA 2–5 + PDB, api pinned to 1, analysis + sandbox + sources claim |
+| `values-test.yaml` | CI run / PR preview namespaces on the test cluster | plain secrets, in-cluster Postgres, migrations on api boot, 1 replica each, no HPA/PDB, HTTPRoute on the platform Gateway, netpol + egress lockdown, analysis + sandbox (`<ns>-sandbox`) + sources claim |
 | `values-ci.yaml` | `ct install`, kind smoke tests | plain Secret with dummy `DATABASE_URL`, everything optional off |
 
-> **API replicas.** Uploaded sources are stored on a per-pod `emptyDir`
-> (`SOURCE_STORAGE_DIR=/data/sources`). Because of that, the api must stay at
+> **API replicas.** Uploaded sources are written to
+> `SOURCE_STORAGE_DIR=/data/sources`: a per-pod `emptyDir` by default, or the
+> shared `bbm-sources` claim when `api.sourceStorage.persistentVolumeClaim`
+> is enabled (every env file). The claim is an interim way to hand uploads to
+> the analysis worker, not a multi-replica design, so the api must stay at
 > exactly one replica in every environment until a Blob storage adapter
 > lands. Both env files pin the api HPA to `min 1 / max 1`. While at most one
 > replica can run, the Deployment uses `RollingUpdate` with `maxSurge 0` /
@@ -107,6 +114,96 @@ ServiceAccount of the pods that mount it:
 | `bbm-kv` | `apiClientId` | `bbm-secrets` | api |
 | `bbm-kv-migrations` (hook) | `migrationsClientId` | `bbm-secrets-migrations` | migrations Job |
 | `bbm-kv-analysis` | `workerClientId` | `bbm-secrets-analysis` | analysis (only when enabled) |
+
+## Analysis and the PoC sandbox
+
+`analysis.enabled` deploys the Python worker (`bbm/analysis`, port 8000,
+ServiceAccount `bbm-analysis`). It serves `/analyze` and polls the Postgres
+`jobs` table the api writes, so it gets `DATABASE_URL` from the same Secret
+as the api (with `csi`, `bbm-kv-analysis` syncs `database-url` and
+`llm-api-key` into `bbm-secrets-analysis`), `JOB_LEASE_SECONDS`
+(`analysis.jobLeaseSeconds`, 900) and, when the sources claim is enabled,
+`SOURCE_STORAGE_DIR` with the claim mounted read-only. Its egress policy
+allows Postgres and HTTPS (the LLM endpoint and the Kubernetes API server).
+`LLM_ENDPOINT` / `LLM_MODEL` go in `analysis.extraEnv`; without them the
+worker keeps Slither's own explanations.
+
+### Shared sources claim (`api.sourceStorage.persistentVolumeClaim`)
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` (`true` in every env file) | mount one ReadWriteMany claim in the api (rw) and analysis (ro) pods at `api.sourceStorage.path` instead of the api's per-pod emptyDir |
+| `existingClaim` | `""` | use a pre-created claim; empty renders `PersistentVolumeClaim bbm-sources` |
+| `storageClassName` | `azurefile-csi` | Azure Files (SMB), dynamically provisioned: a test namespace gets its own share and loses it with the namespace |
+| `accessModes` / `size` | `[ReadWriteMany]` / `5Gi` | |
+
+Azure Files mounts with `0777` modes, so the api (uid 1000) writes and the
+worker (uid 10001) reads. With the claim disabled (Compose, kind, CI) the
+analysis pod has no sources volume and `SOURCE_STORAGE_DIR` unset, so it
+only serves `/analyze`.
+
+### Sandbox (`sandbox.enabled`)
+
+Auditors' PoCs run as Kubernetes **Jobs** that the analysis worker creates
+(`SANDBOX_BACKEND=kubernetes`) in a separate namespace on the Kata
+(`KataVmIsolation`) node pool: one VM per PoC, no ServiceAccount token, no
+network, read-only root filesystem, capabilities dropped, uid 10001,
+`activeDeadlineSeconds 600` on the Job plus `timeout -s KILL 120` inside the
+container. The design is in
+`docs/superpowers/specs/2026-11-05-sandbox-aks-design.md`.
+
+The chart renders:
+
+- **Namespace** `sandbox.namespace`, empty = `<release namespace>-sandbox`
+  (`bbm-sandbox` for the `bbm` release, `run-<id>-<attempt>-sandbox` /
+  `pr-<n>-sandbox` on the test cluster), labelled
+  `pod-security.kubernetes.io/enforce=restricted`. It is owned by the
+  release: `helm uninstall` deletes it and every Job in it. Rendering fails
+  if it equals the release namespace.
+- **Role + RoleBinding** `bbm-analysis` in that namespace for
+  `system:serviceaccount:<release namespace>:bbm-analysis`: `jobs`
+  create/get/list/watch/delete, `pods` get/list/watch, `pods/log` get,
+  `secrets` create/get/patch/delete (patch sets the ownerReference that ties
+  the project Secret to its Job). Nothing in the release namespace, nothing
+  cluster-wide; the Job pods carry no identity (`azure.sandboxClientId` is
+  accepted from values-infra but unused).
+- **ResourceQuota** and **LimitRange** (`sandbox.quota`,
+  `sandbox.jobTemplate.resources`) and a **NetworkPolicy** denying all
+  ingress and egress, DNS included.
+- **ConfigMap** `bbm-sandbox-job-template` in the **release** namespace,
+  mounted into the analysis pod at `/etc/bbm/sandbox/job.yaml`
+  (`SANDBOX_JOB_TEMPLATE`). The worker fills in `metadata.name`
+  (`poc-<id>`), `metadata.namespace`, the container `image` and `command`,
+  and the `project` volume's `secretName`; the chart owns everything else:
+  `runtimeClassName`, nodeSelector/tolerations for the sandbox pool,
+  securityContext, resources, `activeDeadlineSeconds`,
+  `ttlSecondsAfterFinished`, `backoffLimit 0`, `restartPolicy Never`,
+  `automountServiceAccountToken false`, `enableServiceLinks false`, the
+  `tmp` emptyDir (`jobTemplate.tmpSizeLimit`, mounted at `/tmp`) and the
+  `project` Secret volume (read-only at `/in`).
+
+With `sandbox.enabled` the analysis pod runs with
+`automountServiceAccountToken: true` (pod level; the ServiceAccount keeps
+`false`) for in-cluster config, and gets `SANDBOX_ENABLED=true`,
+`SANDBOX_NAMESPACE`, `SANDBOX_JOB_TEMPLATE`. `SANDBOX_BACKEND`,
+`SANDBOX_IMAGE` and `SANDBOX_TIMEOUT_SECONDS` come from `analysis.sandbox.*`
+in every case. `SANDBOX_IMAGE` is
+`<global.image.registry>/<analysis.sandbox.image.repository>:<tag>` (tag
+defaulting to `global.image.tag`); it is an env value, not a pod image, so
+PR previews must `--set analysis.sandbox.image.repository=bbm-preview/sandbox`
+(and `analysis.image.repository=bbm-preview/analysis`) the way they do for
+api/web, and `deploy.yml`'s "image exists in ACR" check has to list it
+explicitly. **Lease rule:** `analysis.jobLeaseSeconds` (900) must be greater
+than `sandbox.jobTemplate.activeDeadlineSeconds + 120` (600 + 120); the chart
+fails to render otherwise. The worker waits `activeDeadlineSeconds + 60 s`
+for a Job (including the sandbox pool scaling up from zero) plus up to 60 s
+to delete a leftover Job of the same name first, and a lease shorter than
+that lets another worker re-claim the job and run the PoC twice.
+
+The sandbox pool (terraform `sandbox_pool_enabled`) carries node label
+`bbm.io/pool=sandbox`, taint `bbm.io/sandbox=true:NoSchedule` and
+RuntimeClass `kata-vm-isolation`; without it Jobs stay Pending until the
+deadline and the worker records a retryable infra error.
 
 ## Migrations and hook ordering
 
@@ -212,8 +309,10 @@ helm upgrade --install bbm deploy/helm/bbm --namespace "$NS" --create-namespace 
   --atomic --wait --timeout 10m
 ```
 
-(`pr-<n>.preview.<zone>` for previews; add `--set web.image.tag=<tag>` for
-the mocked web image.)
+(`pr-<n>.preview.<zone>` for previews, with `--set
+<component>.image.repository=bbm-preview/<component>` for `api`, `web`,
+`analysis` and `analysis.sandbox.image.repository=bbm-preview/sandbox`; add
+`--set web.image.tag=<tag>` for the mocked web image.)
 
 ## Local validation
 
@@ -318,7 +417,8 @@ az acr import --name <acr> \
   - `system:serviceaccount:bbm:bbm-api` on the api identity
   - `system:serviceaccount:bbm:bbm-migrations` on the api identity (same as `migrationsClientId`)
   - `system:serviceaccount:bbm:bbm-analysis` on the worker identity
-  - `system:serviceaccount:bbm-sandbox:bbm-sandbox-runner` on the sandbox identity
+    (the sandbox identity and its `bbm-sandbox-runner` credential are
+    unused: PoC Jobs carry no identity)
   - `system:serviceaccount:cert-manager:cert-manager` on `id-bbm-<env>-certmgr`
     (bbm-platform; DNS Zone Contributor on the env zones)
 - **KEDA:** the `azure-workload` TriggerAuthentication makes the **KEDA
@@ -334,7 +434,9 @@ az acr import --name <acr> \
 - **Node pools:**
   - Node label `bbm.io/pool=apps` on the apps pool (prod `nodeSelector`).
   - `bbm.io/pool=sandbox` plus taint `bbm.io/sandbox=true:NoSchedule` and
-    the Kata runtime on the sandbox pool.
+    the Kata runtime (`workload_runtime = "KataVmIsolation"`, RuntimeClass
+    `kata-vm-isolation`) on the sandbox pool, 0–1 nodes.
+- **Storage class** `azurefile-csi` (AKS built-in) for the sources claim.
 - **Image user:** the images must run as a non-root numeric `USER` that
   matches `*.runAsUser`:
   - 1000 for web and api

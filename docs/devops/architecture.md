@@ -1,8 +1,10 @@
 # DevOps architecture
 
 How the marketplace is packaged, tested, deployed and scaled. The decisions and the pinned
-interfaces behind this page are in [ADR 0001](../adr/0001-azure-environment-topology.md) and
-[ADR 0002](../adr/0002-aks-everywhere-and-azure-dns.md) (AKS for every env, Azure DNS, TLS). The
+interfaces behind this page are in [ADR 0001](../adr/0001-azure-environment-topology.md),
+[ADR 0002](../adr/0002-aks-everywhere-and-azure-dns.md) (AKS for every env, Azure DNS, TLS),
+[ADR 0003](../adr/0003-shared-subscription-isolation.md) (shared subscription, one region) and
+[ADR 0004](../adr/0004-poc-sandbox-on-aks.md) (analysis service and the Kata PoC sandbox). The
 runbooks are [Azure bootstrap](azure-bootstrap.md) (bring-up with `infra/up.sh`) and
 [Environment lifecycle](env-lifecycle.md) (turning environments on and off). Costs are in
 [cost.md](cost.md).
@@ -18,6 +20,7 @@ places:
    - **staging** and **prod** each run one release.
 
    All three are long-lived but can be paused or torn down on demand.
+
 3. **Foundry/anvil** for the local chain. The contracts image also deploys to Sepolia through a
    dispatch-only workflow.
 
@@ -29,19 +32,21 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 
 ## Components and containers
 
-| Component        | Source             | Image                | Port | Health       | Notes                                                                                                                                  |
-| ---------------- | ------------------ | -------------------- | ---- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| web              | `apps/web`         | `bbm/web`            | 3000 | `/healthz`   | Next.js. Proxies `/api/*` to `API_INTERNAL_URL`. A `-mocked` variant is built with MSW enabled.                                        |
-| api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to `SOURCE_STORAGE_DIR` (local disk for now).                                         |
-| analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI). `POST /analyze` is a 501 stub. Slither + LLM explanation are planned.                                                |
-| anvil            | `contracts`        | `bbm/contracts`      | 8545 | JSON-RPC     | Local chain for compose and CI only.                                                                                                   |
-| contracts-deploy | `contracts`        | `bbm/contracts`      | n/a  | n/a          | One-shot `forge script script/Deploy.s.sol`. Writes `deployments/31337.json`.                                                          |
-| postgres         | upstream           | `postgres:16-alpine` | 5432 | `pg_isready` | Compose service, in-cluster pod in test-cluster namespaces (`<acr>/mirror/postgres:16-alpine`), or PG Flexible Server on staging/prod. |
+| Component        | Source             | Image                | Port | Health       | Notes                                                                                                                                                                                               |
+| ---------------- | ------------------ | -------------------- | ---- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| web              | `apps/web`         | `bbm/web`            | 3000 | `/healthz`   | Next.js. Proxies `/api/*` to `API_INTERNAL_URL`. A `-mocked` variant is built with MSW enabled.                                                                                                     |
+| api              | `apps/api`         | `bbm/api`            | 3001 | `/health`    | Fastify. Postgres via `DATABASE_URL`. Uploads go to `SOURCE_STORAGE_DIR` (local disk for now).                                                                                                      |
+| analysis         | `workers/analysis` | `bbm/analysis`       | 8000 | `/health`    | Python (FastAPI + worker loop). Slither + LLM explanations for uploaded contracts; runs auditors' PoCs through the sandbox (`SANDBOX_BACKEND`: `docker` in compose, `kubernetes` on AKS).           |
+| sandbox          | `workers/sandbox`  | `bbm/sandbox`        | n/a  | n/a          | Offline Foundry image (pinned solc versions, forge-std) a PoC runs in. Not a service: compose runs it as a throwaway container, AKS as a Kata Job in `<ns>-sandbox` (ADR 0004). `linux/amd64` only. |
+| anvil            | `contracts`        | `bbm/contracts`      | 8545 | JSON-RPC     | Local chain for compose and CI only.                                                                                                                                                                |
+| contracts-deploy | `contracts`        | `bbm/contracts`      | n/a  | n/a          | One-shot `forge script script/Deploy.s.sol`. Writes `deployments/31337.json`.                                                                                                                       |
+| postgres         | upstream           | `postgres:16-alpine` | 5432 | `pg_isready` | Compose service, in-cluster pod in test-cluster namespaces (`<acr>/mirror/postgres:16-alpine`), or PG Flexible Server on staging/prod.                                                              |
 
 - Images are tagged `${BBM_REGISTRY:-bbm}/<svc>:${BBM_TAG:-local}` in compose. In ACR they are
   `acrbbm<sfx>.azurecr.io/bbm/<svc>:sha-<7>` (main), `pr-<n>-sha-<7>` (previews), plus `-mocked`
   for the mocked web build.
-- Every image runs as non-root: uid 1000 for web and api, 10001 for analysis. CI checks this.
+- Every image runs as non-root: uid 1000 for web and api, 10001 for analysis (the sandbox Job
+  pod also runs as 10001). CI checks this.
   The Helm chart adds `runAsNonRoot`, a read-only root filesystem and the `RuntimeDefault` seccomp
   profile.
 - Third-party runtime images (Postgres, curl for `helm test`) are mirrored into ACR to avoid
@@ -49,21 +54,23 @@ cluster: cert-manager issuers, the wildcard certificate, Gateway `bbm`) and
 
 ## Environments
 
-| Environment   | Runtime                                                           | Lifetime                                                      | Data durability                                                            | Who triggers it                                                                      |
-| ------------- | ----------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Local compose | Docker Compose (`pnpm stack:up`)                                  | until `pnpm stack:down`                                       | named volumes; `stack:down` removes them                                   | a developer                                                                          |
-| CI compose    | Compose on a GitHub-hosted runner (`ci.yml` `containers`)         | one job                                                       | none (`down -v` always)                                                    | every push and PR, path-filtered                                                     |
-| CI run        | namespace `run-<id>-<attempt>` on `aks-bbm-test-<abbr>`           | one `integration-azure.yml` run; TTL 6 h as a fallback        | in-cluster Postgres (`emptyDir`), discarded                                | push to `main`, nightly 07:00 UTC, manual dispatch                                   |
-| PR preview    | namespace `pr-<n>` on `aks-bbm-test-<abbr>`                       | PR opened → PR closed; TTL 168 h, re-stamped on every push    | in-cluster Postgres (`emptyDir`), discarded                                | `preview.yml` on PR events (same-repo, not docs-only)                                |
-| AKS test      | `aks-bbm-test-<abbr>` (Free tier) + data stack (no Postgres server) | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                            | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
-| AKS staging   | `aks-bbm-staging-<abbr>` (Free tier) + data stack                 | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob, Queue, Key Vault: persistent across power states | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
-| AKS prod      | `aks-bbm-prod-<abbr>` (Standard tier) + data stack                | long-lived, `running` / `paused` / `down`                     | same as staging                                                            | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
+| Environment   | Runtime                                                                                                                        | Lifetime                                                      | Data durability                                                                                       | Who triggers it                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Local compose | Docker Compose (`pnpm stack:up`)                                                                                               | until `pnpm stack:down`                                       | named volumes; `stack:down` removes them                                                              | a developer                                                                          |
+| CI compose    | Compose on a GitHub-hosted runner (`ci.yml` `containers`)                                                                      | one job                                                       | none (`down -v` always)                                                                               | every push and PR, path-filtered                                                     |
+| CI run        | namespace `run-<id>-<attempt>` on `aks-bbm-test-<abbr>`, with analysis and the Kata PoC sandbox (`run-<id>-<attempt>-sandbox`) | one `integration-azure.yml` run; TTL 6 h as a fallback        | in-cluster Postgres (`emptyDir`) and an Azure Files sources share, discarded                          | push to `main`, nightly 07:00 UTC, manual dispatch                                   |
+| PR preview    | namespace `pr-<n>` on `aks-bbm-test-<abbr>`; mocked web, **no analysis or sandbox**                                            | PR opened → PR closed; TTL 168 h, re-stamped on every push    | in-cluster Postgres (`emptyDir`), discarded                                                           | `preview.yml` on PR events (same-repo, not docs-only)                                |
+| AKS test      | `aks-bbm-test-<abbr>` (Free tier) + data stack (no Postgres server)                                                            | long-lived, `running` / `paused` / `down`; CI auto-resumes it | none of its own                                                                                       | `env-power.yml` from `main` (`test-infra`), auto-resume by the ephemeral workflows   |
+| AKS staging   | `aks-bbm-staging-<abbr>` (Free tier) + data stack; analysis + sandbox on                                                       | long-lived, `running` / `paused` / `down`                     | PG Flexible Server, Blob, Azure Files sources share, Queue, Key Vault: persistent across power states | `deploy.yml` / `env-power.yml` dispatch from `main`, no reviewer                     |
+| AKS prod      | `aks-bbm-prod-<abbr>` (Standard tier) + data stack; analysis + sandbox on                                                      | long-lived, `running` / `paused` / `down`                     | same as staging                                                                                       | `deploy.yml` / `env-power.yml` from `main`, 1 required reviewer to turn on or change |
 
 All three AKS environments, the shared resources and tfstate run in one region, chosen at
 bring-up (ADR 0003 §4); `<abbr>` is its code from `modules/naming`. Every cluster runs on x86
 `Standard_D4as_v7` nodes (4 vCPU / 16 GiB) that autoscale from 1 to 2 (test, staging) or 3 (prod),
-so staging rehearses prod's architecture and node size. `_build-push.yml` still builds api and web
-for `linux/amd64,linux/arm64`, although no env runs arm64 nodes any more.
+so staging rehearses prod's architecture and node size, plus a Kata `sandbox` pool of 0–1
+`Standard_D2as_v7` nodes (2 vCPU / 8 GiB) that exists only while a PoC runs (see
+[PoC sandbox](#poc-sandbox)). `_build-push.yml` still builds api and web for
+`linux/amd64,linux/arm64`, although no env runs arm64 nodes any more.
 
 All three AKS environments are paused nightly at 06:00 UTC unless their data resource group is
 tagged `auto-pause=false`. See [env-lifecycle.md](env-lifecycle.md) for the state machine.
@@ -87,7 +94,7 @@ destroyed without losing data, the ingress IP or the DNS records.
 flowchart TB
     subgraph Global["Global, home region: rg-bbm-shared-ABBR + rg-bbm-tfstate-ABBR (stacks bootstrap, global)"]
         TFS[("tfstate storage<br/>stbbmtfstateSFX, Entra auth only")]
-        ACR["ACR acrbbmSFX (Basic)<br/>bbm/web, bbm/api, bbm/analysis, bbm/contracts, mirror/*"]
+        ACR["ACR acrbbmSFX (Basic)<br/>bbm/web, bbm/api, bbm/analysis, bbm/sandbox, bbm/contracts, mirror/*"]
         LAW["Log Analytics log-bbm-shared-ABBR<br/>daily cap 0.25 GB"]
         SKV["Key Vault kv-bbm-shared-SFX<br/>Sepolia RPC, deployer key, Etherscan key"]
         ZONE["Azure DNS parent zone ZONE<br/>NS delegations to the env zones"]
@@ -103,16 +110,16 @@ flowchart TB
         PIP["Static PIP pip-bbm-ENV-ingress"]
         EZ["DNS zone ENV.ZONE (test: test.ZONE, preview.ZONE)<br/>apex + wildcard alias A records → PIP"]
         IZ["Private DNS zone ENV.internal.ZONE<br/>postgres CNAME"]
-        UAMI["UAMIs id-bbm-ENV-aks, -api, -worker, -sandbox, -certmgr"]
+        UAMI["UAMIs id-bbm-ENV-aks, -api, -worker, -certmgr<br/>(-sandbox exists but is unused: Job pods have no identity)"]
         ELAW["Log Analytics log-bbm-ENV-ABBR"]
         EZ --> PIP
     end
 
     subgraph Compute["Per env compute: rg-bbm-ENV-compute-ABBR (stack compute, disposable)"]
         AKS["AKS aks-bbm-ENV-ABBR (Free; prod Standard)<br/>CNI Overlay + Cilium, OIDC issuer, workload identity"]
-        POOLS["Node pools: system 1-2 x Standard_D4as_v7 (prod 1-3); apps, sandbox (Kata) off"]
-        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI,<br/>KEDA (keda_enabled, off while analysis is off), Container Insights (prod only)"]
-        FIC["Federated credentials for bbm-api, bbm-analysis,<br/>bbm-migrations, bbm-sandbox-runner, keda-operator, cert-manager"]
+        POOLS["Node pools: system 1-2 x Standard_D4as_v7 (prod 1-3);<br/>sandbox 0-1 x Standard_D2as_v7 (Kata VM isolation); apps off"]
+        ADDONS["Add-ons: app routing Gateway API (approuting-istio), KV Secrets Store CSI,<br/>KEDA (keda_enabled, off until the queue is wired), Container Insights (prod only)"]
+        FIC["Federated credentials for bbm-api, bbm-analysis,<br/>bbm-migrations, keda-operator, cert-manager<br/>(bbm-sandbox-runner: still emitted, no longer rendered)"]
         AKS --- POOLS
         AKS --- ADDONS
     end
@@ -161,17 +168,22 @@ flowchart LR
     NGX -- "/api, /health" --> API["api pod :3001"]
     WEB -- "/api/* proxy<br/>API_INTERNAL_URL" --> API
     API -- "private VNet, PG_POOL_MAX" --> PG[("PG Flexible Server<br/>snet-psql")]
+    API -- "writes uploads" --> FS[("PVC bbm-sources<br/>Azure Files, ReadWriteMany")]
+    API -- "jobs table (analysis, sandbox)" --> PG
+    PG -- "worker polls jobs" --> AN["analysis pod :8000<br/>Slither + LLM, PoC runner"]
+    FS -- "read-only" --> AN
+    AN -- "Secret + Job, K8s API" --> SBX["namespace NS-sandbox<br/>Job poc-ID: Kata VM, no network,<br/>no SA token, 1 CPU / 1 GiB, 600 s"]
     API -. "planned: Blob adapter" .-> BLOB[("Blob container sources")]
     API -. "planned: enqueue" .-> Q[["Queue analysis-jobs"]]
-    Q -. "KEDA azure-queue scaler" .-> AN["analysis pods :8000<br/>0-3 replicas"]
-    AN -. "planned: read source" .-> BLOB
-    AN -. "planned: PoC Job" .-> SBX["bbm-sandbox namespace<br/>Kata pods, deny-all egress"]
+    Q -. "KEDA azure-queue scaler" .-> AN
 ```
 
-Dashed edges are designed and provisioned (identities, roles, queue, container, ScaledObject
-template) but not yet wired in application code. `analysis.enabled` and `sandbox.enabled` are
-`false` in the staging and prod values files. In test-cluster namespaces the api talks to the
-in-cluster Postgres pod instead of PG Flexible Server.
+Dashed edges are designed and provisioned (queue, Blob container, roles, ScaledObject template)
+but not yet wired in application code: the worker polls the Postgres `jobs` table and KEDA stays
+off. Solid edges run on staging, prod and in CI-run namespaces (`analysis.enabled` and
+`sandbox.enabled` are `true` there; PR previews turn both off). The Azure Files share is the
+interim way to hand uploaded sources to the worker until the Blob adapter lands (ADR 0004 §4). In
+test-cluster namespaces the api talks to the in-cluster Postgres pod instead of PG Flexible Server.
 
 ## Identity
 
@@ -214,7 +226,9 @@ flowchart LR
 
 - The constrained RBAC Administrator conditions let CI identities assign only an allow-listed set
   of roles, and only to service principals, so a CI token can never grant a human access.
-- `id-bbm-<env>-sandbox` deliberately has no role assignments, because it runs untrusted code.
+- `id-bbm-<env>-sandbox` has no role assignments and, since ADR 0004, no ServiceAccount either:
+  a PoC Job pod runs with no identity and no token at all. The identity and its federated
+  credential are left in place until a separate Terraform change removes them.
 - Key Vault secrets reach pods through the Secrets Store CSI driver: SecretProviderClass `bbm-kv`
   syncs them into the Kubernetes Secret `bbm-secrets`.
 - cert-manager answers Let's Encrypt DNS-01 challenges as `id-bbm-<env>-certmgr`, which has DNS
@@ -320,9 +334,11 @@ flowchart TB
   availability zones is not configured yet.
 - **Disruption.** PDBs are rendered only when the minimum replica count is above 1, so a
   single-replica environment can still drain nodes during upgrades.
-- **Queue-driven workers.** The analysis worker has a KEDA `azure-queue` ScaledObject on
-  `analysis-jobs` (0–3 replicas, 5 messages per replica, 300 s cooldown), so it scales to zero when
-  idle. It is disabled until the worker does real work.
+- **Workers.** The analysis worker runs one replica per env and polls the Postgres `jobs` table
+  (analysis and sandbox jobs, with a lease so two workers never run the same job). The KEDA
+  `azure-queue` ScaledObject on `analysis-jobs` (0–3 replicas) stays off until the queue is wired.
+- **Sandbox pool.** PoCs run on their own Kata node pool that autoscales 0–1, so a PoC never
+  competes with api/web for a node and costs nothing while idle (see [PoC sandbox](#poc-sandbox)).
 
 **Database**
 
@@ -338,13 +354,13 @@ flowchart TB
 
 **Known limit: one API replica**
 
-The API writes uploaded sources to a per-pod `emptyDir` (`SOURCE_STORAGE_DIR`). Two replicas
-would split uploads between pods, so `api.hpa.maxReplicas` is 1 in both envs. The rollout strategy
-is `maxSurge: 0`, which means a short gap during each API deploy. The Blob `sources` container, the
-api identity's Blob Data Contributor role and the `storageBlobEndpoint` value already exist. Once a
-Blob storage adapter replaces local disk, the API becomes stateless and its HPA max can be raised.
-Uploaded files on the `emptyDir` are also lost when a paused cluster resumes, because nodes are
-recreated.
+The API writes uploaded sources to `SOURCE_STORAGE_DIR`: on AKS an Azure Files `ReadWriteMany`
+claim (`bbm-sources`, 5 Gi) that the analysis pod mounts read-only, so uploads now survive a
+pause/resume and reach the worker (ADR 0004 §4); in compose and kind an `emptyDir`. The API still
+runs one replica (`api.hpa.maxReplicas: 1`, `maxSurge: 0`, so a short gap during each API deploy):
+sign-in nonces are in memory, and the share is an interim. The Blob `sources` container, the api
+identity's Blob Data Contributor role and the `storageBlobEndpoint` value already exist. Once the
+Blob storage adapter replaces the share, the API becomes stateless and its HPA max can be raised.
 
 **Load testing**
 
@@ -360,25 +376,68 @@ recreated.
 
 **Isolation for untrusted code**
 
-- Auditor PoCs will run as Jobs in the `bbm-sandbox` namespace on a dedicated `sandbox` pool with
-  Kata VM isolation (`runtimeClassName: kata-vm-isolation`), a taint, a deny-all NetworkPolicy, a
-  ResourceQuota, a 600 s deadline and an identity with no Azure roles.
-- The pool and the Job template are off by default. Kata needs a nested-virtualisation size (Dsv5)
-  and quota a new subscription may not have.
+- Auditor PoCs run as Jobs in `<release namespace>-sandbox` on the dedicated `sandbox` pool with
+  Kata VM isolation (`runtimeClassName: kata-vm-isolation`), a taint, PSA `restricted`, a deny-all
+  NetworkPolicy, a ResourceQuota, a 600 s deadline, no ServiceAccount token and no identity. See
+  [PoC sandbox](#poc-sandbox).
 - The `bbm` namespace is default-deny for ingress (only the Gateway's Envoy pods, web → api and
   `helm test` are allowed). With `networkPolicy.restrictEgress`, which is on in staging and prod,
   egress is default-deny too: DNS for everyone, web → api only, api and migrations → Postgres on
   `snet-psql`, and api/analysis → HTTPS 443 (Entra, Storage).
 
+## PoC sandbox
+
+The verdict on a finding comes from re-running the auditor's Foundry PoC. On AKS this is a
+Kubernetes Job on a Kata node pool ([ADR 0004](../adr/0004-poc-sandbox-on-aks.md)); in compose
+it is a throwaway Docker container (`docker-compose.sandbox.yml`). The worker code picks the
+backend from `SANDBOX_BACKEND`; the verdict rules are shared.
+
+```mermaid
+sequenceDiagram
+    participant API as api
+    participant DB as Postgres jobs
+    participant W as analysis (SA bbm-analysis)
+    participant K as K8s API
+    participant J as Job poc-ID (Kata VM, NS-sandbox)
+    API->>DB: POST /api/auditor/poc: PoC stored, job kind=sandbox
+    W->>DB: claim job (lease 900 s)
+    W->>W: build project.tar (source from the shared claim, PoC, foundry.toml)
+    W->>K: create Secret poc-ID (project.tar), create Job from the template, ownerReference
+    K-->>J: pod on the sandbox pool (autoscaler 0 -> 1, 3-5 min when idle)
+    J->>J: tar -x /in/project.tar; timeout -s KILL 120 forge test; tail -c 256K
+    W->>K: poll Job (2 s) until done or activeDeadlineSeconds + 60 s; read pod log
+    W->>K: delete Job + Secret
+    W->>DB: verdict Passed / Failed (or infra_error: retried)
+    API->>DB: finding Verified / Rejected (chain mode: after the on-chain record)
+```
+
+| Piece            | On AKS                                                                                                                                                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Node pool        | `sandbox`: Azure Linux, `workload_runtime = KataVmIsolation`, `Standard_D2as_v7` (Gen2, nested virtualisation, Dasv7 quota), autoscaled **0–1**, label `bbm.io/pool=sandbox`, taint `bbm.io/sandbox=true:NoSchedule`. Every env.                                   |
+| Namespace        | `<release namespace>-sandbox` (e.g. `bbm-sandbox`, `run-123-1-sandbox`): PSA `restricted`, deny-all NetworkPolicy (no DNS), ResourceQuota, LimitRange. Rendered by the chart, deleted with the release.                                                            |
+| RBAC             | Role in that namespace for `bbm-analysis` only: Jobs create/get/list/watch/delete, Pods get/list/watch, pods/log get, Secrets create/get/delete.                                                                                                                   |
+| Job pod          | `runtimeClassName: kata-vm-isolation`, no SA token, uid 10001, read-only root, no capabilities, `RuntimeDefault` seccomp, 1 CPU / 1 GiB / 1 GiB ephemeral, `/tmp` emptyDir, `/in` = Secret `poc-<id>`, `activeDeadlineSeconds: 600`, `timeout -s KILL 120` inside. |
+| Project transfer | The tarball travels in a Secret (sources are capped at 100 KB each by the API), never through a shared volume into the VM.                                                                                                                                         |
+| Sources          | api writes to the Azure Files claim `bbm-sources`; the worker reads it (not the Job).                                                                                                                                                                              |
+| Image            | `<acr>/bbm/sandbox:sha-<7>` (`SANDBOX_IMAGE`, from `analysis.sandbox.image.repository`), built by `_build-push.yml`, checked by `deploy.yml`.                                                                                                                      |
+| Spike            | `infra/terraform/scripts/kata-spike.sh <env> <tag>` proves the pod runs in a VM (guest kernel differs from the node's) before PoCs are trusted to the pool.                                                                                                        |
+| Tests            | `tests/integration/pipeline.test.ts` (`BBM_PIPELINE=1`, T18) in `integration-azure.yml` and locally against the compose sandbox overlay.                                                                                                                           |
+| Cleanup          | Teardown deletes `<ns>` and `<ns>-sandbox`; the janitor deletes an expired `<ns>` with its `-sandbox` and any orphaned `-sandbox`.                                                                                                                                 |
+
+If Kata does not work on the chosen size, ADR 0004 documents the ACI fallback; the pool is never
+silently downgraded to runc.
+
 ## Known gaps and next steps
 
-- **Blob storage adapter** for uploads. This removes the API single-replica limit (see above).
+- **Blob storage adapter** for uploads. This replaces the Azure Files share and removes the API
+  single-replica limit (see above).
 - **Wire the queue.** The API should enqueue analysis jobs and the worker should consume them.
   Then set `keda_enabled = true` in the env's `compute.tfvars` (the add-on is off to save ~0.4 CPU
-  on the small pool) and enable `analysis` and the KEDA ScaledObject in the env values.
+  on the small pool) and enable the KEDA ScaledObject in the env values.
 - **Parent zone apex.** `<zone>` itself serves nothing yet; a redirect to `prod.<zone>` is planned.
 - **Zone spreading** for prod pods and a zone-redundant node pool layout.
-- **Sandbox pool** once Dsv5 quota is granted.
+- **Remove the unused sandbox identity** (`id-bbm-<env>-sandbox`, its federated credential and
+  `azure.sandboxClientId`); the Job pod needs none (ADR 0004 §3).
 - **Observability.** Container Insights is on in prod only. There are no alert rules on error
   rate, latency or PG connections yet.
 - **Database HA.** PG is a single zonal server without HA or geo-redundant backup (7-day backup

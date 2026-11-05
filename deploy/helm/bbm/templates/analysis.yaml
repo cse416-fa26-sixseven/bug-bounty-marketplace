@@ -1,7 +1,28 @@
+{{- /*
+Analysis worker: Slither + LLM on uploads, and (sandbox.enabled) the PoC
+runner that creates Jobs in the sandbox namespace through the Kubernetes
+API. It reads DATABASE_URL from the same Secret as the api, uploads from the
+shared sources claim (read-only) and, with sandbox.enabled, the Job template
+ConfigMap at /etc/bbm/sandbox/job.yaml with its ServiceAccount token mounted
+(in-cluster config; the ServiceAccount itself keeps
+automountServiceAccountToken false, the pod-level field wins).
+*/ -}}
 {{- if .Values.analysis.enabled }}
 {{- $v := .Values.analysis -}}
 {{- $name := include "bbm.componentName" (dict "root" $ "component" "analysis") -}}
 {{- $csi := include "bbm.csi" . -}}
+{{- $sandbox := .Values.sandbox.enabled -}}
+{{- $sources := include "bbm.sourcesClaim" . -}}
+{{- /* The worker waits activeDeadlineSeconds + 60 s for a Job, plus up to
+60 s to delete a leftover Job first. A lease shorter than that lets another
+worker re-claim the job and run the PoC twice. */}}
+{{- if $sandbox }}
+{{- $deadline := int .Values.sandbox.jobTemplate.activeDeadlineSeconds }}
+{{- $lease := int $v.jobLeaseSeconds }}
+{{- if le $lease (add $deadline 120) }}
+{{- fail (printf "analysis.jobLeaseSeconds (%d) must be greater than sandbox.jobTemplate.activeDeadlineSeconds + 120 (%d + 120 = %d): the worker waits activeDeadlineSeconds + 60 s for a Job plus up to 60 s for a leftover Job, and a shorter lease lets another worker re-claim and run the PoC twice" $lease $deadline (add $deadline 120)) }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,7 +55,8 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ $name }}
-      automountServiceAccountToken: false
+      # The token is only needed to create sandbox Jobs (in-cluster config).
+      automountServiceAccountToken: {{ $sandbox }}
       {{- with (include "bbm.imagePullSecrets" . | trim) }}{{ . | nindent 6 }}{{- end }}
       {{- include "bbm.podSecurityContext" (dict "uid" $v.runAsUser "gid" $v.runAsGroup) | nindent 6 }}
       {{- with (include "bbm.scheduling" (dict "root" $ "values" $v "component" "analysis") | trim) }}{{ . | nindent 6 }}{{- end }}
@@ -57,6 +79,34 @@ spec:
                 secretKeyRef:
                   name: {{ include "bbm.analysisSecretName" . }}
                   key: llm-api-key
+            {{- /* The worker polls the jobs table only with DATABASE_URL and
+            SOURCE_STORAGE_DIR both set; without the shared claim it serves
+            /analyze only. */}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbm.analysisSecretName" . }}
+                  key: database-url
+            {{- if $sources }}
+            - name: SOURCE_STORAGE_DIR
+              value: {{ .Values.api.sourceStorage.path | quote }}
+            {{- end }}
+            - name: JOB_LEASE_SECONDS
+              value: {{ $v.jobLeaseSeconds | quote }}
+            - name: SANDBOX_ENABLED
+              value: {{ $sandbox | toString | quote }}
+            - name: SANDBOX_BACKEND
+              value: {{ $v.sandbox.backend | quote }}
+            - name: SANDBOX_IMAGE
+              value: {{ include "bbm.sandboxImage" . | quote }}
+            - name: SANDBOX_TIMEOUT_SECONDS
+              value: {{ $v.sandbox.timeoutSeconds | quote }}
+            {{- if $sandbox }}
+            - name: SANDBOX_NAMESPACE
+              value: {{ include "bbm.sandboxNamespace" . | quote }}
+            - name: SANDBOX_JOB_TEMPLATE
+              value: /etc/bbm/sandbox/job.yaml
+            {{- end }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -84,6 +134,16 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $sources }}
+            - name: sources
+              mountPath: {{ .Values.api.sourceStorage.path }}
+              readOnly: true
+            {{- end }}
+            {{- if $sandbox }}
+            - name: sandbox-job-template
+              mountPath: /etc/bbm/sandbox
+              readOnly: true
+            {{- end }}
             {{- if $csi }}
             - name: secrets-store
               mountPath: {{ .Values.secrets.csi.mountPath }}
@@ -92,6 +152,17 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $sources }}
+        - name: sources
+          persistentVolumeClaim:
+            claimName: {{ include "bbm.sourcesClaimName" . }}
+            readOnly: true
+        {{- end }}
+        {{- if $sandbox }}
+        - name: sandbox-job-template
+          configMap:
+            name: {{ include "bbm.fullname" . }}-sandbox-job-template
+        {{- end }}
         {{- if $csi }}
         {{- include "bbm.csiVolume" (dict "spc" (printf "%s-analysis" .Values.secrets.csi.secretProviderClassName)) | nindent 8 }}
         {{- end }}

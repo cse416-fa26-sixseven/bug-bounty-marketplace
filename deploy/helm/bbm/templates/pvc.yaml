@@ -1,0 +1,29 @@
+{{- /*
+Shared upload storage (api.sourceStorage.persistentVolumeClaim). The api
+writes uploaded sources to SOURCE_STORAGE_DIR and the analysis worker reads
+them, so on AKS both mount one ReadWriteMany Azure Files share
+(storageClassName azurefile-csi, dynamically provisioned: an ephemeral test
+namespace gets its own share and loses it with the namespace). With
+existingClaim set, a pre-created claim is mounted instead and nothing is
+rendered here. Disabled (Compose, kind, CI): the api keeps a per-pod emptyDir
+and the analysis pod has no sources volume.
+*/ -}}
+{{- $pvc := .Values.api.sourceStorage.persistentVolumeClaim -}}
+{{- if and $pvc.enabled (not $pvc.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "bbm.sourcesClaimName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "sources") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml $pvc.accessModes | nindent 4 }}
+  {{- with $pvc.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $pvc.size }}
+{{- end }}

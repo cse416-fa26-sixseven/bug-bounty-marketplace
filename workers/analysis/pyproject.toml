@@ -14,6 +14,8 @@ dependencies = [
     "semantic-version>=2.10",
     "slither-analyzer>=0.10",
     "solc-select>=1.0",
+    "kubernetes>=31",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

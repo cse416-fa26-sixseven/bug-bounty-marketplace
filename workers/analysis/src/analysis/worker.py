@@ -21,6 +21,7 @@ from .db import connect
 from .jobs import Job, claim_next, expire_exhausted, fail
 from .llm import Explainer, make_explainer
 from .sandbox_job import run_sandbox_job
+from .sandbox_k8s import WAIT_GRACE_S, active_deadline, load_job_template
 
 log = logging.getLogger("analysis.worker")
 
@@ -81,16 +82,55 @@ def _handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
                 log.exception("could not record the failure of job %s", job.id)
 
 
+# Headroom the job lease needs over the worker's wait for a sandbox Job, so a
+# slow run is never re-claimed by another worker and run twice.
+_LEASE_HEADROOM_S = 120
+
+
+def sandbox_startup_warnings(settings: Settings) -> list[str]:
+    """Kubernetes-backend settings that work but will bite: a job lease that
+    does not outlive the wait for a sandbox Job (the Helm chart guards this
+    too). Cheap, so it runs at every start-up; a missing template is reported
+    by the first sandbox job, not here."""
+    if not (
+        settings.sandbox_enabled
+        and settings.sandbox_backend == "kubernetes"
+        and settings.sandbox_config_error is None
+    ):
+        return []
+    try:
+        deadline = active_deadline(load_job_template(settings.sandbox_job_template))
+    except ValueError:
+        return []
+    needed = deadline + _LEASE_HEADROOM_S
+    if settings.job_lease_s <= needed:
+        return [
+            f"JOB_LEASE_SECONDS={settings.job_lease_s} is not above the sandbox Job's"
+            f" activeDeadlineSeconds ({deadline}) + {_LEASE_HEADROOM_S}s: a PoC that waits"
+            f" {deadline + WAIT_GRACE_S}s for a node could be re-claimed and run twice;"
+            f" set it to at least {needed + 1}"
+        ]
+    return []
+
+
 def run(settings: Settings, stop: threading.Event, explainer: Explainer | None = None) -> None:
     """Polls until `stop` is set. A database error (e.g. the API has not
     applied its migrations yet) is logged and retried after a pause."""
     explainer = explainer if explainer is not None else make_explainer(settings)
     log.info(
-        "worker started (jobs %s, concurrency %d, LLM %s)",
+        "worker started (jobs %s, concurrency %d, LLM %s, sandbox backend %s)",
         "/".join(settings.job_kinds),
         settings.worker_concurrency,
         "on" if settings.llm_configured else "off: Slither text only",
+        settings.sandbox_backend,
     )
+    if settings.sandbox_enabled and settings.sandbox_config_error:
+        log.error(
+            "sandbox misconfigured, sandbox jobs will fail as infra errors: %s",
+            settings.sandbox_config_error,
+        )
+    for warning in sandbox_startup_warnings(settings):
+        log.warning("%s", warning)
     in_flight: set[Future] = set()
     with ThreadPoolExecutor(settings.worker_concurrency) as pool:
         while not stop.is_set():

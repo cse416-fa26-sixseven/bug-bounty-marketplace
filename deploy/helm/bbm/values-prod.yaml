@@ -42,10 +42,11 @@ web:
 
 api:
   # !!! IMPORTANT: the api MUST stay at exactly 1 replica until the Blob
-  # !!! storage adapter lands. Uploaded sources are written to a per-pod
-  # !!! emptyDir (SOURCE_STORAGE_DIR); with >1 replica, requests routed to
-  # !!! another pod would not find the files. Once uploads go to Blob
-  # !!! storage, raise to minReplicas 2 / maxReplicas 5 and enable the PDB.
+  # !!! storage adapter lands. Uploaded sources are written to the shared
+  # !!! Azure Files claim below (SOURCE_STORAGE_DIR), an interim way to hand
+  # !!! them to the analysis worker that is not validated for concurrent
+  # !!! writers. Once uploads go to Blob storage, raise to minReplicas 2 /
+  # !!! maxReplicas 5 and enable the PDB.
   hpa:
     enabled: true
     minReplicas: 1
@@ -54,6 +55,10 @@ api:
     # Only renders when minReplicas > 1, so this is a no-op until then.
     enabled: true
     minAvailable: 1
+  sourceStorage:
+    # ReadWriteMany Azure Files share: api writes uploads, analysis reads them.
+    persistentVolumeClaim:
+      enabled: true
   resources:
     requests:
       cpu: 200m
@@ -77,6 +82,10 @@ networkPolicy:
   # postgresCidr: from values-infra.yaml
 
 analysis:
-  enabled: false
+  # Slither + LLM worker (DATABASE_URL and llm-api-key from Key Vault via
+  # bbm-kv-analysis) and PoC runner. KEDA stays off: the worker polls Postgres.
+  enabled: true
 sandbox:
-  enabled: false
+  # PoC Jobs on the Kata sandbox pool (terraform sandbox_pool_enabled), in
+  # namespace bbm-sandbox (<release namespace>-sandbox).
+  enabled: true

@@ -489,6 +489,42 @@
             },
             "sizeLimit": {
               "type": "string"
+            },
+            "persistentVolumeClaim": {
+              "type": "object",
+              "description": "Shared ReadWriteMany claim for uploads (api rw, analysis ro) instead of the api's per-pod emptyDir.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "existingClaim": {
+                  "type": "string"
+                },
+                "storageClassName": {
+                  "type": "string"
+                },
+                "accessModes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "ReadWriteOnce",
+                      "ReadOnlyMany",
+                      "ReadWriteMany",
+                      "ReadWriteOncePod"
+                    ]
+                  }
+                },
+                "size": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -726,6 +762,51 @@
             "enabled"
           ],
           "additionalProperties": true
+        },
+        "jobLeaseSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sandbox": {
+          "type": "object",
+          "description": "How the worker runs PoCs (SANDBOX_* env). The Jobs themselves are configured under sandbox.*.",
+          "properties": {
+            "backend": {
+              "type": "string",
+              "enum": [
+                "kubernetes",
+                "docker"
+              ]
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tag": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                }
+              },
+              "required": [
+                "repository"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "backend",
+            "image"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -741,7 +822,7 @@
         },
         "namespace": {
           "type": "string",
-          "minLength": 1
+          "description": "Namespace of the PoC Jobs; empty = <release namespace>-sandbox."
         },
         "jobTemplate": {
           "type": "object",
@@ -781,13 +862,84 @@
                 }
               },
               "additionalProperties": true
+            },
+            "tmpSizeLimit": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "additionalProperties": true
         },
         "quota": {
           "type": "object",
-          "additionalProperties": true
+          "properties": {
+            "pods": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "jobs": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "secrets": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "requestsCpu": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "requestsMemory": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "limitsCpu": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "limitsMemory": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "requestsEphemeralStorage": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "limitsEphemeralStorage": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "required": [
+            "pods",
+            "jobs",
+            "secrets",
+            "requestsCpu",
+            "requestsMemory",
+            "limitsCpu",
+            "limitsMemory",
+            "requestsEphemeralStorage",
+            "limitsEphemeralStorage"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

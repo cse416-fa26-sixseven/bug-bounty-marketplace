@@ -64,9 +64,10 @@ make_tree() {
 }
 
 # pin_fixture_regions <tree>: give the copy a fixed region layout (home ncus, test ncus,
-# staging frc, prod cac, every env on one Standard_B4as_v2 node), so the assertions
-# below don't depend on the regions the real subscription uses. The real
-# envs/** layout is checked for consistency separately ("repo:" checks).
+# staging frc, prod cac, every env on one Standard_B4as_v2 node, sandbox pool off),
+# so the assertions below don't depend on the regions or pools the real
+# subscription uses. The real envs/** layout is checked for consistency
+# separately ("repo:" checks); the sandbox pool's quota has its own test.
 pin_fixture_regions() {
   local dst=$1 e loc abbr f
   # Home region (tfstate, shared): northcentralus / ncus, whatever the real
@@ -88,7 +89,8 @@ pin_fixture_regions() {
       sed -E -e "s/^(location[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$loc\"/" \
         -e "s/^(location_abbr[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$abbr\"/" \
         -e 's/^(system_vm_size[[:space:]]*=[[:space:]]*)"[^"]*"/\1"Standard_B4as_v2"/' \
-        -e 's/^(system_max_count[[:space:]]*=[[:space:]]*)[0-9]+/\11/' "$f" >"$f.tmp"
+        -e 's/^(system_max_count[[:space:]]*=[[:space:]]*)[0-9]+/\11/' \
+        -e 's/^(sandbox_pool_enabled[[:space:]]*=[[:space:]]*)(true|false)/\1false/' "$f" >"$f.tmp"
       cat "$f.tmp" >"$f"
       rm -f "$f.tmp"
     done
@@ -496,7 +498,10 @@ case "$1 $2" in
   "vm list-skus")
     size=""; prev=""
     for a in "$@"; do [[ "$prev" == --size ]] && size=$a; prev=$a; done
-    def='[{"name":"'$size'","family":"standardBASv2Family","capabilities":[{"name":"vCPUs","value":"4"}],"restrictions":[{"type":"Zone","reasonCode":"NotAvailableForSubscription"}]}]'
+    case "$size" in
+      Standard_D2as_v7) def='[{"name":"'$size'","family":"standardDASv7Family","capabilities":[{"name":"vCPUs","value":"2"}],"restrictions":[]}]' ;;
+      *) def='[{"name":"'$size'","family":"standardBASv2Family","capabilities":[{"name":"vCPUs","value":"4"}],"restrictions":[{"type":"Zone","reasonCode":"NotAvailableForSubscription"}]}]' ;;
+    esac
     echo "${BBM_TEST_SKUS:-$def}" ;;
   "vm list-usage")
     def='[{"name":{"value":"cores"},"currentValue":0,"limit":10},{"name":{"value":"standardBASv2Family"},"currentValue":0,"limit":2}]'
@@ -698,6 +703,36 @@ RUN_TREE="$TREE4" run_script up.sh --subscription "$SUB" --zone bbm.example.com 
 out=$(cat "$T/out")
 has "up: restricted node size dies" 'is restricted for this subscription in northcentralus (NotAvailableForSubscription)'
 hasnt_log "up: SKU refusal stops before any terraform" '^terraform .*(init|plan|output)'
+unset BBM_TEST_SKUS
+
+# sandbox pool (ADR 0004): its own family's vCPUs (size x max_count) join the
+# env's needs; the pool is 0 nodes when idle but the quota must cover max_count
+TREE5="$T/tree5"
+make_tree "$TREE5"
+f5="$TREE5/envs/test/compute.tfvars"
+grep -vE '^sandbox_(pool_enabled|vm_size|max_count)[[:space:]]*=' "$f5" >"$f5.tmp"
+printf 'sandbox_pool_enabled = true\nsandbox_vm_size      = "Standard_D2as_v7"\nsandbox_max_count    = 1\n' >>"$f5.tmp"
+cat "$f5.tmp" >"$f5"
+rm -f "$f5.tmp"
+: >"$LOG"
+if RUN_TREE="$TREE5" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  ok_ "up: sandbox pool --dry-run exits 0"
+else
+  bad "up: sandbox pool --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: sandbox size checked in the env region" 'env test: Standard_D2as_v7 (2 vCPU, standardDASv7Family) is offered in northcentralus'
+has "up: sandbox family quota (size x max_count)" 'vCPU standardDASv7Family in northcentralus: ? used of ? (test add 2)'
+has "up: sandbox vCPUs join the regional need" 'vCPU cores in northcentralus: 0 used of 10 (test add 6)'
+has "up: system family need unchanged by the sandbox pool" 'vCPU standardBASv2Family in northcentralus: 0 used of 2 (test add 4)'
+hasnt_out "up: staging (sandbox off) keeps its need" 'vCPU standardDASv7Family in francecentral'
+check "up: sandbox SKU queried in the env region" grep -qF 'az vm list-skus -l northcentralus --resource-type virtualMachines --size Standard_D2as_v7' "$LOG"
+# only the system size is offered: the sandbox size is what fails
+export BBM_TEST_SKUS='[{"name":"Standard_B4as_v2","family":"standardBASv2Family","capabilities":[{"name":"vCPUs","value":"4"}],"restrictions":[]}]'
+RUN_TREE="$TREE5" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run || true
+out=$(cat "$T/out")
+has "up: sandbox size not offered names sandbox_vm_size" 'env test: Standard_D2as_v7 is not offered in northcentralus (az vm list-skus -l northcentralus --size Standard_D2as_v7): pick another sandbox_vm_size in envs/test/compute.tfvars'
 unset BBM_TEST_SKUS
 
 # moving an env: only when its old-region RGs hold nothing but DNS zones

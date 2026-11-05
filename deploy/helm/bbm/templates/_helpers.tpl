@@ -256,3 +256,35 @@ podSelector:
   matchLabels:
     gateway.networking.k8s.io/gateway-name: {{ .Values.ingress.gateway.name }}
 {{- end -}}
+
+{{/*
+Namespace the PoC sandbox Jobs run in: sandbox.namespace when set, else
+<release namespace>-sandbox (one per release, so every CI-run / preview
+namespace on the test cluster gets its own).
+*/}}
+{{- define "bbm.sandboxNamespace" -}}
+{{- .Values.sandbox.namespace | default (printf "%s-sandbox" .Release.Namespace) -}}
+{{- end -}}
+
+{{/*
+Image of the PoC Job pod (SANDBOX_IMAGE of the analysis worker):
+[registry/]analysis.sandbox.image.repository:tag, tag defaulting to
+global.image.tag like every other component.
+*/}}
+{{- define "bbm.sandboxImage" -}}
+{{- include "bbm.image" (dict "root" . "image" .Values.analysis.sandbox.image) -}}
+{{- end -}}
+
+{{/*
+Name of the PersistentVolumeClaim holding uploaded sources (api writes,
+analysis reads): api.sourceStorage.persistentVolumeClaim.existingClaim when
+set, else the chart-rendered <fullname>-sources.
+*/}}
+{{- define "bbm.sourcesClaimName" -}}
+{{- .Values.api.sourceStorage.persistentVolumeClaim.existingClaim | default (include "bbm.componentName" (dict "root" . "component" "sources")) -}}
+{{- end -}}
+
+{{/* Is the shared sources claim in use (vs. the api's per-pod emptyDir)? */}}
+{{- define "bbm.sourcesClaim" -}}
+{{- if .Values.api.sourceStorage.persistentVolumeClaim.enabled }}true{{ end -}}
+{{- end -}}

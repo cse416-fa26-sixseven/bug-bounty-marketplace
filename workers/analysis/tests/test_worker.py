@@ -142,3 +142,32 @@ def test_handle_dispatches_sandbox_jobs(pg_conn, tmp_path, monkeypatch, test_dat
     assert seen == ["poc_a"]
     row = pg_conn.execute("SELECT status, last_error FROM jobs WHERE id = %s", (job.id,)).fetchone()
     assert (row["status"], row["last_error"]) == ("queued", "Docker CLI not found")
+
+
+def test_sandbox_startup_warns_when_the_lease_cannot_outlive_the_job_wait(tmp_path: Path):
+    template = tmp_path / "job.yaml"
+    template.write_text(
+        "kind: Job\nspec:\n  activeDeadlineSeconds: 600\n  template:\n    spec:\n"
+        "      containers: [{name: poc}]\n      volumes: [{name: project, secret: {}}]\n"
+    )
+    base = {
+        "SANDBOX_ENABLED": "true",
+        "SANDBOX_BACKEND": "kubernetes",
+        "SANDBOX_NAMESPACE": "bbm-sandbox",
+        "SANDBOX_JOB_TEMPLATE": str(template),
+    }
+    short = main.sandbox_startup_warnings(Settings.from_env({**base, "JOB_LEASE_SECONDS": "720"}))
+    assert len(short) == 1
+    assert "JOB_LEASE_SECONDS=720" in short[0] and "activeDeadlineSeconds (600)" in short[0]
+    assert "at least 721" in short[0]
+    assert (
+        main.sandbox_startup_warnings(Settings.from_env({**base, "JOB_LEASE_SECONDS": "900"})) == []
+    )
+    # Not the kubernetes backend, sandbox off, or a template the first job will report: quiet.
+    assert (
+        main.sandbox_startup_warnings(Settings.from_env({**base, "SANDBOX_BACKEND": "docker"}))
+        == []
+    )
+    assert main.sandbox_startup_warnings(Settings.from_env({**base, "SANDBOX_ENABLED": ""})) == []
+    missing = {**base, "SANDBOX_JOB_TEMPLATE": str(tmp_path / "nope.yaml")}
+    assert main.sandbox_startup_warnings(Settings.from_env(missing)) == []
