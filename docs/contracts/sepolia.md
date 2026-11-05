@@ -145,11 +145,10 @@ pnpm --filter @bbm/api dev
 ## 3. Run the web app
 
 ```sh
-NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LIVE_CHAIN=enabled \
-  API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
+NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
 ```
 
-(or a `NEXT_PUBLIC_API_MOCKING=disabled` build). Because the chain is not
+(or a `NEXT_PUBLIC_API_MOCKING=disabled` build, the image default). Because the chain is not
 anvil, the app switches to the injected wallet ([web.md](../web.md#wallets)):
 open <http://localhost:3000>, click **Connect wallet**, approve the account,
 let MetaMask switch to Sepolia, and sign the Sign-In with Ethereum message.

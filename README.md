@@ -128,7 +128,8 @@ PoCs are Foundry tests that import the target as `import "../src/<filename>";`
 (see [workers/sandbox](workers/sandbox/README.md)).
 
 In live mode only the pipeline routes are real: upload, contract pages,
-findings, analysis status, the auditor queue, claim and PoC upload. Stake,
+findings, analysis status, the auditor queue, claim, PoC upload and
+developer notes. Stake,
 the auditor profile, disputes, false-positive marking, reclaim/cancel and the
 arbiter stay mocked, so those buttons answer "not found" for real contracts
 and the profile's claimed list shows only seeded contracts; keep the demo to
@@ -142,20 +143,23 @@ contracts with a 60-second challenge window, then starts the API (pointed at
 the deployment through `docker-compose.chain.yml`) and the analysis service
 with the PoC sandbox. It prints the deployment and `GET /api/chain`.
 
-Run the web app in live chain mode against it. `NEXT_PUBLIC_LIVE_CHAIN`
-sends the chain description, sign-in and every lifecycle route (funding,
-cancel, reclaim, profile, disputes, rulings) to the real API. Each role signs
+Run the web app against it with the mocks off
+(`NEXT_PUBLIC_API_MOCKING=disabled`), so every request, from sign-in and
+uploads to funding, disputes and rulings, goes to the real API and nothing
+comes from demo data. Each role signs
 its transactions in the browser with its anvil account (developer, auditor,
 arbiter) and signs in to the API with Sign-In with Ethereum (EIP-4361) when
 you switch roles.
-Without `NEXT_PUBLIC_LIVE_CHAIN` the chain stays mocked, so the app never
-signs anything.
 
 ```sh
 pnpm stack:demo
-NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LIVE_CHAIN=enabled \
-  API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
+NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
 ```
+
+The older mixed mode (`NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled
+NEXT_PUBLIC_LIVE_CHAIN=enabled`) also sends every route the API serves to it,
+but keeps the MSW worker running; without `NEXT_PUBLIC_LIVE_CHAIN` the chain
+stays mocked, so the app never signs anything.
 
 `pnpm demo:lifecycle` runs the whole lifecycle against the demo stack from
 the command line, with cast signing for each role. The payout path is fund,
@@ -164,7 +168,9 @@ withdraw. The dispute path is a second bounty, Verified, disputed, then
 ruled against the auditor, which rejects the finding and slashes half the
 stake. It prints `LIFECYCLE OK` (needs `curl` and `jq`). The same two paths
 run in the browser with
-`E2E_CHAIN=1 pnpm test:e2e -- lifecycle`, against a fresh `pnpm stack:demo`
+`E2E_CHAIN=1 pnpm test:e2e -- lifecycle`, and developer notes, cancelling a
+funded bounty, the false-positive mark and an auditor-reported finding with
+`E2E_CHAIN=1 pnpm test:e2e -- features`, against a fresh `pnpm stack:demo`
 and the web app above.
 
 If a step fails after its transaction went through (for example the API was

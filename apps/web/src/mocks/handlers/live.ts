@@ -1,14 +1,16 @@
 import type { RequestHandler } from "msw";
 
+type LiveRoute = { method: "GET" | "POST" | "PUT"; path: string };
+
 /**
  * Routes served by the real API in live pipeline mode
  * (NEXT_PUBLIC_LIVE_PIPELINE=enabled together with NEXT_PUBLIC_API_MOCKING).
  * Their MSW handlers are dropped, so the request reaches the Next server,
  * whose /api proxy (src/proxy.ts, API_INTERNAL_URL) forwards it to the
  * Fastify API. Everything else (stake, profile, disputes, arbiter, ...) stays
- * mocked.
+ * mocked. NEXT_PUBLIC_API_MOCKING=disabled sends every route to the API.
  */
-export const LIVE_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }> = [
+export const LIVE_ROUTES: ReadonlyArray<LiveRoute> = [
   { method: "POST", path: "/api/contracts" },
   { method: "GET", path: "/api/contracts" },
   { method: "GET", path: "/api/contracts/:id" },
@@ -20,6 +22,9 @@ export const LIVE_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }
   { method: "GET", path: "/api/auditor/queue" },
   { method: "POST", path: "/api/auditor/claim" },
   { method: "POST", path: "/api/auditor/poc" },
+  // Served with the pipeline routes, with or without a chain.
+  { method: "POST", path: "/api/auditor/findings" },
+  { method: "PUT", path: "/api/findings/:id/note" },
 ];
 
 /**
@@ -27,7 +32,7 @@ export const LIVE_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }
  * go to the real API when NEXT_PUBLIC_LIVE_CHAIN=enabled as well, so the
  * pipeline-only live mode keeps working against an API without a chain.
  */
-export const LIVE_CHAIN_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }> = [
+export const LIVE_CHAIN_ROUTES: ReadonlyArray<LiveRoute> = [
   ...LIVE_ROUTES,
   // Only here: a real chain description switches the app to signing
   // transactions, which needs every lifecycle route below to be real too.

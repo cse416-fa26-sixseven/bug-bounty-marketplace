@@ -3,7 +3,7 @@
 # contracts deployed with a 60-second challenge window, the API pointed at
 # them and the analysis service running PoCs in the sandbox.
 #   pnpm stack:demo
-# Then run the web app in live mode (see README "Full lifecycle demo").
+# Then run the web app against it with no mocks (see README "Full lifecycle demo").
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,4 +38,4 @@ echo
 step "GET /api/chain"
 curl -sf http://localhost:3001/api/chain
 echo
-echo "Demo stack ready. Web: NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LIVE_CHAIN=enabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev"
+echo "Demo stack ready. Web: NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev"
