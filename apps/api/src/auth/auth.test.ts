@@ -74,12 +74,38 @@ describe("Sign-In with Ethereum (EIP-4361)", () => {
     expect(parseSiweMessage(message).chainId).toBe(11155111);
   });
 
-  it("uses AUTH_ORIGIN when configured, whatever the request says", async () => {
-    const { nonce, login } = setup({ authConfig: { origin: "https://bountyguard.example", secureCookie: true } });
-    const { message } = await nonce(AUDITOR.address, { origin: "https://evil.example" });
-    expect(parseSiweMessage(message)).toMatchObject({ domain: "bountyguard.example", uri: "https://bountyguard.example" });
-    const res = await login(message, await AUDITOR.signMessage({ message }), {});
-    expect(res.statusCode).toBe(200);
+  it("uses AUTH_ORIGIN when configured, and refuses requests from another site's page", async () => {
+    const SITE = "https://bountyguard.example";
+    const { app, nonce, login } = setup({ authConfig: { origin: SITE, secureCookie: true } });
+    const evil = await app.inject({
+      method: "POST",
+      url: "/api/auth/nonce",
+      payload: { address: AUDITOR.address },
+      headers: { origin: "https://evil.example" },
+    });
+    expect(evil.statusCode).toBe(400);
+
+    // Scripts send no Origin and get the configured one, whatever the Host.
+    const { message } = await nonce(AUDITOR.address, { host: "api:3001" });
+    expect(parseSiweMessage(message)).toMatchObject({ domain: "bountyguard.example", uri: SITE });
+    const signature = await AUDITOR.signMessage({ message });
+    expect((await login(message, signature, { origin: "https://evil.example" })).statusCode).toBe(401);
+    expect((await login(message, signature, { origin: SITE })).statusCode).toBe(200);
+  });
+
+  it("lets only one of two concurrent logins with the same signature through", async () => {
+    const { nonce, login } = setup();
+    const { message } = await nonce(AUDITOR.address);
+    const signature = await AUDITOR.signMessage({ message });
+    const results = await Promise.all([login(message, signature), login(message, signature)]);
+    expect(results.map((r) => r.statusCode).sort()).toEqual([200, 401]);
+  });
+
+  it("keeps the nonce open after a bad signature", async () => {
+    const { nonce, login } = setup();
+    const { message } = await nonce(AUDITOR.address);
+    expect((await login(message, await DEVELOPER.signMessage({ message }))).statusCode).toBe(401);
+    expect((await login(message, await AUDITOR.signMessage({ message }))).statusCode).toBe(200);
   });
 
   it("without an Origin header falls back to Host, and trusts X-Forwarded-Host only from a trusted proxy", async () => {

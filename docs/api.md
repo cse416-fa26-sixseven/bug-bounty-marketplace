@@ -49,7 +49,11 @@ proxy rewrites `Host` to the API's and puts the page's in `X-Forwarded-Host`,
 which is believed only from a `TRUST_PROXY` proxy (Fastify's `request.host`).
 That fallback is for local development: a client can claim any origin, so
 only a fixed `AUTH_ORIGIN` lets the server refuse messages for another site.
-Login also checks that the request comes from the domain the message names.
+With `AUTH_ORIGIN` set, a nonce or login request whose `Origin` header names
+another site is refused (scripts that send no `Origin` get the configured
+one). Without it, login checks that the request comes from the domain the
+message names. A nonce is spent before the signature check is awaited, so two
+concurrent logins with one signature cannot both succeed.
 
 Nonces live in memory for 5 minutes (at most 5 open per address), so sign-in
 needs a single API replica. The session is an HMAC-signed cookie (address and

@@ -67,18 +67,22 @@ export class Auth {
   }
 
   /**
-   * The domain and URI a request signs in for: AUTH_ORIGIN when configured.
+   * The domain and URI a request signs in for: AUTH_ORIGIN when configured
+   * (null when the request's Origin header names another site).
    * Otherwise the browser's Origin header (sent on every POST, and passed on
    * unchanged by the web app's /api proxy), else the Host (X-Forwarded-Host
    * only from a TRUST_PROXY proxy, as Fastify's request.host does).
    */
   originOf(request: FastifyRequest): SignInOrigin | null {
-    if (this.fixedOrigin) return this.fixedOrigin;
     const header = request.headers.origin;
-    if (typeof header === "string" && header !== "null") {
-      const fromHeader = originFromUrl(header);
-      if (fromHeader) return fromHeader;
+    const fromHeader = typeof header === "string" && header !== "null" ? originFromUrl(header) : null;
+    if (this.fixedOrigin) {
+      // A browser on another site sends its own Origin: refuse it. Clients
+      // without one (scripts) get the configured origin.
+      if (fromHeader && fromHeader.uri !== this.fixedOrigin.uri) return null;
+      return this.fixedOrigin;
     }
+    if (fromHeader) return fromHeader;
     return request.host ? originFromUrl(`${request.protocol}://${request.host}`) : null;
   }
 
@@ -161,9 +165,15 @@ export class Auth {
     if (claimedAddress !== undefined && !(isAddress(claimedAddress) && isAddressEqual(claimedAddress, entry.address))) {
       return fail("the message is for another account");
     }
+    // Claim the nonce before awaiting, so two concurrent logins with the same
+    // signed message cannot both pass; give it back if the signature fails.
+    const nonce = parsed.nonce;
+    this.nonces.delete(nonce);
     const valid = await verifyMessage({ address: entry.address, message, signature }).catch(() => false);
-    if (!valid) return fail("the signature does not match the message's address");
-    this.nonces.delete(parsed.nonce);
+    if (!valid) {
+      this.nonces.set(nonce, entry);
+      return fail("the signature does not match the message's address");
+    }
     return { ok: true, address: entry.address, token: this.sign(entry.address) };
   }
 

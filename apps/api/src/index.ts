@@ -68,7 +68,7 @@ const authConfig = loadAuthConfig(process.env);
 if (chainConfig && !authConfig.origin) {
   console.warn("@bbm/api AUTH_ORIGIN is unset: sign-in messages name the domain each request comes from (local dev only)");
 }
-const stakingPort = chainConfig ?createAuditorStakingFromConfig(chainConfig) : null;
+const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
 const bountyEscrowPort = chainConfig ? createBountyEscrowFromConfig(chainConfig) : undefined;
 const actionStore =
