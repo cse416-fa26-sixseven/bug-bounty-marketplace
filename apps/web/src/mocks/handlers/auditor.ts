@@ -1,4 +1,5 @@
 import { http, HttpResponse } from "msw";
+import { POC_SOURCE_MAX_BYTES } from "@bbm/shared";
 import {
   claimContract,
   findAuditorById,
@@ -7,6 +8,7 @@ import {
   postStake,
   profileView,
   reportFinding,
+  reportFindingIssues,
   submitPoc,
   withdrawStake,
 } from "../db/auditors";
@@ -124,14 +126,22 @@ export const auditorHandlers = [
       severity: field("severity"),
       description: field("description"),
     };
+    // Same order and statuses as the API.
+    if (file instanceof File && file.size > POC_SOURCE_MAX_BYTES) {
+      return HttpResponse.json({ error: "PoC file exceeds the 100 KB limit" }, { status: 413 });
+    }
     if (!(file instanceof File) || !auditorId || Object.values(input).some((v) => !v)) {
       return HttpResponse.json(
         { error: "contractId, auditorId, title, severity, description and file are required" },
         { status: 400 },
       );
     }
+    const issues = reportFindingIssues(input, file);
+    if (issues.length > 0) {
+      return HttpResponse.json({ error: "Invalid finding report", issues }, { status: 400 });
+    }
     try {
-      return HttpResponse.json(reportFinding(input, auditorId, file.name), { status: 201 });
+      return HttpResponse.json(reportFinding(input, auditorId, file), { status: 201 });
     } catch (err) {
       return errorResponse(err);
     }

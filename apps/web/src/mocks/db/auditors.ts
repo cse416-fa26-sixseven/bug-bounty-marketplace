@@ -1,6 +1,8 @@
 import {
   AUDITOR_FINDING_DETECTOR,
   AuditorFindingFieldsSchema,
+  PocSourceFilenameSchema,
+  PocSourceSizeSchema,
   compareWei,
   PositiveWeiSchema,
   type AuditorFindingReport,
@@ -251,25 +253,39 @@ export interface ReportFindingInput {
 /** POST /api/auditor/findings: the claiming auditor reports a finding Slither
  * missed, with its PoC. Same checks as submitPoc; the finding starts
  * Submitted and the sandbox resolves it like any other PoC. */
+/** The API's 400 issues for a report: the text fields, then the PoC file
+ * (POST /api/auditor/findings, apps/api/src/pipeline/routes.ts). */
+export function reportFindingIssues(
+  input: ReportFindingInput,
+  file: { name: string; size: number },
+): string[] {
+  return [
+    ...(AuditorFindingFieldsSchema.safeParse(input).error?.issues ?? []),
+    ...(PocSourceFilenameSchema.safeParse(file.name).error?.issues ?? []),
+    ...(PocSourceSizeSchema.safeParse(file.size).error?.issues ?? []),
+  ].map((issue) => issue.message);
+}
+
+/** Same checks, order and statuses as the API: 400 invalid report, 404
+ * unknown contract, 403 no active claim, 403 stake below the demo
+ * requirement. The handler answers 413 for an oversize file before this. */
 export function reportFinding(
   input: ReportFindingInput,
   auditorId: string,
-  testFilename: string,
+  file: { name: string; size: number },
 ): AuditorFindingReport {
-  const parsed = AuditorFindingFieldsSchema.safeParse(input);
-  if (!parsed.success) {
-    throw new MockApiError(400, parsed.error.issues.map((i) => i.message).join("; "));
+  if (reportFindingIssues(input, file).length > 0) {
+    throw new MockApiError(400, "Invalid finding report");
   }
-  const report = parsed.data;
+  const report = AuditorFindingFieldsSchema.parse(input);
   const contract = findContractById(report.contractId);
-  if (!contract) throw new MockApiError(404, `Contract ${report.contractId} not found`);
-  const claim = activeClaimFor(contract.id);
+  if (!contract) throw new MockApiError(404, "Not found");
+  const claim = contract.status === "Claimed" ? activeClaimFor(contract.id) : null;
   if (!claim || claim.auditorId !== auditorId)
     throw new MockApiError(403, "You do not hold an active claim on this contract");
   if (compareWei(findAuditorById(auditorId)?.stake ?? "0", ethToWei("10000")) < 0)
-    throw new MockApiError(400, "Post the required demo stake before submitting a PoC");
-  if (contract.status !== "Claimed" || new Date(contract.deadline).getTime() <= Date.now())
-    throw new MockApiError(400, "This bounty is no longer accepting submissions");
+    throw new MockApiError(403, "Auditor stake is below the required stake");
+  const testFilename = file.name;
 
   const findingId = nextId("finding");
   const at = timestamp();

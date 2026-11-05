@@ -79,7 +79,7 @@ describe("activeSubmissionsFor", () => {
         description: "Anyone can sweep the balance.",
       },
       SEED_AUDITOR_ID,
-      "Sweep.t.sol",
+      { name: "Sweep.t.sol", size: 20 },
     );
     // Even with every claim gone, the Submitted report holds the stake.
     db.claims = {};

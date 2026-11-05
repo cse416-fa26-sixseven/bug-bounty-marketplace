@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetMockDb, cancelAllScheduled } from "@/mocks/db";
-import { developerApi, auditorApi } from "@/lib/api";
+import { POC_SOURCE_MAX_BYTES } from "@bbm/shared";
+import { ApiError, developerApi, auditorApi } from "@/lib/api";
 import { ethToWei } from "@/lib/money";
 
 const SEED_AUDITOR_ID = "auditor_1";
@@ -166,7 +167,7 @@ describe("complete demo bounty lifecycle", () => {
       (await developerApi.listFindings("contract_2")).find((f) => f.id === finding.id)?.status,
     ).toBe("Paid");
   });
-  it("rejects an auditor report without the claim, the stake, or a valid title", async () => {
+  it("rejects an auditor report with the API's statuses", async () => {
     const report = {
       contractId: "contract_2",
       auditorId: SEED_AUDITOR_ID,
@@ -175,20 +176,38 @@ describe("complete demo bounty lifecycle", () => {
       description: "d",
       file: new File(["contract SweepTest {}"], "Sweep.t.sol"),
     };
-    await expect(auditorApi.reportFinding(report)).rejects.toThrow(/stake/);
+    const status = (input: typeof report) =>
+      auditorApi.reportFinding(input).then(
+        () => 201,
+        (err: unknown) => (err instanceof ApiError ? err.status : 0),
+      );
+    // Stake below the demo requirement: 403, as in the API.
+    await expect(auditorApi.reportFinding(report)).rejects.toThrow(
+      "Auditor stake is below the required stake",
+    );
+    expect(await status(report)).toBe(403);
     await auditorApi.postStake({ auditorId: SEED_AUDITOR_ID, amount: ethToWei("5000") });
     await expect(auditorApi.reportFinding({ ...report, auditorId: "auditor_x" })).rejects.toThrow(
       /active claim/,
     );
+    expect(await status({ ...report, auditorId: "auditor_x" })).toBe(403);
+    expect(await status({ ...report, contractId: "contract_1" })).toBe(403);
+    expect(await status({ ...report, contractId: "contract_missing" })).toBe(404);
+    // Field and PoC file validation, from the shared schemas.
     await expect(auditorApi.reportFinding({ ...report, title: "  " })).rejects.toThrow(
-      /Title is required/,
+      "Invalid finding report",
     );
-    await expect(auditorApi.reportFinding({ ...report, contractId: "contract_1" })).rejects.toThrow(
-      /active claim/,
-    );
-    expect((await developerApi.listFindings("contract_2")).some((f) => f.source === "auditor")).toBe(
-      false,
-    );
+    expect(await status({ ...report, file: new File(["c"], "Sweep.sol") })).toBe(400);
+    expect(await status({ ...report, file: new File([], "Sweep.t.sol") })).toBe(400);
+    expect(
+      await status({
+        ...report,
+        file: new File(["a".repeat(POC_SOURCE_MAX_BYTES + 1)], "Big.t.sol"),
+      }),
+    ).toBe(413);
+    expect(
+      (await developerApi.listFindings("contract_2")).some((f) => f.source === "auditor"),
+    ).toBe(false);
   });
   it("does not allow a PoC without the required stake", async () => {
     const finding = (await developerApi.listFindings("contract_2"))[0]!;
