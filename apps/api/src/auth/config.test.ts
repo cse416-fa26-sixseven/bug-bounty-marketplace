@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadAuthConfig } from "./config.js";
+import { checkAuthOrigin, loadAuthConfig } from "./config.js";
 
 describe("loadAuthConfig", () => {
   it("derives the origin per request and sends plain cookies by default", () => {
@@ -20,6 +20,17 @@ describe("loadAuthConfig", () => {
   it("lets COOKIE_SECURE override the default either way", () => {
     expect(loadAuthConfig({ COOKIE_SECURE: "true" }).secureCookie).toBe(true);
     expect(loadAuthConfig({ AUTH_ORIGIN: "https://bountyguard.example", COOKIE_SECURE: "false" }).secureCookie).toBe(false);
+  });
+
+  it("requires AUTH_ORIGIN in production once a chain is configured", () => {
+    const missing = loadAuthConfig({});
+    expect(() => checkAuthOrigin(missing, { NODE_ENV: "production" }, true)).toThrow(/AUTH_ORIGIN/);
+    // Local dev, or no chain (no sign-in): a warning only.
+    expect(checkAuthOrigin(missing, { NODE_ENV: "development" }, true)).toMatch(/AUTH_ORIGIN is unset/);
+    expect(checkAuthOrigin(missing, {}, true)).toMatch(/AUTH_ORIGIN is unset/);
+    expect(checkAuthOrigin(missing, { NODE_ENV: "production" }, false)).toBeNull();
+    const set = loadAuthConfig({ AUTH_ORIGIN: "https://bountyguard.example" });
+    expect(checkAuthOrigin(set, { NODE_ENV: "production" }, true)).toBeNull();
   });
 
   it("rejects an AUTH_ORIGIN that is not a bare http(s) origin", () => {

@@ -78,7 +78,7 @@ is on.
 | `RATE_LIMIT_AUTH_MAX`       | `60`                                     | Requests per minute to each of `POST /api/auth/nonce` and `POST /api/auth/login`.                                                |
 | `TRUST_PROXY`               | unset                                    | Comma-separated proxy IPs/CIDRs whose `X-Forwarded-For` is believed. Helm sets the AKS pod CIDR (the Gateway's pods).            |
 | `SESSION_SECRET`            | unset                                    | HMAC key (16+ characters) for session cookies. Enables sign-in; required with `CHAIN_RPC_URL`.                                   |
-| `AUTH_ORIGIN`               | unset                                    | The web app's public origin, which every SIWE message names. Unset: taken from each request (local dev only, the API warns).     |
+| `AUTH_ORIGIN`               | unset                                    | The web app's public origin, which every SIWE message names. Unset: taken from each request (dev only: warns; with a chain and `NODE_ENV=production` the API refuses to start). The demo stack sets `http://localhost:3000`. |
 | `COOKIE_SECURE`             | `true` if `AUTH_ORIGIN` is `https`       | Marks the session cookie `Secure`. Leave it off for the plain-http local demo.                                                   |
 
 Over a limit the API answers `429` with `Retry-After` and
