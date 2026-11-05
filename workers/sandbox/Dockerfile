@@ -29,7 +29,7 @@ RUN git clone --quiet https://github.com/foundry-rs/forge-std /opt/forge-std \
  && git -C /opt/forge-std checkout --quiet "$FORGE_STD_COMMIT" \
  && rm -rf /opt/forge-std/.git
 
-FROM ghcr.io/foundry-rs/foundry:v1.5.1
+FROM ghcr.io/foundry-rs/foundry:v1.9.0
 COPY --from=fetch /opt/solc /opt/solc
 COPY --from=fetch /opt/forge-std /opt/forge-std
 # The container's root filesystem is read-only at run time; point HOME at
