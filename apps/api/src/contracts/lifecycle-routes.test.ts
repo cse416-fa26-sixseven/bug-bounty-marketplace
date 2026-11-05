@@ -3,7 +3,11 @@ import type { Address, Hex } from "viem";
 import { buildApp } from "../app.js";
 import type { BountyEscrowPort, OnchainBounty } from "../chain/bounty-escrow.js";
 import { onchainId } from "../chain/ids.js";
+import { MemoryChainActionStore } from "../chain/memory-action-store.js";
+import { MemoryPipelineRepository, MemoryStore } from "../pipeline/memory-repository.js";
 import { multipartBody } from "../testing/http.js";
+import { markAnalysed } from "../testing/repository-suite.js";
+import { MemoryContractRepository } from "./memory-repository.js";
 import { AUDITOR, DEVELOPER, signIn } from "../testing/session.js";
 
 const ZERO = `0x${"0".repeat(64)}` as Hex;
@@ -28,10 +32,14 @@ function setup(options: { chainActions?: unknown } = {}) {
         },
     ),
   } satisfies Pick<BountyEscrowPort, "readBounty">;
+  const store = new MemoryStore();
   const app = buildApp({
     sessionSecret: "s",
     bountyEscrow,
     chainActions: options.chainActions as never,
+    repository: new MemoryContractRepository(store),
+    pipeline: new MemoryPipelineRepository(store),
+    findingStatus: new MemoryChainActionStore(store),
   });
   function fundOnChain(contractId: string, state = 1, developer: Address = DEVELOPER.address) {
     bounties.set(onchainId(contractId), {
@@ -45,8 +53,14 @@ function setup(options: { chainActions?: unknown } = {}) {
       frozen: false,
     });
   }
-  async function upload(cookie: string, developerAddress: string = DEVELOPER.address) {
-    return app.inject({
+  /** Uploads a contract; unless `analysed` is false, the worker is taken to
+   * have finished its analysis. */
+  async function upload(
+    cookie: string,
+    developerAddress: string = DEVELOPER.address,
+    analysed = true,
+  ) {
+    const response = await app.inject({
       method: "POST",
       url: "/api/contracts",
       headers: { cookie, ...multipartBody({}).headers },
@@ -55,8 +69,10 @@ function setup(options: { chainActions?: unknown } = {}) {
         { name: "Vault.sol", content: Buffer.from("pragma solidity ^0.8.19; contract V {}") },
       ).payload,
     });
+    if (response.statusCode === 201 && analysed) markAnalysed(store, response.json().id as string);
+    return response;
   }
-  return { app, bounties, fundOnChain, upload };
+  return { app, store, bounties, fundOnChain, upload };
 }
 
 describe("contract lifecycle routes with a chain", () => {
@@ -82,6 +98,26 @@ describe("contract lifecycle routes with a chain", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().id).toBe(id);
     }
+  });
+
+  it("refuses to mark funded until the analysis is done, even when the chain holds it", async () => {
+    const { app, store, upload, fundOnChain } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev, DEVELOPER.address, false)).json().id as string;
+    fundOnChain(id);
+    const funded = () =>
+      app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+
+    const early = await funded();
+    expect(early.statusCode).toBe(409);
+    expect(early.json()).toEqual({ error: "analysis not finished" });
+
+    const job = [...store.jobs.values()].find((j) => j.subjectId === id)!;
+    job.status = "failed";
+    expect((await funded()).statusCode).toBe(409);
+
+    job.status = "done";
+    expect((await funded()).statusCode).toBe(200);
   });
 
   it("refuses to mark funded when the chain does not hold the bounty", async () => {

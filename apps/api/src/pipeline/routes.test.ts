@@ -18,7 +18,7 @@ import { MemoryChainActionStore } from "../chain/memory-action-store.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemorySourceStorage } from "../contracts/storage.js";
 import { multipartBody } from "../testing/http.js";
-import { makeContract, makeFinding } from "../testing/repository-suite.js";
+import { makeContract, makeFinding, markAnalysed } from "../testing/repository-suite.js";
 import { MemoryPipelineRepository, MemoryStore } from "./memory-repository.js";
 import { FixedVerdictSource } from "./verdict-source.js";
 
@@ -49,9 +49,11 @@ function setup(options: SetupOptions = {}) {
   const advance = (seconds: number) => {
     clock.now = new Date(clock.now.getTime() + seconds * 1000);
   };
-  async function seedContract(overrides: Parameters<typeof makeContract>[0] = {}) {
+  /** Seeds a contract; its analysis is finished unless `analysed` is false. */
+  async function seedContract(overrides: Parameters<typeof makeContract>[0] = {}, analysed = true) {
     const record = makeContract(overrides);
     await new MemoryContractRepository(store).insertContract(record);
+    if (analysed) markAnalysed(store, record.contract.id);
     return record;
   }
   function seedFinding(contractId: string, overrides: Parameters<typeof makeFinding>[1] = {}) {
@@ -187,6 +189,18 @@ describe("GET /api/auditor/queue", () => {
     ]);
   });
 
+  it("lists only contracts whose analysis is done", async () => {
+    const { app, seedContract, store } = setup();
+    const done = await seedContract();
+    const pending = await seedContract({}, false);
+    const failed = await seedContract({}, false);
+    store.jobs.get(failed.analysisJob.id)!.status = "failed";
+
+    const ids = ((await app.inject({ url: "/api/auditor/queue" })).json() as Array<{ id: string }>).map((c) => c.id);
+    expect(ids).toEqual([done.contract.id]);
+    expect(ids).not.toContain(pending.contract.id);
+  });
+
   it("rejects an unknown sort with 400", async () => {
     const { app } = setup();
     expect((await app.inject({ url: "/api/auditor/queue?sort=bad" })).statusCode).toBe(400);
@@ -194,6 +208,21 @@ describe("GET /api/auditor/queue", () => {
 });
 
 describe("POST /api/auditor/claim", () => {
+  it("refuses a contract whose analysis is not done with 409, and an unknown one with 404", async () => {
+    const { seedContract, claim, store } = setup();
+    const running = await seedContract({}, false);
+    const failed = await seedContract({}, false);
+    store.jobs.get(failed.analysisJob.id)!.status = "failed";
+
+    for (const { contract } of [running, failed]) {
+      const response = await claim(contract.id, "auditor_1");
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: "analysis not finished" });
+      expect(store.contracts.get(contract.id)?.contract.status).toBe("Open");
+    }
+    expect((await claim("contract_missing", "auditor_1")).statusCode).toBe(404);
+  });
+
   it("claims once, conflicts for a second auditor, then reopens after the claim window", async () => {
     const { seedContract, claim, advance } = setup();
     const { contract } = await seedContract();
@@ -386,6 +415,7 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     const seedContract = async () => {
       const record = makeContract();
       await repository.insertContract(record);
+      markAnalysed(store, record.contract.id);
       return record.contract;
     };
     const claim = (contractId: string, auditorId: string) =>
@@ -559,6 +589,7 @@ describe("POST /api/auditor/claim when the lock and the release both fail", () =
     });
     const record = makeContract();
     await repository.insertContract(record);
+    markAnalysed(store, record.contract.id);
 
     const response = await app.inject({
       method: "POST",

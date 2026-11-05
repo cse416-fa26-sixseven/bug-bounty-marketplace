@@ -57,6 +57,12 @@ export function registerContractLifecycleRoutes(
   app.post<{ Params: { id: string } }>("/api/contracts/:id/funded", async (request, reply) => {
     const contract = await developersContract(request, reply);
     if (!contract) return reply;
+    // Only an analysed contract is fundable: one that failed analysis (it does
+    // not compile) never reaches auditors. A bounty funded on-chain anyway can
+    // still be deleted by the developer.
+    if (!(await contracts.isAnalysisDone(contract.id))) {
+      return reply.code(409).send({ error: "analysis not finished" });
+    }
     const bounty = await contracts.findBounty(contract.id);
     const onchain = await bountyEscrow.readBounty(onchainId(contract.id));
     const matches =

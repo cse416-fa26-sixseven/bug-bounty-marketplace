@@ -8,6 +8,7 @@ import type {
   NewJob,
   PipelineRepository,
 } from "../pipeline/repository.js";
+import type { MemoryStore } from "../pipeline/memory-repository.js";
 
 /** What the shared repository tests need from an implementation. Test-only
  * hooks (seeding findings, failing jobs) stand in for the Python worker. */
@@ -136,6 +137,14 @@ function makePoc(findingId: string): { poc: PoCSubmission; job: NewJob } {
   };
 }
 
+/** Marks a contract's analysis jobs done in a MemoryStore, standing in for the
+ * worker: the queue, claims and funding wait for a finished analysis. */
+export function markAnalysed(store: MemoryStore, contractId: string): void {
+  for (const job of store.jobs.values()) {
+    if (job.kind === "analysis" && job.subjectId === contractId) job.status = "done";
+  }
+}
+
 /** Registers the shared repository behaviour tests for one implementation. */
 export function describeRepositories(
   name: string,
@@ -156,6 +165,14 @@ export function describeRepositories(
     async function insert(overrides: Partial<Contract> = {}) {
       const record = makeContract(overrides);
       await h.contracts.insertContract(record);
+      return record;
+    }
+
+    /** A contract whose analysis job the worker has finished, so it is listed
+     * in the queue. */
+    async function insertAnalysed(overrides: Partial<Contract> = {}) {
+      const record = await insert(overrides);
+      await h.setJobStatus(record.analysisJob.id, "done");
       return record;
     }
 
@@ -276,10 +293,28 @@ export function describeRepositories(
       });
     }
 
+    it("listQueue and isAnalysisDone wait for the latest analysis job to be done", async () => {
+      const queued = await insert();
+      const failed = await insert();
+      await h.setJobStatus(failed.analysisJob.id, "failed", "solc: compilation failed");
+      const running = await insert();
+      await h.setJobStatus(running.analysisJob.id, "running");
+      const done = await insertAnalysed();
+
+      const ids = (await h.contracts.listQueue(T0)).map((c) => c.id);
+      expect(ids).toContain(done.contract.id);
+      for (const record of [queued, failed, running]) {
+        expect(ids).not.toContain(record.contract.id);
+        expect(await h.contracts.isAnalysisDone(record.contract.id)).toBe(false);
+      }
+      expect(await h.contracts.isAnalysisDone(done.contract.id)).toBe(true);
+      expect(await h.contracts.isAnalysisDone("contract_missing")).toBe(false);
+    });
+
     it("listQueue includes Open and expired claims, not active claims, with the bounty", async () => {
-      const open = await insert();
-      const active = await insert();
-      const expired = await insert();
+      const open = await insertAnalysed();
+      const active = await insertAnalysed();
+      const expired = await insertAnalysed();
       await h.contracts.claimContract(active.contract.id, "auditor_1", minutes(30), T0);
       // A different auditor: auditor_1 already holds the active claim above, and
       // one auditor may hold one claim at a time.
@@ -372,8 +407,8 @@ export function describeRepositories(
     });
 
     it("markFunded, fundedOnly queue, findBounty and setContractStatus", async () => {
-      const funded = await insert();
-      const unfunded = await insert();
+      const funded = await insertAnalysed();
+      const unfunded = await insertAnalysed();
       expect((await h.contracts.findBounty(funded.contract.id))?.amount).toBe(funded.bounty.amount);
       expect(await h.contracts.isFunded(funded.contract.id)).toBe(false);
       await h.contracts.markFunded(funded.contract.id, T0);

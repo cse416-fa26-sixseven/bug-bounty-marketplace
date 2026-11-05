@@ -139,6 +139,13 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
             .send({ error: "Could not release the previous claim's on-chain lock; claim not applied" });
         }
       }
+      // Auditors only see analysed contracts, in every mode; a failed analysis
+      // (it does not compile) never becomes claimable.
+      if (!(await contracts.isAnalysisDone(contractId))) {
+        return (await contracts.findContractById(contractId, now))
+          ? reply.code(409).send({ error: "analysis not finished" })
+          : reply.code(404).send({ error: "Not found" });
+      }
       // With a chain, only a bounty confirmed funded on-chain can be claimed:
       // its PoC verdict is recorded on BountyEscrow.
       if (identity && !(await contracts.isFunded(contractId))) {

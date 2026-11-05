@@ -124,6 +124,7 @@ export class MemoryContractRepository implements ContractRepository {
       const contract = this.store.view(stored, now);
       if (contract.status !== "Open" || !lockIsFree(stored.claimLock)) continue;
       if (options.fundedOnly && !this.store.onchainFunded.has(contract.id)) continue;
+      if (!this.analysisDone(contract.id)) continue;
       const bounty = this.store.bounties.get(contract.bountyId);
       items.push({
         ...contract,
@@ -131,6 +132,18 @@ export class MemoryContractRepository implements ContractRepository {
       });
     }
     return items;
+  }
+
+  async isAnalysisDone(contractId: string): Promise<boolean> {
+    return this.analysisDone(contractId);
+  }
+
+  /** Same rule as the Postgres LATEST_ANALYSIS_DONE: the newest analysis job is done. */
+  private analysisDone(contractId: string): boolean {
+    const latest = [...this.store.jobs.values()]
+      .filter((j) => j.kind === "analysis" && j.subjectId === contractId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
+    return latest?.status === "done";
   }
 
   async findActiveClaim(contractId: string, now: Date): Promise<ActiveClaim | null> {
