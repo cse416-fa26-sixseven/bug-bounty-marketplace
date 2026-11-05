@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Finding } from "@bbm/shared";
-import { SEED_AUDITOR_ID, activeSubmissionsFor, cancelAllScheduled, db, resetMockDb } from "@/mocks/db";
+import {
+  SEED_AUDITOR_ID,
+  activeSubmissionsFor,
+  cancelAllScheduled,
+  db,
+  findAuditorById,
+  reportFinding,
+  resetMockDb,
+} from "@/mocks/db";
+import { ethToWei } from "@/lib/money";
 
 const CONTRACT = "contract_lock_test";
 
@@ -58,4 +67,23 @@ describe("activeSubmissionsFor", () => {
       expect(activeSubmissionsFor(SEED_AUDITOR_ID)).toBe(0);
     },
   );
+
+  it("counts an auditor-reported finding past the claim's expiry", () => {
+    // contract_2 is seeded Claimed by the seed auditor (claim on its findings).
+    findAuditorById(SEED_AUDITOR_ID)!.stake = ethToWei("10000");
+    const { finding } = reportFinding(
+      {
+        contractId: "contract_2",
+        title: "Unprotected sweep()",
+        severity: "High",
+        description: "Anyone can sweep the balance.",
+      },
+      SEED_AUDITOR_ID,
+      { name: "Sweep.t.sol", size: 20 },
+    );
+    // Even with every claim gone, the Submitted report holds the stake.
+    db.claims = {};
+    expect(finding.status).toBe("Submitted");
+    expect(activeSubmissionsFor(SEED_AUDITOR_ID)).toBe(1);
+  });
 });

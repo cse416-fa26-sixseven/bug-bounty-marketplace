@@ -5,6 +5,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Finding, FindingSeverity } from "@bbm/shared";
 import { developerApi } from "@/lib/api";
 import { useChainCalls } from "@/lib/chain/use-chain";
+import {
+  FindingDescriptionNote,
+  FindingOriginBadge,
+  findingHeading,
+  isAuditorReported,
+} from "@/components/FindingOrigin";
 
 const SEVERITY_STYLES: Record<FindingSeverity, string> = {
   Critical: "bg-red-500/20 text-red-300 border-red-500/40",
@@ -85,7 +91,8 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
           >
             {finding.severity}
           </span>
-          <span className="text-sm font-medium text-slate-200">{finding.slitherDetector}</span>
+          <span className="text-sm font-medium text-slate-200">{findingHeading(finding)}</span>
+          <FindingOriginBadge finding={finding} />
         </div>
         <div className="text-xs text-slate-400">
           Status: <span className="font-semibold text-slate-200">{finding.status}</span>
@@ -93,8 +100,8 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
         </div>
       </div>
 
-      <p className="mt-3 text-sm text-slate-300">{finding.llmExplanation}</p>
-      <p className="mt-2 text-xs text-slate-500">AI explanation · advisory only</p>
+      <p className="mt-3 whitespace-pre-line text-sm text-slate-300">{finding.llmExplanation}</p>
+      <FindingDescriptionNote finding={finding} />
       <details className="mt-4 text-xs text-slate-400">
         <summary className="text-emerald-300">Finding status history</summary>
         <ol className="mt-3 space-y-2">
@@ -106,36 +113,39 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
         </ol>
       </details>
 
-      <div className="mt-4">
-        <button
-          type="button"
-          onClick={() => setShowRaw((v) => !v)}
-          className="text-xs font-medium text-emerald-400 hover:text-emerald-300"
-        >
-          {showRaw ? "Hide raw Slither output" : "Show raw Slither output"}
-        </button>
-        {showRaw &&
-          (finding.rawOutputReference.startsWith("/api/") ? (
-            <a
-              href={finding.rawOutputReference}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 block text-xs text-emerald-400 underline hover:text-emerald-300"
-            >
-              Open raw Slither JSON<span className="sr-only"> (opens in a new tab)</span>
-            </a>
-          ) : (
-            <div>
-              <p className="mt-2 text-xs text-slate-500">
-                Output reference only. Full Slither output requires the analysis service
-                integration.
-              </p>
-              <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">
-                {finding.rawOutputReference}
-              </pre>
-            </div>
-          ))}
-      </div>
+      {/* Auditor reports have no Slither output: their description is above. */}
+      {!isAuditorReported(finding) && (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setShowRaw((v) => !v)}
+            className="text-xs font-medium text-emerald-400 hover:text-emerald-300"
+          >
+            {showRaw ? "Hide raw Slither output" : "Show raw Slither output"}
+          </button>
+          {showRaw &&
+            (finding.rawOutputReference.startsWith("/api/") ? (
+              <a
+                href={finding.rawOutputReference}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 block text-xs text-emerald-400 underline hover:text-emerald-300"
+              >
+                Open raw Slither JSON<span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            ) : (
+              <div>
+                <p className="mt-2 text-xs text-slate-500">
+                  Output reference only. Full Slither output requires the analysis service
+                  integration.
+                </p>
+                <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">
+                  {finding.rawOutputReference}
+                </pre>
+              </div>
+            ))}
+        </div>
+      )}
 
       {canDispute && (
         <div className="mt-4 border-t border-slate-800 pt-4">

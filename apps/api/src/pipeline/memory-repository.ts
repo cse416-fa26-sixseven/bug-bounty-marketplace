@@ -12,6 +12,7 @@ import type {
   FindingRecord,
   JobKind,
   JobStatus,
+  NewAuditorFindingRecord,
   NewPocRecord,
   PipelineRepository,
   UnappliedVerdict,
@@ -125,6 +126,26 @@ export class MemoryPipelineRepository implements PipelineRepository {
     if (claim?.auditorId !== poc.auditorId) return "no_claim";
     record.status = "Submitted";
     record.statusHistory = [...record.statusHistory, { status: "Submitted", changedAt: now }];
+    this.store.pocs.set(poc.id, { ...poc });
+    this.store.jobs.set(job.id, {
+      ...job,
+      status: "queued",
+      attempts: 0,
+      lastError: null,
+      updatedAt: job.createdAt,
+    });
+    return "ok";
+  }
+
+  async submitAuditorFinding({
+    finding,
+    poc,
+    job,
+    now,
+  }: NewAuditorFindingRecord): Promise<"ok" | "no_claim"> {
+    const claim = this.store.activeClaim(finding.contractId, new Date(now));
+    if (claim?.auditorId !== poc.auditorId) return "no_claim";
+    this.store.findings.set(finding.id, structuredClone(finding));
     this.store.pocs.set(poc.id, { ...poc });
     this.store.jobs.set(job.id, {
       ...job,

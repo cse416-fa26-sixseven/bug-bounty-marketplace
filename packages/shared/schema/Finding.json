@@ -114,6 +114,38 @@
           "type": "null"
         }
       ]
+    },
+    "source": {
+      "default": "slither",
+      "type": "string",
+      "enum": [
+        "slither",
+        "auditor"
+      ]
+    },
+    "title": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reportedByAuditorId": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -128,7 +160,10 @@
     "claimedByAuditorId",
     "claimExpiresAt",
     "isFalsePositive",
-    "challengeWindowExpiresAt"
+    "challengeWindowExpiresAt",
+    "source",
+    "title",
+    "reportedByAuditorId"
   ],
   "additionalProperties": false
 }

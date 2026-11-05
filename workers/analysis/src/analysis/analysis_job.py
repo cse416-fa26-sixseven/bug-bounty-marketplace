@@ -114,6 +114,10 @@ def run_analysis_job(
                 "claimExpiresAt": None,
                 "isFalsePositive": False,
                 "challengeWindowExpiresAt": None,
+                # The findings.source column defaults to 'slither'.
+                "source": "slither",
+                "title": None,
+                "reportedByAuditorId": None,
             }
         )
         conn.execute(
