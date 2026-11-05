@@ -149,6 +149,9 @@ describe("lifecycle flows on the local chain", () => {
     claimedByAuditorId: null,
     claimExpiresAt: null,
     isFalsePositive: false,
+    source: "slither" as const,
+    title: null,
+    reportedByAuditorId: null,
     challengeWindowExpiresAt: new Date(Date.now() + 60_000).toISOString(),
   };
 

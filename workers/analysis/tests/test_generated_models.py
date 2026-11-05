@@ -18,7 +18,24 @@ VALID_FINDING = {
     "claimExpiresAt": None,
     "isFalsePositive": False,
     "challengeWindowExpiresAt": "2026-01-08T00:00:00Z",
+    "source": "slither",
+    "title": None,
+    "reportedByAuditorId": None,
 }
+
+
+def test_auditor_reported_finding_validates() -> None:
+    finding = Finding.model_validate(
+        {
+            **VALID_FINDING,
+            "source": "auditor",
+            "title": "Unprotected sweep()",
+            "reportedByAuditorId": "auditor-1",
+        }
+    )
+    assert finding.source == "auditor"
+    with pytest.raises(ValidationError):
+        Finding.model_validate({**VALID_FINDING, "source": "llm"})
 
 
 def test_finding_round_trips() -> None:

@@ -1,10 +1,12 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { AnalysisStatus, Contract, Finding, PoCSubmission, SandboxStatus } from "@bbm/shared";
 import { PgContractRepository } from "../contracts/pg-repository.js";
 import { toAnalysisJobStatus, toFinding } from "./mapping.js";
 import type {
   FindingRecord,
   JobStatus,
+  NewJob,
+  NewAuditorFindingRecord,
   NewPocRecord,
   PipelineRepository,
   UnappliedVerdict,
@@ -24,11 +26,14 @@ interface FindingRow {
   is_false_positive: boolean;
   challenge_window_expires_at: Date | null;
   created_at: Date;
+  source: FindingRecord["source"];
+  title: string | null;
+  reported_by_auditor_id: string | null;
 }
 
 const FINDING_COLUMNS = `id, contract_id, severity, slither_detector, slither_confidence,
   raw_output_reference, llm_explanation, explanation_source, status, status_history,
-  is_false_positive, challenge_window_expires_at, created_at`;
+  is_false_positive, challenge_window_expires_at, created_at, source, title, reported_by_auditor_id`;
 
 /** Raw output is fetched separately (GET /api/findings/:id/raw), so list
  * queries leave the JSONB column out. */
@@ -48,7 +53,33 @@ function toRecord(row: FindingRow): FindingRecord {
     isFalsePositive: row.is_false_positive,
     challengeWindowExpiresAt: row.challenge_window_expires_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
+    source: row.source,
+    title: row.title,
+    reportedByAuditorId: row.reported_by_auditor_id,
   };
+}
+
+/** Writes a PoC row and its queued sandbox job, inside the caller's transaction. */
+async function insertPocAndJob(client: PoolClient, poc: PoCSubmission, job: NewJob): Promise<void> {
+  await client.query(
+    `INSERT INTO poc_submissions
+       (id, finding_id, auditor_id, test_file_reference, submitted_at, sandbox_status, sandbox_log)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      poc.id,
+      poc.findingId,
+      poc.auditorId,
+      poc.testFileReference,
+      poc.submittedAt,
+      poc.sandboxStatus,
+      poc.sandboxLog,
+    ],
+  );
+  await client.query(
+    `INSERT INTO jobs (id, kind, subject_id, status, attempts, created_at, updated_at)
+     VALUES ($1, $2, $3, 'queued', 0, $4, $4)`,
+    [job.id, job.kind, job.subjectId, job.createdAt],
+  );
 }
 
 export class PgPipelineRepository implements PipelineRepository {
@@ -149,25 +180,67 @@ export class PgPipelineRepository implements PipelineRepository {
         await client.query("ROLLBACK");
         return current.rows[0]?.status === "Flagged" ? "no_claim" : "not_flagged";
       }
+      await insertPocAndJob(client, poc, job);
+      await client.query("COMMIT");
+      return "ok";
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async submitAuditorFinding({
+    finding: f,
+    poc,
+    job,
+    now,
+  }: NewAuditorFindingRecord): Promise<"ok" | "no_claim"> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // The claim check holds a share lock on the contract row until commit,
+      // so the claim cannot be released or replaced between the check and
+      // the inserts.
+      const claimed = await client.query(
+        `SELECT 1 FROM contracts
+          WHERE id = $1 AND status = 'Claimed'
+            AND claimed_by_auditor_id = $2 AND claim_expires_at > $3
+          FOR SHARE`,
+        [f.contractId, poc.auditorId, now],
+      );
+      if (claimed.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return "no_claim";
+      }
       await client.query(
-        `INSERT INTO poc_submissions
-           (id, finding_id, auditor_id, test_file_reference, submitted_at, sandbox_status, sandbox_log)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO findings (id, contract_id, severity, slither_detector, slither_confidence,
+           raw_output, raw_output_reference, llm_explanation, explanation_source, status,
+           status_history, is_false_positive, challenge_window_expires_at, created_at,
+           source, title, reported_by_auditor_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
-          poc.id,
-          poc.findingId,
-          poc.auditorId,
-          poc.testFileReference,
-          poc.submittedAt,
-          poc.sandboxStatus,
-          poc.sandboxLog,
+          f.id,
+          f.contractId,
+          f.severity,
+          f.slitherDetector,
+          f.slitherConfidence,
+          JSON.stringify(f.rawOutput),
+          f.rawOutputReference,
+          f.llmExplanation,
+          f.explanationSource,
+          f.status,
+          JSON.stringify(f.statusHistory),
+          f.isFalsePositive,
+          f.challengeWindowExpiresAt,
+          f.createdAt,
+          f.source,
+          f.title,
+          f.reportedByAuditorId,
         ],
       );
-      await client.query(
-        `INSERT INTO jobs (id, kind, subject_id, status, attempts, created_at, updated_at)
-         VALUES ($1, $2, $3, 'queued', 0, $4, $4)`,
-        [job.id, job.kind, job.subjectId, job.createdAt],
-      );
+      await insertPocAndJob(client, poc, job);
       await client.query("COMMIT");
       return "ok";
     } catch (err) {

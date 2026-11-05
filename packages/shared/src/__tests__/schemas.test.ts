@@ -9,6 +9,9 @@ import {
   ContractSourceSizeSchema,
   ContractSubmissionFieldsSchema,
   DisputeSchema,
+  AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH,
+  AUDITOR_FINDING_TITLE_MAX_LENGTH,
+  AuditorFindingFieldsSchema,
   FindingSchema,
   FindingStatusSchema,
   PoCSubmissionSchema,
@@ -194,6 +197,86 @@ describe("FindingSchema", () => {
       challengeWindowExpiresAt: now,
     };
     expect(FindingSchema.safeParse(verified).success).toBe(true);
+  });
+});
+
+describe("FindingSchema origin", () => {
+  const slither = {
+    id: "finding_1",
+    contractId: "contract_1",
+    severity: "High",
+    slitherDetector: "reentrancy-eth",
+    rawOutputReference: "/api/findings/finding_1/raw",
+    llmExplanation: "Re-entrancy in withdraw().",
+    status: "Flagged",
+  };
+
+  it("defaults a finding without origin fields to a Slither finding", () => {
+    const parsed = FindingSchema.parse(slither);
+    expect(parsed.source).toBe("slither");
+    expect(parsed.title).toBeNull();
+    expect(parsed.reportedByAuditorId).toBeNull();
+  });
+
+  it("accepts an auditor-reported finding", () => {
+    const parsed = FindingSchema.parse({
+      ...slither,
+      slitherDetector: "auditor-reported",
+      source: "auditor",
+      title: "Owner can be front-run",
+      reportedByAuditorId: "auditor_1",
+      status: "Submitted",
+    });
+    expect(parsed.source).toBe("auditor");
+  });
+
+  it("rejects an unknown source", () => {
+    expect(FindingSchema.safeParse({ ...slither, source: "llm" }).success).toBe(false);
+  });
+});
+
+describe("AuditorFindingFieldsSchema", () => {
+  const valid = {
+    contractId: "contract_1",
+    title: "  Missing access control on sweep()  ",
+    severity: "Critical",
+    description: "Anyone can call sweep() and take the balance.",
+  };
+
+  it("accepts and trims a well-formed report", () => {
+    const parsed = AuditorFindingFieldsSchema.parse(valid);
+    expect(parsed.title).toBe("Missing access control on sweep()");
+  });
+
+  it("rejects a blank title or description", () => {
+    expect(AuditorFindingFieldsSchema.safeParse({ ...valid, title: "   " }).success).toBe(false);
+    expect(AuditorFindingFieldsSchema.safeParse({ ...valid, description: "" }).success).toBe(false);
+  });
+
+  it("enforces the title and description length limits", () => {
+    const at = (n: number) => "a".repeat(n);
+    expect(
+      AuditorFindingFieldsSchema.safeParse({ ...valid, title: at(AUDITOR_FINDING_TITLE_MAX_LENGTH) })
+        .success,
+    ).toBe(true);
+    expect(
+      AuditorFindingFieldsSchema.safeParse({
+        ...valid,
+        title: at(AUDITOR_FINDING_TITLE_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      AuditorFindingFieldsSchema.safeParse({
+        ...valid,
+        description: at(AUDITOR_FINDING_DESCRIPTION_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown severity", () => {
+    expect(AuditorFindingFieldsSchema.safeParse({ ...valid, severity: "Severe" }).success).toBe(
+      false,
+    );
   });
 });
 

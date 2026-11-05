@@ -78,8 +78,39 @@ export function makeFinding(
     isFalsePositive: false,
     challengeWindowExpiresAt: null,
     createdAt: T0.toISOString(),
+    source: "slither",
+    title: null,
+    reportedByAuditorId: null,
     ...overrides,
   };
+}
+
+/** An auditor-reported finding as the route builds it: born Submitted. */
+export function makeAuditorFinding(
+  contractId: string,
+  auditorId = "auditor_1",
+  overrides: Partial<FindingRecord> = {},
+): FindingRecord {
+  const report = {
+    title: "Unprotected sweep()",
+    severity: "Critical" as const,
+    description: "Anyone can call sweep() and take the whole balance.",
+  };
+  return makeFinding(contractId, {
+    severity: report.severity,
+    slitherDetector: "auditor-reported",
+    slitherConfidence: "n/a",
+    rawOutput: { source: "auditor", reportedByAuditorId: auditorId, ...report },
+    llmExplanation: report.description,
+    explanationSource: "auditor",
+    status: "Submitted",
+    statusHistory: [{ status: "Submitted", changedAt: minutes(1).toISOString() }],
+    createdAt: minutes(1).toISOString(),
+    source: "auditor",
+    title: report.title,
+    reportedByAuditorId: auditorId,
+    ...overrides,
+  });
 }
 
 function makePoc(findingId: string): { poc: PoCSubmission; job: NewJob } {
@@ -415,6 +446,73 @@ export function describeRepositories(
       expect(await h.jobsFor(second.poc.id)).toEqual([]);
       expect((await h.pipeline.findFinding(finding.id, T0))?.statusHistory).toHaveLength(2);
     });
+
+    it("submitAuditorFinding stores the Submitted finding, its PoC and a sandbox job", async () => {
+      const { contract } = await insert();
+      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      const finding = makeAuditorFinding(contract.id);
+      const { poc, job } = makePoc(finding.id);
+
+      expect(
+        await h.pipeline.submitAuditorFinding({ finding, poc, job, now: poc.submittedAt }),
+      ).toBe("ok");
+
+      const stored = await h.pipeline.findFinding(finding.id, T0);
+      expect(FindingSchema.parse(stored)).toMatchObject({
+        status: "Submitted",
+        source: "auditor",
+        title: "Unprotected sweep()",
+        reportedByAuditorId: "auditor_1",
+        slitherDetector: "auditor-reported",
+        llmExplanation: finding.llmExplanation,
+        claimedByAuditorId: "auditor_1",
+      });
+      expect(stored?.statusHistory).toEqual(finding.statusHistory);
+      expect(await h.pipeline.getRawOutput(finding.id)).toEqual(finding.rawOutput);
+      expect((await h.pipeline.listFindings(contract.id, T0)).map((f) => f.id)).toEqual([
+        finding.id,
+      ]);
+      expect((await h.pipeline.findLatestPoc(finding.id))?.id).toBe(poc.id);
+      expect(await h.jobsFor(poc.id)).toEqual([{ kind: "sandbox", status: "queued" }]);
+
+      // Its verdict is applied like any other PoC's.
+      await h.pipeline.recordVerdict(poc.id, "Passed");
+      expect(
+        (await h.pipeline.listUnappliedVerdicts(100)).filter((v) => v.pocId === poc.id),
+      ).toEqual([{ pocId: poc.id, findingId: finding.id, verdict: "Passed" }]);
+    });
+
+    it("a Slither finding reads back with source slither and no title", async () => {
+      const { contract } = await insert();
+      const finding = makeFinding(contract.id);
+      await h.seedFinding(finding);
+      expect(await h.pipeline.findFinding(finding.id, T0)).toMatchObject({
+        source: "slither",
+        title: null,
+        reportedByAuditorId: null,
+      });
+    });
+
+    for (const [label, claimant, expiresAt] of [
+      ["no claim", null, null],
+      ["another auditor's claim", "auditor_2", minutes(10)],
+      ["an expired claim", "auditor_1", minutes(1)],
+    ] as const) {
+      it(`submitAuditorFinding with ${label} is no_claim and writes nothing`, async () => {
+        const { contract } = await insert();
+        if (claimant && expiresAt) {
+          await h.contracts.claimContract(contract.id, claimant, expiresAt, T0);
+        }
+        const finding = makeAuditorFinding(contract.id);
+        const { poc, job } = makePoc(finding.id); // auditor_1, submitted at T0 + 1 min
+        expect(
+          await h.pipeline.submitAuditorFinding({ finding, poc, job, now: poc.submittedAt }),
+        ).toBe("no_claim");
+        expect(await h.pipeline.findFinding(finding.id, T0)).toBeNull();
+        expect(await h.pipeline.findLatestPoc(finding.id)).toBeNull();
+        expect(await h.jobsFor(poc.id)).toEqual([]);
+      });
+    }
 
     // The claim is re-checked inside the same transaction as the status
     // change, so a claim that lapses (or changes hands) mid-request loses.

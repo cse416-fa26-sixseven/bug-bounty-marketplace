@@ -42,6 +42,9 @@ describe("FindingCard", () => {
       claimedByAuditorId: null,
       claimExpiresAt: null,
       isFalsePositive: false,
+      source: "slither" as const,
+      title: null,
+      reportedByAuditorId: null,
       challengeWindowExpiresAt: null,
     };
 
@@ -90,6 +93,9 @@ describe("FindingCard", () => {
       claimedByAuditorId: null,
       claimExpiresAt: null,
       isFalsePositive: false,
+      source: "slither" as const,
+      title: null,
+      reportedByAuditorId: null,
       challengeWindowExpiresAt: null,
     });
     fireEvent.click(screen.getByText("Show raw Slither output"));

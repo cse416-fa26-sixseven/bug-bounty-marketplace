@@ -57,6 +57,9 @@ function newFindingShell(contractId: string, pick: (typeof DETECTOR_POOL)[number
     claimedByAuditorId: null,
     claimExpiresAt: null,
     isFalsePositive: false,
+    source: "slither",
+    title: null,
+    reportedByAuditorId: null,
     challengeWindowExpiresAt: null,
   };
 }
