@@ -183,8 +183,25 @@ owner=$(az role assignment list --assignee "$ME" --scope "/subscriptions/$SUB" -
 # older checkouts still have subscription_id in bootstrap.tfvars.
 prev_sub=$(lower "$(tfvars_get_string "$BOOT_VARS" subscription_id)")
 [[ -n "$prev_sub" ]] || prev_sub=$(lower "$(cat "$LAST_SUB_FILE" 2>/dev/null || true)")
+switch_msg=""
 if [[ -n "$prev_sub" && "$prev_sub" != "$PLACEHOLDER_GUID" && "$prev_sub" != "$SUB" ]]; then
-  warn "envs/global/bootstrap.tfvars is filled in for subscription $prev_sub, not $SUB (account switch?)"
+  switch_msg="envs/global/bootstrap.tfvars is filled in for subscription $prev_sub, not $SUB (account switch?)"
+elif [[ -z "$prev_sub" ]]; then
+  # No record of the last subscription (fresh clone): the committed state
+  # account must exist in this subscription unless it is still the placeholder.
+  prev_acct=$(tfvars_get_string "$ENVS_DIR/global/backend.hcl" storage_account_name 2>/dev/null || true)
+  if [[ -n "$prev_acct" && "$prev_acct" != "stbbmtfstate$PLACEHOLDER_SUFFIX" ]]; then
+    if acct_err=$(az storage account show -n "$prev_acct" --query id -o tsv 2>&1 >/dev/null); then
+      :
+    elif grep -qiE 'not ?found' <<<"$acct_err"; then
+      switch_msg="envs/** points at state account $prev_acct, which is not in subscription $SUB (account switch?)"
+    else
+      warn "could not check whether state account $prev_acct is in this subscription: $acct_err"
+    fi
+  fi
+fi
+if [[ -n "$switch_msg" ]]; then
+  warn "$switch_msg"
   warn "its object ids, suffix and state account belong to that subscription/tenant; bootstrap would fail with them"
   if confirm "Reset the per-tenant tfvars fields to placeholders first?"; then
     reset_tenant_fields

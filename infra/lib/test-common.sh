@@ -41,7 +41,7 @@ eq() { # eq <name> <got> <want>
 make_tree() {
   local dst=$1
   mkdir -p "$dst"
-  (cd "$repo/infra/terraform" && tar --exclude=.terraform -cf - scripts envs stacks/bootstrap modules/naming) | (cd "$dst" && tar -xf -)
+  (cd "$repo/infra/terraform" && tar --exclude=.terraform --exclude=.last-subscription -cf - scripts envs stacks/bootstrap modules/naming) | (cd "$dst" && tar -xf -)
   local b="$dst/envs/global/bootstrap.tfvars" g="$dst/envs/global/global.tfvars"
   grep -q '^dns_zone_name' "$b" || printf '\ndns_zone_name = "" # set by infra/up.sh\n' >>"$b"
   if ! grep -qF '# >>> bootstrap hint' "$g"; then
@@ -427,7 +427,12 @@ case "$1 $2" in
     n=""; prev=""
     for a in "$@"; do [[ "$prev" == -n ]] && n=$a; prev=$a; done
     if [[ -n "$n" && "$n" == "${BBM_TEST_GROUP_EXISTS:-}" ]]; then echo true; else echo false; fi ;;
-  "storage account") echo "stbbmtfstateab12" ;;
+  "storage account")
+    if [[ "${3:-}" == show && -n "${BBM_TEST_ACCT_MISSING:-}" ]]; then
+      echo "ERROR: (ResourceNotFound) The storage account was not found." >&2
+      exit 3
+    fi
+    echo "stbbmtfstateab12" ;;
   "group list")
     [[ -z "${BBM_TEST_GROUP_LIST_FAIL:-}" ]] || exit 1
     # only the groups whose name starts with the queried prefix
@@ -755,6 +760,23 @@ if setsid -w true 2>/dev/null; then # no controlling terminal and no --yes: refu
 else
   echo "  skip tenant-mismatch no-tty check (no setsid -w)"
 fi
+# fresh clone: no last-subscription record, but envs/** names a state account
+# that this subscription does not have
+TREE9="$T/tree9"
+make_tree "$TREE9"
+BBM_TF_ROOT="$TREE9" tfvars_set "$TREE9/envs/global/backend.hcl" storage_account_name '"stbbmtfstatezz99"' 2>/dev/null
+if BBM_TEST_ACCT_MISSING=1 RUN_TREE="$TREE9" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then
+  ok_ "up: unknown state account --yes --dry-run exits 0"
+else
+  bad "up: unknown state account --yes --dry-run exits 0"
+  sed 's/^/      /' "$T/out"
+fi
+out=$(cat "$T/out")
+has "up: unknown state account warned" "points at state account stbbmtfstatezz99, which is not in subscription $SUB"
+has "up: unknown state account offers the reset" 'storage_account_name = "stbbmtfstate0000" (was "stbbmtfstatezz99")'
+if RUN_TREE="$TREE9" run_script up.sh --subscription "$SUB" --zone bbm.example.com --yes --dry-run; then :; fi
+hasnt_out() { if grep -qF -- "$2" "$T/out"; then bad "$1"; else ok_ "$1"; fi; }
+hasnt_out "up: existing state account is not a switch" "points at state account"
 check_fails "up: bad env name" run_script up.sh --subscription "$SUB" --envs dev --dry-run
 check "up: --help" run_script up.sh --help
 if grep -qi 'one-command' "$T/out"; then ok_ "up: --help prints usage"; else bad "up: --help prints usage"; fi

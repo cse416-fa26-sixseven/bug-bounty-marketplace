@@ -152,6 +152,31 @@ resolves.
 4. Deploy: wait for a green `integration-azure.yml` run on `main`, then run `deploy.yml` with its
    `sha-<7>` tag (section 13).
 
+## Side by side: new account first, old one after
+
+To keep an environment running during the move, bring the new account up before tearing the old
+one down. Names that must be globally unique differ (random suffix, region in the PostgreSQL
+name) and the two tenants have separate `gh-bbm-*` apps. Three things are shared:
+
+1. **Keep the old values.** `up.sh` overwrites the old account's suffix, object IDs and state
+   account in `envs/**`, and `down.sh` needs them. Before bringing up the new account, keep a
+   checkout of the current commit: `git worktree add ../bbm-old HEAD`.
+2. **Bring up the new account** from the main checkout (sections 2 to 6, with
+   `CLOUDFLARE_API_TOKEN` set). `up.sh` replaces the NS records, so DNS moves to the new account
+   here, and it points the GitHub variables and Environments at the new account.
+3. **Tear down the old account** from `../bbm-old`, after the new one is verified:
+
+   ```sh
+   unset CLOUDFLARE_API_TOKEN     # it would delete the NEW Azure NS records for the zone
+   az account set -s <old-guid>
+   infra/down.sh --subscription <old-guid> --all --keep-github --dry-run   # review
+   infra/down.sh --subscription <old-guid> --all --keep-github
+   git worktree remove ../bbm-old
+   ```
+
+   `--keep-github` matters: without it `down.sh` deletes the variables and Environments the new
+   account just set.
+
 ## Changing only the domain
 
 Same subscription, new zone: run `up.sh --subscription <guid> --zone <new-zone>`. It warns that the
