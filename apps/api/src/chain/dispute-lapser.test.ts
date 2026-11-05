@@ -112,6 +112,16 @@ describe("runLapsesOnce", () => {
     expect((await disputes.listLapseCandidates(at(CHAIN_NOW))).map((c) => c.id)).toEqual(["dispute_2"]);
   });
 
+  it("waits while the ruling window ends exactly at the latest block", async () => {
+    // lapse() needs block.timestamp > ruleBy; the latest block is not past it yet.
+    const disputes = new MemoryDisputeRepository();
+    await disputes.create(dispute(1));
+    const chain = fakeChain({ finding_1: { ruleBy: CHAIN_NOW } });
+
+    await expect(runLapsesOnce({ disputes, disputeResolution: chain })).resolves.toMatchObject({ lapsed: 0, failed: 0 });
+    expect(chain.lapse).not.toHaveBeenCalled();
+  });
+
   it("skips a dispute that does not exist on-chain or is already resolved", async () => {
     const disputes = new MemoryDisputeRepository();
     await disputes.create({ ...dispute(1), ruleBy: at(CHAIN_NOW - 1n) });
