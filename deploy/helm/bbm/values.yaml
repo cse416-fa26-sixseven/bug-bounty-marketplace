@@ -66,6 +66,9 @@ azure:
   storageAccountName: ""
   # -- Blob endpoint, e.g. https://stbbmstgxxxx.blob.core.windows.net/
   storageBlobEndpoint: ""
+  # -- Blob container holding uploaded sources (sourceStorage.provider=blob).
+  # Fixed by infra/terraform/modules/naming (not part of helm_values).
+  storageContainerName: sources
   # -- Storage queue consumed by the analysis worker.
   queueName: analysis-jobs
 
@@ -112,6 +115,18 @@ secrets:
 serviceAccounts:
   # -- Extra annotations for every ServiceAccount created by the chart.
   annotations: {}
+
+# Where uploaded Solidity sources (and auditors' PoCs) are kept. The api
+# writes them; the analysis worker reads them.
+sourceStorage:
+  # -- `local`: a per-pod emptyDir on the api (api.sourceStorage.*). Fine for
+  #    kind/CI/test namespaces, but it pins the api to one replica and the
+  #    worker cannot see it, so analysis never completes a job.
+  #    `blob`: the env storage account's container (azure.storageBlobEndpoint
+  #    + azure.storageContainerName), reached with workload identity (api:
+  #    Storage Blob Data Contributor, worker: Storage Blob Data Reader, both
+  #    granted by the terraform data stack). Staging/prod.
+  provider: local
 
 web:
   # -- Replica count when web.hpa.enabled is false.
@@ -161,8 +176,9 @@ web:
   topologySpread: true
 
 api:
-  # -- Replica count when api.hpa.enabled is false. Keep at 1 until the Blob
-  # storage adapter lands: uploads live on a per-pod emptyDir.
+  # -- Replica count when api.hpa.enabled is false. With
+  # sourceStorage.provider=local keep it at 1: uploads live on a per-pod
+  # emptyDir.
   replicaCount: 1
   image:
     repository: bbm/api
@@ -188,7 +204,7 @@ api:
     # Counters are per pod. Forced off behind the Gateway while
     # ingress.trustedProxyCidr is empty.
     enabled: true
-  # -- SOURCE_STORAGE_DIR, backed by an emptyDir.
+  # -- SOURCE_STORAGE_DIR, backed by an emptyDir (sourceStorage.provider=local only).
   sourceStorage:
     path: /data/sources
     sizeLimit: 1Gi
@@ -210,10 +226,11 @@ api:
     enabled: false
     minAvailable: 1
   # -- Deployment strategy, used verbatim when non-empty. Empty = automatic:
-  # when at most one api replica can run (hpa.maxReplicas, or replicaCount
-  # without HPA, <= 1) use RollingUpdate maxSurge 0 / maxUnavailable 1, so a
-  # rollout never runs a second pod with its own per-pod upload emptyDir
-  # (brief downtime instead); otherwise the Kubernetes default.
+  # with sourceStorage.provider=local, when at most one api replica can run
+  # (hpa.maxReplicas, or replicaCount without HPA, <= 1) use RollingUpdate
+  # maxSurge 0 / maxUnavailable 1, so a rollout never runs a second pod with
+  # its own per-pod upload emptyDir (brief downtime instead); otherwise the
+  # Kubernetes default.
   strategy: {}
   extraEnv: []
   podAnnotations: {}
@@ -238,8 +255,14 @@ migrations:
       memory: 256Mi
 
 analysis:
-  # -- Deploy the Python analysis worker (port 8000, /health).
+  # -- Deploy the Python analysis worker (port 8000, /health). It polls the
+  # `jobs` table of the api's database (DATABASE_URL from the same secret
+  # source as the api) and reads sources from sourceStorage; with
+  # sourceStorage.provider=local it has nothing to read and its poller stays
+  # off.
   enabled: false
+  # -- Fixed replica count (used when keda.enabled is false). Each replica
+  # runs WORKER_CONCURRENCY (default 2) jobs at once.
   replicaCount: 1
   image:
     repository: bbm/analysis
@@ -267,7 +290,9 @@ analysis:
   keda:
     # -- Scale the worker with a KEDA ScaledObject on the Azure Storage Queue
     # (azure-queue trigger, workload identity auth). Requires KEDA (AKS add-on)
-    # and drops spec.replicas from the Deployment.
+    # and drops spec.replicas from the Deployment. Jobs currently flow through
+    # the Postgres `jobs` table and nothing writes to the queue, so leave this
+    # off (fixed replicaCount) until the scaler targets the jobs table.
     enabled: false
     minReplicaCount: 0
     maxReplicaCount: 3

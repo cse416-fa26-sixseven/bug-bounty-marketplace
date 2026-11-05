@@ -2,6 +2,7 @@
 {{- $v := .Values.analysis -}}
 {{- $name := include "bbm.componentName" (dict "root" $ "component" "analysis") -}}
 {{- $csi := include "bbm.csi" . -}}
+{{- $blob := include "bbm.blobSources" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,6 +53,18 @@ spec:
           env:
             - name: PORT
               value: {{ $v.port | quote }}
+            {{- /* The poller needs the api's database (jobs table, contracts,
+            findings) and the sources the api wrote. With local storage it
+            has neither URL nor directory and stays off. */}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbm.analysisSecretName" . }}
+                  key: database-url
+            {{- if $blob }}
+            - name: SOURCE_STORAGE_BLOB_CONTAINER_URL
+              value: {{ include "bbm.sourceContainerUrl" . | quote }}
+            {{- end }}
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:

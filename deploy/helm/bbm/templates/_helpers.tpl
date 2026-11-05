@@ -76,6 +76,21 @@ Usage:
 {{- end -}}
 {{- end -}}
 
+{{/* Are uploaded sources kept in the Blob container? */}}
+{{- define "bbm.blobSources" -}}
+{{- if eq .Values.sourceStorage.provider "blob" }}true{{ end -}}
+{{- end -}}
+
+{{/*
+SOURCE_STORAGE_BLOB_CONTAINER_URL for the api and the analysis worker:
+<azure.storageBlobEndpoint>/<azure.storageContainerName>. The endpoint
+comes from values-infra.yaml, so it is required at deploy time.
+*/}}
+{{- define "bbm.sourceContainerUrl" -}}
+{{- $_ := include "bbm.requireInfra" (dict "root" . "key" "azure.storageBlobEndpoint" "value" .Values.azure.storageBlobEndpoint) -}}
+{{- printf "%s/%s" (trimSuffix "/" .Values.azure.storageBlobEndpoint) .Values.azure.storageContainerName -}}
+{{- end -}}
+
 {{/* Is the CSI secret provider in use? */}}
 {{- define "bbm.csi" -}}
 {{- if eq .Values.secrets.provider "csi" }}true{{ end -}}

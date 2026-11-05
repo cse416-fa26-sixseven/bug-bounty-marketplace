@@ -36,11 +36,15 @@ web:
   pdb:
     enabled: false
 
+# Uploaded sources go to the env storage account's `sources` container
+# (values-infra.yaml carries the endpoint), so the api and the analysis
+# worker share them and the api is no longer tied to one replica.
+sourceStorage:
+  provider: blob
+
 api:
   hpa:
-    # Pinned to exactly one replica until the Blob storage adapter lands:
-    # uploaded sources live on a per-pod emptyDir (SOURCE_STORAGE_DIR), so a
-    # second replica would not see files uploaded to the first.
+    # One replica is plenty for staging; with Blob storage it may be raised.
     enabled: true
     minReplicas: 1
     maxReplicas: 1
@@ -63,9 +67,12 @@ networkPolicy:
   # postgresCidr: from values-infra.yaml
 
 analysis:
-  # Off until sources are shared with the API (Blob storage adapter, see
-  # docs/devops/architecture.md "Known gaps"); the LLM settings are ready.
-  enabled: false
+  # Polls the jobs table (DATABASE_URL and llm-api-key from Key Vault via
+  # SecretProviderClass bbm-kv-analysis) and reads sources from the Blob
+  # container. One fixed replica (2 jobs at a time); KEDA stays off because
+  # nothing writes to the Storage queue it would scale on.
+  enabled: true
+  replicaCount: 1
   # LLM for finding explanations (OpenAI-compatible). The key comes from Key
   # Vault (llm-api-key); without it the worker falls back to Slither's text.
   extraEnv:

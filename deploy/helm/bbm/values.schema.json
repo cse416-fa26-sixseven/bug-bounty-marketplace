@@ -104,6 +104,10 @@
         },
         "queueName": {
           "type": "string"
+        },
+        "storageContainerName": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -204,6 +208,22 @@
         }
       },
       "additionalProperties": true
+    },
+    "sourceStorage": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "local",
+            "blob"
+          ]
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "additionalProperties": false
     },
     "web": {
       "type": "object",

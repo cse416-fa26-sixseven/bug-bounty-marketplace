@@ -12,7 +12,7 @@ for everything, plus per component:
   api        -> Postgres (5432 to postgresCidr and/or the in-cluster postgres
                 pods), HTTPS 443 anywhere (Entra, Storage)
   web        -> api
-  analysis   -> HTTPS 443 anywhere
+  analysis   -> Postgres (jobs table), HTTPS 443 anywhere (Blob, LLM, Entra)
   migrations -> Postgres
   test       -> web, api
 */ -}}
@@ -107,6 +107,11 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "bbm.selectorLabels" (dict "root" $ "component" "migrations") | nindent 14 }}
+        {{- if .Values.analysis.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "bbm.selectorLabels" (dict "root" $ "component" "analysis") | nindent 14 }}
+        {{- end }}
       ports:
         - port: 5432
           protocol: TCP
@@ -218,6 +223,7 @@ spec:
   policyTypes:
     - Egress
   egress:
+    {{- include "bbm.postgresEgressRules" $ | nindent 4 }}
     - ports:
         - port: 443
           protocol: TCP

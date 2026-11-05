@@ -1,6 +1,7 @@
 {{- $v := .Values.api -}}
 {{- $name := include "bbm.componentName" (dict "root" $ "component" "api") -}}
 {{- $csi := include "bbm.csi" . -}}
+{{- $blob := include "bbm.blobSources" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,17 +14,18 @@ spec:
   replicas: {{ $v.replicaCount }}
   {{- end }}
   {{- /*
-  With a single replica, a surge pod would get its own empty upload
-  emptyDir (SOURCE_STORAGE_DIR) while the old pod still serves, and the HPA
-  max of 1 would be exceeded during rollouts. Default to replace-in-place
-  (maxSurge 0 / maxUnavailable 1) whenever at most one api replica can run;
-  api.strategy overrides this verbatim.
+  With local source storage and a single replica, a surge pod would get its
+  own empty upload emptyDir (SOURCE_STORAGE_DIR) while the old pod still
+  serves, and the HPA max of 1 would be exceeded during rollouts. Default to
+  replace-in-place (maxSurge 0 / maxUnavailable 1) whenever at most one api
+  replica can run; api.strategy overrides this verbatim. With Blob storage
+  the pods share nothing, so the Kubernetes default applies.
   */}}
   {{- $maxReplicas := ternary $v.hpa.maxReplicas $v.replicaCount $v.hpa.enabled | int }}
   {{- if $v.strategy }}
   strategy:
     {{- toYaml $v.strategy | nindent 4 }}
-  {{- else if le $maxReplicas 1 }}
+  {{- else if and (not $blob) (le $maxReplicas 1) }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -73,8 +75,14 @@ spec:
               value: {{ ternary "false" (toString $v.migrateOnBoot) .Values.migrations.enabled | quote }}
             - name: PG_POOL_MAX
               value: {{ $v.pgPoolMax | quote }}
+            {{- /* The api image sets SOURCE_STORAGE_DIR; the container URL wins over it. */}}
+            {{- if $blob }}
+            - name: SOURCE_STORAGE_BLOB_CONTAINER_URL
+              value: {{ include "bbm.sourceContainerUrl" . | quote }}
+            {{- else }}
             - name: SOURCE_STORAGE_DIR
               value: {{ $v.sourceStorage.path | quote }}
+            {{- end }}
             {{- /* Behind the Gateway without its pod CIDR the api would see
             only the Envoy pods' IPs, so every user would share one limit:
             leave limiting off until values-infra carries the CIDR. */}}
@@ -133,8 +141,10 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if not $blob }}
             - name: sources
               mountPath: {{ $v.sourceStorage.path }}
+            {{- end }}
             {{- if $csi }}
             - name: secrets-store
               mountPath: {{ .Values.secrets.csi.mountPath }}
@@ -143,9 +153,11 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if not $blob }}
         - name: sources
           emptyDir:
             sizeLimit: {{ $v.sourceStorage.sizeLimit }}
+        {{- end }}
         {{- if $csi }}
         {{- include "bbm.csiVolume" (dict "spc" .Values.secrets.csi.secretProviderClassName) | nindent 8 }}
         {{- end }}
