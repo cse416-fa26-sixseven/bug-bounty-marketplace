@@ -223,7 +223,7 @@ jobs:
           touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # "--" separators: a "digests-web-*" pattern would also match web-mocked.
           name: digests--${{ matrix.id }}--${{ matrix.arch }}
