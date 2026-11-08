@@ -86,6 +86,36 @@ E2E_CHAIN=1 pnpm test:e2e -- lifecycle features   # about 6 minutes
 pnpm demo:lifecycle            # the same two paths from the command line; prints LIFECYCLE OK
 ```
 
+### Demo video (manual)
+
+`demo/record.ts` records the same lifecycle as a silent demo video against a
+deployment whose API runs on a public chain (prod on Sepolia by default; see
+`docs/contracts/sepolia.md`). Each role is a headless wallet: the page sees a
+`window.ethereum` that signs with a private key from the environment, so there
+are no wallet pop-ups to click through, and a caption bar names each step.
+Every scene is its own clip; the waits (analysis, sandbox verdict, the
+challenge window) happen off camera and ffmpeg joins the clips into
+`demo/out/demo.mp4`. Install ffmpeg (`apt`/`brew install ffmpeg`): the copy
+Playwright ships can record but not join, and without H.264 the result is a
+stream-copied `demo.webm` instead.
+
+Keys never go in git or on the command line; export them from a file or a
+vault. The developer account pays the bounty (`DEMO_BOUNTY_ETH`, default 0.001)
+plus gas, the auditor account the 0.1 ETH stake (once) plus gas. The optional
+dispute path also needs the deployment's arbiter key.
+
+```sh
+export DEMO_DEVELOPER_KEY="$(cat ~/secrets/demo-developer.key)"
+export DEMO_AUDITOR_KEY="$(cat ~/secrets/demo-auditor.key)"
+DEMO_DRY=1 pnpm --filter @bbm/system-tests demo    # connect and sign in only: checks wallet, captions, video
+pnpm --filter @bbm/system-tests demo               # payout path; about 15 minutes, mostly the 10-minute window
+DEMO_DISPUTE=1 DEMO_ARBITER_KEY=... pnpm --filter @bbm/system-tests demo   # adds the dispute path
+```
+
+`BBM_WEB_URL` picks another deployment, `DEMO_OUT` another output directory,
+`DEMO_SLOWMO` the pause added to every action (ms). A run leaves real rows and
+transactions behind, so use test ETH only.
+
 ### Environment variables
 
 The defaults match the compose ports, so you only set these to target
