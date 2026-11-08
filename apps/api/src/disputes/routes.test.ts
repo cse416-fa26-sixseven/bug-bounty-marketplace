@@ -242,6 +242,17 @@ describe("disputes", () => {
       (await app.inject({ method: "GET", url: "/api/arbiter/disputes", headers: { cookie: dev } }))
         .statusCode,
     ).toBe(200);
+    // Reading is open to any session; ruling is still the arbiter's alone.
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/arbiter/disputes/${disputeId}/rule`,
+          headers: { cookie: dev },
+          payload: { ruling: "AgainstAuditor" },
+        })
+      ).statusCode,
+    ).toBe(403);
     const arbiter = await signIn(app, ARBITER);
     const list = await app.inject({
       method: "GET",
