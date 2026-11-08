@@ -144,8 +144,10 @@ export function registerFindingLifecycleRoutes(
     },
   );
 
+  // Any signed-in account may read the list (developers and auditors follow
+  // their own disputes here); only the arbiter may rule, below.
   app.get<{ Querystring: { ruling?: string } }>("/api/arbiter/disputes", async (request, reply) => {
-    if (!requireArbiter(request, reply)) return reply;
+    if (!auth.requireSession(request, reply)) return reply;
     const parsed = DisputeRulingSchema.safeParse(request.query.ruling);
     const list = await disputes.list(parsed.success ? parsed.data : undefined);
     return Promise.all(
@@ -219,7 +221,10 @@ export function registerFindingLifecycleRoutes(
   ): Promise<void> {
     if (ruling !== "AgainstAuditor") return;
     await deps.chainActions?.applyDisputeResolved(findingId).catch((err: unknown) => {
-      request.log.error({ err, findingId }, "applyDisputeResolved failed; the expiry sweep will release it");
+      request.log.error(
+        { err, findingId },
+        "applyDisputeResolved failed; the expiry sweep will release it",
+      );
     });
   }
 

@@ -222,7 +222,7 @@ describe("disputes", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it("lists disputes for the arbiter only, and rules once the chain has ruled", async () => {
+  it("lists disputes for any signed-in account, and the arbiter rules once the chain has ruled", async () => {
     const { app, seed, openOnChain, store, chainActions } = setup();
     const { contractId, findingId } = await seed("Verified");
     openOnChain(contractId, findingId);
@@ -235,10 +235,13 @@ describe("disputes", () => {
     });
     const disputeId = opened.json().id as string;
 
+    expect((await app.inject({ method: "GET", url: "/api/arbiter/disputes" })).statusCode).toBe(
+      401,
+    );
     expect(
       (await app.inject({ method: "GET", url: "/api/arbiter/disputes", headers: { cookie: dev } }))
         .statusCode,
-    ).toBe(403);
+    ).toBe(200);
     const arbiter = await signIn(app, ARBITER);
     const list = await app.inject({
       method: "GET",
