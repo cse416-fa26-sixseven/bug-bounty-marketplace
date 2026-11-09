@@ -190,7 +190,7 @@ jobs:
 
       - name: Setup pnpm
         if: inputs.action == 'resume' && inputs.env != 'test'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
         if: inputs.action == 'resume' && inputs.env != 'test'
