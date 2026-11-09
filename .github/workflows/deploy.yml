@@ -335,7 +335,7 @@ jobs:
 
       - name: Setup Terraform
         if: steps.gate.outputs.go == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
