@@ -10,6 +10,11 @@ out/
 .env.*
 !.env.example
 coverage/
+# Test reports (JUnit XML, coverage) written by CI runs; see docs/testing/README.md
+reports/
+lcov.info
+.coverage
+coverage.xml
 *.log
 npm-debug.log*
 pnpm-debug.log*
