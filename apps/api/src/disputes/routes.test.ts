@@ -346,3 +346,198 @@ describe("disputes", () => {
     expect(chainActions.applyDisputeResolved).not.toHaveBeenCalled();
   });
 });
+
+describe("finding lifecycle route edge cases", () => {
+  /** Opens a dispute through the route and returns its id. */
+  async function openDispute(ctx: ReturnType<typeof setup>) {
+    const { contractId, findingId } = await ctx.seed("Verified");
+    ctx.openOnChain(contractId, findingId);
+    const opened = await ctx.app.inject({
+      method: "POST",
+      url: `/api/findings/${findingId}/dispute`,
+      headers: { cookie: await signIn(ctx.app, DEVELOPER) },
+      payload: { reason: "bad PoC" },
+    });
+    expect(opened.statusCode).toBe(201);
+    return { contractId, findingId, disputeId: opened.json().id as string };
+  }
+
+  it("GET /api/auditor/profile is 401 without a session", async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: "GET", url: "/api/auditor/profile" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("POST /api/findings/:id/false-positive is 404 for an unknown finding", async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/findings/finding_missing/false-positive",
+      headers: { cookie: await signIn(app, AUDITOR) },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Finding not found" });
+  });
+
+  it.each([
+    ["no body", undefined],
+    ["missing reason", {}],
+    ["blank reason", { reason: "   " }],
+    ["non-string reason", { reason: 42 }],
+  ])("POST /api/findings/:id/dispute is 400 with %s", async (_label, payload) => {
+    const { app, seed, openOnChain, store } = setup();
+    const { contractId, findingId } = await seed("Verified");
+    openOnChain(contractId, findingId);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/findings/${findingId}/dispute`,
+      headers: { cookie: await signIn(app, DEVELOPER) },
+      ...(payload !== undefined ? { payload } : {}),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "reason is required" });
+    expect(store.findings.get(findingId)?.status).toBe("Verified");
+  });
+
+  it("POST /api/findings/:id/dispute is 404 for an unknown finding", async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/findings/finding_missing/dispute",
+      headers: { cookie: await signIn(app, DEVELOPER) },
+      payload: { reason: "bad PoC" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Finding not found" });
+  });
+
+  it("GET /api/arbiter/disputes filters by ForAuditor / AgainstAuditor and ignores an invalid ruling", async () => {
+    const ctx = setup();
+    const { app, disputes } = ctx;
+    const pending = await openDispute(ctx);
+    const forAuditor = await openDispute(ctx);
+    const against = await openDispute(ctx);
+    await disputes.setRuling(forAuditor.disputeId, "ForAuditor", ARBITER.address, T0);
+    await disputes.setRuling(against.disputeId, "AgainstAuditor", ARBITER.address, T0);
+
+    const cookie = await signIn(app, ARBITER);
+    const ids = async (query: string) => {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/arbiter/disputes${query}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as Array<{ id: string }>).map((d) => d.id).sort();
+    };
+
+    expect(await ids("?ruling=ForAuditor")).toEqual([forAuditor.disputeId]);
+    expect(await ids("?ruling=AgainstAuditor")).toEqual([against.disputeId]);
+    expect(await ids("?ruling=Pending")).toEqual([pending.disputeId]);
+    const all = [pending.disputeId, forAuditor.disputeId, against.disputeId].sort();
+    // An unknown ruling falls back to no filter, as does no query at all.
+    expect(await ids("?ruling=Bogus")).toEqual(all);
+    expect(await ids("")).toEqual(all);
+  });
+
+  it("GET /api/arbiter/disputes is 401 without a session", async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: "GET", url: "/api/arbiter/disputes" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it.each([["Pending"], ["Bogus"], [""], [undefined]])(
+    "POST /api/arbiter/disputes/:id/rule is 400 for ruling %s",
+    async (ruling) => {
+      const ctx = setup();
+      const { disputeId } = await openDispute(ctx);
+      const res = await ctx.app.inject({
+        method: "POST",
+        url: `/api/arbiter/disputes/${disputeId}/rule`,
+        headers: { cookie: await signIn(ctx.app, ARBITER) },
+        payload: ruling === undefined ? {} : { ruling },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: "ruling must be ForAuditor or AgainstAuditor" });
+    },
+  );
+
+  it("POST /api/arbiter/disputes/:id/rule is 403 for a non-arbiter", async () => {
+    const ctx = setup();
+    const { disputeId } = await openDispute(ctx);
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: `/api/arbiter/disputes/${disputeId}/rule`,
+      headers: { cookie: await signIn(ctx.app, DEVELOPER) },
+      payload: { ruling: "ForAuditor" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("POST /api/arbiter/disputes/:id/rule is 404 for an unknown dispute", async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/arbiter/disputes/dispute_missing/rule",
+      headers: { cookie: await signIn(app, ARBITER) },
+      payload: { ruling: "ForAuditor" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Dispute not found" });
+  });
+
+  it("POST /api/arbiter/disputes/:id/rule is 404 when the dispute's finding is gone", async () => {
+    const { app, disputes } = setup();
+    await disputes.create({
+      id: "dispute_orphan",
+      findingId: "finding_gone",
+      contractId: "contract_gone",
+      developerId: DEVELOPER.address,
+      reason: "orphaned",
+      openedAt: T0.toISOString(),
+      challengeWindowExpiresAt: T0.toISOString(),
+      ruling: "Pending",
+      ruledAt: null,
+      arbiterId: null,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/arbiter/disputes/dispute_orphan/rule",
+      headers: { cookie: await signIn(app, ARBITER) },
+      payload: { ruling: "AgainstAuditor" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Finding not found" });
+  });
+
+  it("POST /api/arbiter/disputes/:id/rule is 409 when the dispute was already ruled the other way", async () => {
+    const ctx = setup();
+    const { disputeId, findingId } = await openDispute(ctx);
+    await ctx.disputes.setRuling(disputeId, "ForAuditor", ARBITER.address, T0);
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: `/api/arbiter/disputes/${disputeId}/rule`,
+      headers: { cookie: await signIn(ctx.app, ARBITER) },
+      payload: { ruling: "AgainstAuditor" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "Dispute already ruled" });
+    expect(ctx.store.findings.get(findingId)?.status).toBe("Disputed");
+    expect(ctx.chainActions.applyDisputeResolved).not.toHaveBeenCalled();
+  });
+
+  it("a failing claim-lock release does not fail an AgainstAuditor ruling", async () => {
+    const ctx = setup();
+    const { contractId, findingId, disputeId } = await openDispute(ctx);
+    ctx.openOnChain(contractId, findingId, true);
+    ctx.chainActions.applyDisputeResolved.mockRejectedValueOnce(new Error("rpc down"));
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: `/api/arbiter/disputes/${disputeId}/rule`,
+      headers: { cookie: await signIn(ctx.app, ARBITER) },
+      payload: { ruling: "AgainstAuditor" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(ctx.store.findings.get(findingId)?.status).toBe("Rejected");
+  });
+});
