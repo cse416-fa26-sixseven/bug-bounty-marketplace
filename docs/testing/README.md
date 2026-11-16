@@ -24,13 +24,14 @@ The vitest configs add the JUnit reporter only when `CI` is set, so plain local 
 the usual output. Coverage needs `--coverage`.
 
 ```sh
-CI=1 pnpm --filter @bbm/api test --coverage      # same for @bbm/web, @bbm/shared
-CI=1 pnpm test:smoke --outputFile.junit=reports/junit-smoke.xml   # stack running
+CI=1 pnpm --filter @bbm/api run test --coverage   # same for @bbm/web, @bbm/shared
+CI=1 pnpm --filter @bbm/system-tests run test:smoke \
+  --outputFile.junit=reports/junit-smoke.xml      # needs a running stack
 pnpm test:e2e                                     # always writes tests/reports/junit-e2e.xml
 
 cd workers/analysis
 uv run pytest -q --junitxml=reports/junit.xml \
   --cov=analysis --cov-report=xml:reports/coverage.xml --cov-report=term
 
-cd contracts && forge coverage --report summary --report lcov
+cd ../../contracts && forge coverage --report summary --report lcov
 ```
