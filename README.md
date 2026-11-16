@@ -270,7 +270,7 @@ whole footprint up on a subscription and `infra/down.sh` tears it down.
 
 ## Contributing
 
-Work happens on milestone integration branches (currently `feat/m3-devops`)
+Work happens on milestone integration branches (currently `feat/m5-testing`)
 via small, reviewed sub-branches. See [CLAUDE.md](CLAUDE.md) for commands,
 conventions and the git workflow, and [docs/](docs/README.md) for everything
 else.
