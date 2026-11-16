@@ -16,6 +16,7 @@
     "stack:down": "docker compose down -v",
     "stack:ci": "docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --no-build db api web analysis anvil",
     "stack:deploy-contracts": "docker compose run --rm contracts-deploy",
+    "stack:ci-chain": "mkdir -p .ci/deployments && chmod 777 .ci/deployments && docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml run --rm contracts-deploy && docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml up -d --wait --no-build api-chain",
     "stack:demo": "bash scripts/demo-stack.sh",
     "demo:lifecycle": "bash scripts/demo-lifecycle.sh",
     "demo:prep": "bash scripts/demo-prep.sh",

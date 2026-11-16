@@ -1,0 +1,50 @@
+# CI overlay for the chain-mode integration tier (tests/integration/chain-flows.test.ts).
+# Adds `api-chain`: a second API on host port 3002, in chain mode (wallet
+# sign-in, on-chain funding/claim locks, the event indexer), next to the
+# no-chain `api` on 3001 that the other tiers and e2e run against. Both share
+# the database; `api` runs the migrations first.
+#
+# It reads the addresses written by contracts-deploy into .ci/deployments
+# (docker-compose.ci.yml), so start it only after the deploy:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --no-build db api web analysis anvil
+#   mkdir -p .ci/deployments && chmod 777 .ci/deployments
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm contracts-deploy
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml up -d --wait --no-build api-chain
+#   BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration
+#
+# All keys below are anvil's well-known dev keys: local/CI only.
+services:
+  api-chain:
+    image: ${BBM_REGISTRY:-bbm}/api:${BBM_TAG:-local}
+    pull_policy: never
+    profiles: ["chain"]
+    environment:
+      DATABASE_URL: postgres://bbm:bbm@db:5432/bbm
+      SOURCE_STORAGE_DIR: /data/sources
+      RATE_LIMIT_ENABLED: "false"
+      CHAIN_RPC_URL: http://anvil:8545
+      PUBLIC_CHAIN_RPC_URL: http://localhost:8545
+      CHAIN_ID: "31337"
+      # anvil account #0: the deployer, operator and arbiter.
+      OPERATOR_PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      CHAIN_DEPLOYMENTS_FILE: /deployments/31337.json
+      CLAIM_LOCK_ENABLED: "true"
+      PAYOUT_KEEPER_INTERVAL_SECONDS: "5"
+      INDEXER_POLL_MS: "1000"
+      VERDICT_INTERVAL_MS: "2000"
+      SESSION_SECRET: ci-session-secret-local-only
+      # NODE_ENV=production needs a fixed sign-in origin; clients that send no
+      # Origin header (the tests) are given it.
+      AUTH_ORIGIN: http://localhost:3000
+    ports:
+      - "3002:3001"
+    volumes:
+      # Same volume as `api`: the analysis worker reads uploads from it.
+      - sources:/data/sources
+      - ./.ci/deployments:/deployments:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      anvil:
+        condition: service_healthy
