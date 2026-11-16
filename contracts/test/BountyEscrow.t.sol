@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {AuditorStaking} from "../src/AuditorStaking.sol";
 import {BountyEscrow} from "../src/BountyEscrow.sol";
 
@@ -43,6 +43,24 @@ contract BountyEscrowTest is Test {
     uint256 internal constant BOUNTY = 2 ether;
 
     uint256 internal deadline;
+
+    // Mirrors BountyEscrow's events for vm.expectEmit (solc 0.8.19 cannot emit
+    // `BountyEscrow.Event` directly).
+    event DisputeResolutionBound(address indexed disputeResolution);
+    event Funded(bytes32 indexed contractId, address indexed developer, uint256 amount, uint256 deadline);
+    event SubmissionRecorded(bytes32 indexed contractId, uint256 submissionCount);
+    event FindingVerified(
+        bytes32 indexed contractId, bytes32 indexed findingId, address indexed auditor, uint256 verifiedAt
+    );
+    event Frozen(bytes32 indexed contractId, bytes32 indexed findingId);
+    event Unfrozen(bytes32 indexed contractId, bytes32 indexed findingId, bool auditorWon, uint256 verifiedAt);
+    event VerificationCleared(bytes32 indexed contractId, bytes32 indexed findingId);
+    event PayoutCredited(
+        bytes32 indexed contractId, bytes32 indexed findingId, address indexed auditor, uint256 amount
+    );
+    event PayoutWithdrawn(address indexed auditor, uint256 amount);
+    event BountyDeleted(bytes32 indexed contractId, address indexed developer, uint256 refunded);
+    event Refunded(bytes32 indexed contractId, address indexed developer, uint256 amount);
 
     function setUp() public {
         staking = new AuditorStaking(address(this));
@@ -511,5 +529,300 @@ contract BountyEscrowTest is Test {
         vm.prank(developer);
         vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
         escrow.refund(CONTRACT_ID);
+    }
+
+    // --- closed bounties (whenOpen) ---
+
+    /// @dev Funds and deletes the bounty, leaving it Closed.
+    function _closedBounty() internal {
+        _fund();
+        vm.prank(developer);
+        escrow.deleteBounty(CONTRACT_ID);
+    }
+
+    function test_deleteBounty_rejectsSecondDelete() public {
+        _closedBounty();
+
+        vm.prank(developer);
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.deleteBounty(CONTRACT_ID);
+    }
+
+    function test_refund_rejectsAfterDelete() public {
+        _closedBounty();
+        vm.warp(deadline + REFUND_DELAY);
+
+        vm.prank(developer);
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.refund(CONTRACT_ID);
+    }
+
+    function test_refund_rejectsSecondRefund() public {
+        _fund();
+        vm.warp(deadline + REFUND_DELAY);
+        vm.prank(developer);
+        escrow.refund(CONTRACT_ID);
+
+        vm.prank(developer);
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.refund(CONTRACT_ID);
+    }
+
+    function test_recordSubmission_rejectsClosedBounty() public {
+        _closedBounty();
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.recordSubmission(CONTRACT_ID);
+    }
+
+    function test_recordVerification_rejectsClosedBounty() public {
+        _fund();
+        vm.warp(deadline + REFUND_DELAY);
+        vm.prank(developer);
+        escrow.refund(CONTRACT_ID);
+
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.recordVerification(CONTRACT_ID, FINDING_1, auditor);
+    }
+
+    function test_freeze_rejectsClosedBounty() public {
+        _closedBounty();
+        vm.prank(dispute);
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.freeze(CONTRACT_ID, FINDING_1);
+    }
+
+    function test_unfreeze_rejectsClosedBounty() public {
+        _closedBounty();
+        vm.prank(dispute);
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.unfreeze(CONTRACT_ID, FINDING_1, true);
+    }
+
+    function test_payout_rejectsClosedBounty() public {
+        _closedBounty();
+        vm.expectRevert(BountyEscrow.BountyNotOpen.selector);
+        escrow.payout(CONTRACT_ID, FINDING_1, auditor);
+    }
+
+    function test_fund_rejectsAfterClosed() public {
+        _closedBounty();
+        vm.prank(developer);
+        vm.expectRevert(BountyEscrow.BountyExists.selector);
+        escrow.fund{value: BOUNTY}(CONTRACT_ID, deadline);
+    }
+
+    function test_fund_rejectsAfterPaid() public {
+        _verifiedBounty();
+        vm.warp(block.timestamp + WINDOW);
+        escrow.payout(CONTRACT_ID, FINDING_1, auditor);
+
+        vm.prank(developer);
+        vm.expectRevert(BountyEscrow.BountyExists.selector);
+        escrow.fund{value: BOUNTY}(CONTRACT_ID, deadline + 1 days);
+    }
+
+    function test_fund_rejectsDeadlineEqualToNow() public {
+        vm.prank(developer);
+        vm.expectRevert(BountyEscrow.PastDeadline.selector);
+        escrow.fund{value: BOUNTY}(CONTRACT_ID, block.timestamp);
+    }
+
+    // --- refund boundary (deadline + refundDelay) ---
+
+    function test_refund_revertsOneSecondBeforeDueAt() public {
+        _fund();
+        uint256 dueAt = deadline + REFUND_DELAY;
+        vm.warp(dueAt - 1);
+
+        vm.prank(developer);
+        vm.expectRevert(abi.encodeWithSelector(BountyEscrow.RefundNotDue.selector, dueAt));
+        escrow.refund(CONTRACT_ID);
+    }
+
+    function test_refund_allowedExactlyAtDueAt() public {
+        _fund();
+        vm.warp(deadline + REFUND_DELAY);
+
+        vm.prank(developer);
+        escrow.refund(CONTRACT_ID);
+
+        (,,, BountyEscrow.BountyState state,,,,,) = escrow.bounties(CONTRACT_ID);
+        assertEq(uint8(state), uint8(BountyEscrow.BountyState.Closed));
+        assertEq(developer.balance, 10 ether);
+    }
+
+    function test_refund_revertsAtDeadlineBeforeDelay() public {
+        _fund();
+        vm.warp(deadline);
+
+        vm.prank(developer);
+        vm.expectRevert(abi.encodeWithSelector(BountyEscrow.RefundNotDue.selector, deadline + REFUND_DELAY));
+        escrow.refund(CONTRACT_ID);
+    }
+
+    // --- events ---
+
+    function test_bind_emitsDisputeResolutionBound() public {
+        BountyEscrow fresh = new BountyEscrow(address(this), staking, WINDOW, REFUND_DELAY);
+        vm.expectEmit(true, false, false, false, address(fresh));
+        emit DisputeResolutionBound(dispute);
+        fresh.bindDisputeResolution(dispute);
+    }
+
+    function test_fund_emitsFunded() public {
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Funded(CONTRACT_ID, developer, BOUNTY, deadline);
+        _fund();
+    }
+
+    function test_recordSubmission_emitsSubmissionRecorded() public {
+        _fund();
+        vm.expectEmit(true, false, false, true, address(escrow));
+        emit SubmissionRecorded(CONTRACT_ID, 1);
+        escrow.recordSubmission(CONTRACT_ID);
+
+        vm.expectEmit(true, false, false, true, address(escrow));
+        emit SubmissionRecorded(CONTRACT_ID, 2);
+        escrow.recordSubmission(CONTRACT_ID);
+    }
+
+    function test_recordVerification_emitsFindingVerified() public {
+        _fund();
+        escrow.recordSubmission(CONTRACT_ID);
+
+        vm.expectEmit(true, true, true, true, address(escrow));
+        emit FindingVerified(CONTRACT_ID, FINDING_1, auditor, block.timestamp);
+        escrow.recordVerification(CONTRACT_ID, FINDING_1, auditor);
+    }
+
+    function test_freeze_emitsFrozen() public {
+        _verifiedBounty();
+        vm.expectEmit(true, true, false, false, address(escrow));
+        emit Frozen(CONTRACT_ID, FINDING_1);
+        vm.prank(dispute);
+        escrow.freeze(CONTRACT_ID, FINDING_1);
+    }
+
+    function test_unfreeze_auditorWon_emitsUnfrozenOnly() public {
+        _verifiedBounty();
+        vm.prank(dispute);
+        escrow.freeze(CONTRACT_ID, FINDING_1);
+        vm.warp(block.timestamp + 1 hours);
+
+        vm.recordLogs();
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Unfrozen(CONTRACT_ID, FINDING_1, true, block.timestamp);
+        vm.prank(dispute);
+        escrow.unfreeze(CONTRACT_ID, FINDING_1, true);
+
+        // No VerificationCleared on a win: the escrow emits exactly one log.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 fromEscrow;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter == address(escrow)) fromEscrow++;
+        }
+        assertEq(fromEscrow, 1);
+    }
+
+    function test_unfreeze_auditorLost_emitsUnfrozenAndVerificationCleared() public {
+        _verifiedBounty();
+        vm.prank(dispute);
+        escrow.freeze(CONTRACT_ID, FINDING_1);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Unfrozen(CONTRACT_ID, FINDING_1, false, 0);
+        vm.expectEmit(true, true, false, false, address(escrow));
+        emit VerificationCleared(CONTRACT_ID, FINDING_1);
+        vm.prank(dispute);
+        escrow.unfreeze(CONTRACT_ID, FINDING_1, false);
+    }
+
+    function test_payout_emitsPayoutCredited() public {
+        _verifiedBounty();
+        vm.warp(block.timestamp + WINDOW);
+
+        vm.expectEmit(true, true, true, true, address(escrow));
+        emit PayoutCredited(CONTRACT_ID, FINDING_1, auditor, BOUNTY);
+        escrow.payout(CONTRACT_ID, FINDING_1, auditor);
+    }
+
+    function test_withdrawPayout_emitsPayoutWithdrawn() public {
+        _verifiedBounty();
+        vm.warp(block.timestamp + WINDOW);
+        escrow.payout(CONTRACT_ID, FINDING_1, auditor);
+
+        vm.expectEmit(true, false, false, true, address(escrow));
+        emit PayoutWithdrawn(auditor, BOUNTY);
+        vm.prank(auditor);
+        escrow.withdrawPayout();
+    }
+
+    function test_deleteBounty_emitsBountyDeleted() public {
+        _fund();
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit BountyDeleted(CONTRACT_ID, developer, BOUNTY);
+        vm.prank(developer);
+        escrow.deleteBounty(CONTRACT_ID);
+    }
+
+    function test_refund_emitsRefunded() public {
+        _fund();
+        vm.warp(deadline + REFUND_DELAY);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Refunded(CONTRACT_ID, developer, BOUNTY);
+        vm.prank(developer);
+        escrow.refund(CONTRACT_ID);
+    }
+
+    // --- fuzz ---
+
+    /// @dev Fund then refund conserves ETH: the developer gets back exactly
+    /// what they locked and the escrow ends empty.
+    function testFuzz_fundRefund_conservesBalance(uint256 amount, uint256 deadlineOffset) public {
+        amount = bound(amount, 1, 1_000_000 ether);
+        deadlineOffset = bound(deadlineOffset, 1, 3650 days);
+        uint256 dl = block.timestamp + deadlineOffset;
+
+        address dev = makeAddr("fuzz-dev");
+        vm.deal(dev, amount);
+        uint256 escrowBefore = address(escrow).balance;
+
+        vm.prank(dev);
+        escrow.fund{value: amount}(CONTRACT_ID, dl);
+        assertEq(address(escrow).balance, escrowBefore + amount);
+        assertEq(dev.balance, 0);
+
+        vm.warp(dl + REFUND_DELAY);
+        vm.prank(dev);
+        escrow.refund(CONTRACT_ID);
+
+        assertEq(dev.balance, amount);
+        assertEq(address(escrow).balance, escrowBefore);
+        (, uint256 left,,,,,,,) = escrow.bounties(CONTRACT_ID);
+        assertEq(left, 0);
+    }
+
+    /// @dev Fund, pay out and withdraw conserves ETH: the auditor receives the
+    /// full bounty and nothing stays behind.
+    function testFuzz_fundPayout_conservesBalance(uint256 amount) public {
+        amount = bound(amount, 1, 1_000_000 ether);
+        address dev = makeAddr("fuzz-dev");
+        vm.deal(dev, amount);
+
+        vm.prank(dev);
+        escrow.fund{value: amount}(CONTRACT_ID, deadline);
+        escrow.recordSubmission(CONTRACT_ID);
+        escrow.recordVerification(CONTRACT_ID, FINDING_1, auditor);
+        vm.warp(block.timestamp + WINDOW);
+        escrow.payout(CONTRACT_ID, FINDING_1, auditor);
+
+        uint256 auditorBefore = auditor.balance;
+        vm.prank(auditor);
+        escrow.withdrawPayout();
+
+        assertEq(auditor.balance, auditorBefore + amount);
+        assertEq(address(escrow).balance, 0);
+        assertEq(escrow.pendingPayouts(auditor), 0);
     }
 }
