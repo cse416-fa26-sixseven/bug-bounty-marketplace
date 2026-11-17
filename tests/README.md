@@ -65,6 +65,53 @@ On AKS the same test runs in `integration-azure.yml` against the CI-run namespac
 point it at another namespace or env with analysis and the sandbox enabled:
 `BBM_API_URL=https://<host> BBM_PIPELINE=1 pnpm test:integration -- pipeline`.
 
+### Chain-mode tier (wallet sign-in, funding, stake, claim locks, indexer)
+
+`integration/chain-flows.test.ts` drives the API in chain mode (`CHAIN_RPC_URL` and
+`SESSION_SECRET` set), signing its own transactions on anvil with viem (`lib/chain.ts`):
+
+- **SIWE**: nonce → login → `me` → logout; a replayed nonce, another wallet's signature and
+  another site's `Origin` are rejected; user routes need a session and refuse to act for
+  another wallet.
+- **Developer**: upload → analysis → `fund` on-chain → `POST /funded` (the queue lists it only
+  then; a wrong amount is refused); `deleteBounty` → `POST /cancel` → `Expired`; `refund` after
+  the deadline + refund delay (anvil `evm_increaseTime`, no waiting) → `POST /reclaim` →
+  `Expired`.
+- **Auditor**: claim takes the on-chain `lockSubmission`; `POST /api/auditor/findings` is
+  refused by the stake gate until the auditor stakes; `GET /api/auditor/profile`; cancelling a
+  claimed bounty releases the lock.
+- **Notes and indexer**: the developer's `PUT /api/findings/:id/note` on an auditor-reported
+  finding; the operator's `recordVerification` on-chain is picked up by the indexer (polled,
+  ≤ 60 s) and the finding moves `Submitted → Verified`.
+
+PoC → sandbox verdict → dispute is not covered here (e2e `lifecycle` does it). Every test uses
+fresh wallets (funded with `anvil_setBalance`) and its own contracts, so the tier is
+independent of test order and reruns on the same stack. The reclaim test runs last and moves
+anvil's clock forward for good (deadline + refund delay; 3 h with the default deploy). On a
+reused stack anvil is then about 3 h ahead of wall time per run, which matters to specs that
+compute on-chain deadlines from wall time (the `E2E_CHAIN=1` e2e specs): run those on a fresh
+stack, or derive deadlines from the latest block's timestamp as `chain-flows` does.
+
+It is skipped unless `BBM_CHAIN=1`. The CI compose stack keeps `api` (3001) in no-chain mode for
+the other tiers and adds a second, chain-mode API on **3002** (`docker-compose.ci-chain.yml`,
+service `api-chain`, profile `chain`) that reads the addresses from `.ci/deployments`, so it is
+started after the deploy. `pnpm stack:ci-chain` needs the stack already running (`pnpm stack:ci`
+or `pnpm stack:up`): it runs the deploy and starts `api-chain` with `--no-deps`, so it never
+recreates `db`, `api` or `anvil`. Running it again redeploys the contracts and recreates
+`api-chain` on the new addresses.
+
+```sh
+pnpm stack:ci                 # or `pnpm stack:up` (then BBM_TAG=local images are built)
+pnpm stack:ci-chain           # deploys to .ci/deployments, (re)starts api-chain on 3002 (--no-deps)
+BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration   # ~1 min on a warm worker
+docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml \
+  --profile chain --profile deploy down -v
+```
+
+Against `pnpm stack:demo` (one API, already in chain mode, 60 s refund delay) no overlay is
+needed: `BBM_CHAIN=1 pnpm test:integration -- chain-flows`. There the other integration tests
+that upload without signing in fail, so filter to `chain-flows`.
+
 ### On-chain lifecycle (manual)
 
 `e2e/lifecycle.spec.ts` drives the full on-chain lifecycle in the browser:
@@ -100,6 +147,8 @@ something else.
 | `BBM_DEPLOYMENTS_FILE` | `.ci/deployments/31337.json` | integration/chain. The tests skip when the file is missing.                             |
 | `BBM_SKIP_ANALYSIS`    | unset                        | `1` skips the direct `/analyze` checks. Analysis is internal-only on AKS.               |
 | `BBM_PIPELINE`         | unset                        | `1` runs integration/pipeline (upload → PoC verdict through the API; needs the sandbox) |
+| `BBM_CHAIN`            | unset                        | `1` runs integration/chain-flows (chain-mode API: sign-in, funding, stake, indexer)     |
+| `BBM_CHAIN_API_URL`    | `BBM_API_URL`                | integration/chain-flows: the chain-mode API (`http://localhost:3002` with ci-chain)     |
 | `BBM_SMOKE_WRITE`      | unset                        | `1` adds smoke's create+read round-trip (CI, non-prod deploys)                          |
 | `BBM_SMOKE_READONLY`   | unset                        | `1` forces read-only even when `BBM_SMOKE_WRITE=1`                                      |
 | `BBM_WAIT_MS`          | `30000`                      | How long globalSetup waits for `GET /health`                                            |
