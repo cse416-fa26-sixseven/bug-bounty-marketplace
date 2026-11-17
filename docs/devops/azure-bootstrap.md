@@ -249,7 +249,7 @@ Most of a first run's time goes to creating the AKS clusters and the Postgres se
 | 7    | GitHub                | runs the bootstrap output `gh_setup_commands` after you confirm: repo variables, Environments, branch policies, `AZURE_CLIENT_ID` per Environment                                                                                                                                 |
 | 8    | DNS delegation        | prints the parent zone's four NS records; upserts them in Cloudflare when `CLOUDFLARE_API_TOKEN` is set                                                                                                                                                                           |
 | 9    | Global                | applies `global`; imports `postgres:16-alpine` and `curlimages/curl:8.10.1` into ACR under `mirror/`                                                                                                                                                                              |
-| 10   | Per env               | applies `data`; sets `llm-api-key` to `placeholder-set-me` if missing; applies `compute`; waits for the delegation (once); installs the platform with `deploy/platform/install.sh <env> --values ... --wait`                                                                      |
+| 10   | Per env               | applies the env Key Vault alone; sets `llm-api-key` to `placeholder-set-me` if missing; applies the rest of `data`, then `compute`; waits for the delegation (once); installs the platform with `deploy/platform/install.sh <env> --values ... --wait`                            |
 | 11   | Summary               | prints the URLs, next steps and the files it rewrote                                                                                                                                                                                                                              |
 
 Notes:
@@ -320,6 +320,12 @@ az keyvault secret set --vault-name "$KV" -n llm-api-key --value "<key>"
 Prod runs the api in chain mode (`chain.enabled` in `values-prod.yaml`), so the prod vault also
 needs `chain-operator-key` and `session-secret` before any prod deploy, or the CSI mount fails the
 same way. See [Sepolia runbook, Deployed environments](../contracts/sepolia.md#deployed-environments).
+
+The analysis worker identity (`id-bbm-<env>-worker`) has Key Vault Secrets User on `llm-api-key`
+and `database-url` only, scoped to each secret rather than the vault, so it can't read
+`chain-operator-key` or `session-secret`. Azure accepts a secret-scoped grant only once the secret
+exists, which is why `up.sh` creates the vault and seeds the placeholder before the rest of the
+`data` stack. Update `llm-api-key` with `az keyvault secret set` (a new version); don't delete it.
 
 Terraform never manages this secret, so the real value never enters state. The CSI driver picks up
 the new version within its 2-minute rotation interval. A 403 means your user isn't in
