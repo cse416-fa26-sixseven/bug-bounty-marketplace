@@ -1,0 +1,137 @@
+# Milestone 5: testing and integration results
+
+Status as of 2026-11-17. Integration branch `feat/m5-testing`; the final PR into `main` is left
+for team review.
+
+Milestone 5 closed the gaps in the test suite rather than starting one: unit, system and
+Playwright tiers already existed. A gap survey at the start of the milestone found:
+
+- CI's compose stack started anvil and deployed the contracts, but the API ran without
+  `CHAIN_RPC_URL` / `SESSION_SECRET`, so sign-in, funding, cancel, reclaim, disputes and the
+  arbiter routes were never registered in any system test.
+- The on-chain Playwright specs (`lifecycle`, `features`) were skipped unless `E2E_CHAIN=1`,
+  which CI never set. CI ran only `home.spec.ts`.
+- No contract test asserted an event, although the API indexer is driven entirely by events.
+  No fuzz tests.
+- No test produced JUnit XML or coverage, so there was nothing to hand in as "test results".
+- Several fixed bugs had no regression test (wei migration re-run, k6 wei payload, the
+  "Withdraw" vs "Withdraw stake" selector).
+
+## What was added
+
+| PR   | Branch                              | What                                                                                                                                                                             |
+| ---- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #142 | `test/reporting`                    | JUnit XML from vitest, Playwright and pytest; coverage from `@vitest/coverage-v8`, `pytest-cov` and `forge coverage`; all uploaded as CI artifacts ([testing/README](README.md)) |
+| #143 | `test/unit-gaps`                    | 158 unit tests: contract events, revert paths and fuzz; API error branches; web components; shared schemas; three regression tests                                               |
+| #144 | `test/integration-gaps`             | Chain-mode integration tier: `api-chain` service, SIWE sign-in helpers, `tests/integration/chain-flows.test.ts` (15 tests), run in CI                                            |
+| #145 | `test/e2e-chain`                    | Four new on-chain browser specs; the whole on-chain suite runs in CI as the non-blocking `e2e-chain` job                                                                         |
+| #146 | `fix/claim-stake-gate`              | Fix for bug M5-1 (below), found by #144                                                                                                                                          |
+| —    | `fix/relock-stake-after-failed-poc` | Fix for bug M5-3 (below), found by #145. In progress                                                                                                                             |
+
+Every PR was reviewed by a fresh reviewer agent before merge (correctness, coverage, schema
+consistency across packages, no real network calls, scope), and the review findings were
+fixed on the branch before merging.
+
+## Results
+
+### Test counts
+
+| Suite                        | Before M5                     | After M5 (incl. #146)                   | Runs in                          |
+| ---------------------------- | ----------------------------- | --------------------------------------- | -------------------------------- |
+| Contracts (`forge test`)     | 101                           | 149 (incl. 5 fuzz)                      | `contracts` job                  |
+| API (vitest, incl. Postgres) | 483 + 71 pg                   | 514 + 73 pg (580 in CI with pg at #143) | `api` job (Postgres service)     |
+| Web (vitest + MSW)           | 180                           | 206                                     | `web` job                        |
+| Shared (vitest)              | 69                            | 121                                     | `shared` job                     |
+| Analysis worker (pytest)     | 217 + 5 Slither               | unchanged                               | `analysis` job                   |
+| System integration           | 25 (chain routes unreachable) | 40 (+15 chain-mode)                     | `containers` job                 |
+| Regression / smoke           | 7 goldens + 2 gates / 5       | unchanged                               | `containers` job                 |
+| E2E (Playwright)             | 2 in CI (6 by hand)           | 10 in CI                                | `containers` (home), `e2e-chain` |
+
+### Coverage (report only, no thresholds)
+
+| Package         | Lines                  | Notes                                                                                                                                                                       |
+| --------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| contracts       | 100% for each contract | branches at #143's first CI run: AuditorStaking 100%, DisputeResolution 100%, BountyEscrow 94.6% (the 2 missing branches are the `TransferFailed` paths, tested afterwards) |
+| api             | ~78%                   | counts every file under `src/` (not just files a test loaded); unit run, no Postgres                                                                                        |
+| web             | ~77%                   | `src/` minus `src/test` and `src/mocks`                                                                                                                                     |
+| shared          | 100%                   | mostly declarative zod schemas                                                                                                                                              |
+| analysis worker | ~85%                   | `pytest --cov=analysis`                                                                                                                                                     |
+
+Exact per-run numbers are in each CI run's step summary and the `coverage-*` artifacts.
+
+### CI evidence
+
+- Integration-branch CI after #144: [run 43988494932](https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace/actions/runs/43988494932):
+  all jobs green; `chain-flows.test.ts` 15/15 in ~35 s against the chain-mode API.
+- #145's CI: `e2e-chain` job green on push and pull_request runs (10 tests, ~6.6 min of
+  Playwright, ~10.5 min for the job). JUnit: `tests="10" failures="0" skipped="0"`.
+- Local runs: chain-mode tier 15/15 three times in a row (~55 s); full on-chain e2e suite
+  10/10 on a fresh `stack:demo` (~8 min end to end).
+- Nightly Azure integration (`integration-azure.yml`: smoke → integration → e2e → k6 on the
+  test AKS cluster) green every night 2026-11-07 → 2026-11-16.
+
+Artifacts per run (Actions → run → Artifacts): `junit-{web,shared,api,analysis}`,
+`coverage-{web,shared,api,analysis,contracts}`, `junit-system-tests`, `junit-e2e-chain`,
+`playwright-report`, `playwright-report-chain`.
+
+## Bugs found in M5
+
+| ID   | Found by                           | Bug                                                                                                                                                                                                                                                                                                                                 | Status                                                                             |
+| ---- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| M5-1 | Chain-mode integration tier (#144) | `POST /api/auditor/claim` never called the stake gate, so a zero-stake wallet could take the on-chain claim lock and block a bounty for the 10-minute claim window. Throwaway wallets could block every bounty.                                                                                                                     | Fixed in #146                                                                      |
+| M5-2 | Review of the M5-1 fix             | Check-then-act race in the new gate: between the stake read and the mined `lockSubmission`, the wallet can still `withdraw` (front-run with a higher fee), ending up holding the claim with zero stake. `lockSubmission` itself does not check stake.                                                                               | Fixed in #146 (re-read stake once the lock lands; release lock and claim if short) |
+| M5-3 | On-chain e2e tier (#145)           | A failed PoC verdict released the auditor's stake lock while the claim stayed active. The auditor could submit a second PoC on the same claim and withdraw the whole stake before its verdict; `recordVerification` then reverted with `AuditorNotEligible` on every pass and the finding stayed "awaiting sandbox result" forever. | Fix in progress                                                                    |
+| M5-4 | Chain-mode integration tier (#144) | Logout only clears the cookie. Sessions are stateless signed cookies valid for 8 hours, so a copied cookie keeps working until it expires.                                                                                                                                                                                          | Known limitation (needs a server-side session store)                               |
+| M5-5 | On-chain e2e run                   | Test-side flake: right after a role switch the stake gate briefly showed "locked" for a staked auditor, so `stakeAndClaim` staked twice and then waited on a button that had gone away.                                                                                                                                             | Fixed in #145 (helper waits for the profile to settle)                             |
+
+Regression tests now exist for earlier fixes that had none: re-running wei migration 0003
+(4f275dc), the k6 payload sending wei (#61), and "Withdraw" vs "Withdraw stake" (#123).
+
+### Bugs fixed earlier, and how they were caught
+
+| Bug                                                                                                                                             | Caught by                  | Fix     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------- |
+| A second proven finding on a bounty that had already verified another reverted forever (`AlreadyVerified`/`BountyNotOpen`)                      | Production on Sepolia      | #127    |
+| Payout "Withdraw" selector also matched "Withdraw stake"                                                                                        | Unmocked e2e run           | #123    |
+| Postgres repository tests failing: non-idempotent migrations, claimable-contract listing, expired-claim test                                    | DB integration tests in CI | #44     |
+| k6 load test sent the bounty in ETH instead of wei                                                                                              | Load test                  | #61     |
+| Sepolia deploy failed on-chain (forge 1.3.5 underestimated gas ~7x); indexer ignored `INDEXER_CONFIRMATIONS`; API started without `AUTH_ORIGIN` | Sepolia deployment         | #105    |
+| Stake lock released too early (finding pending, dispute won, another finding still needing it)                                                  | Code review                | #99     |
+| Funding/cancel accepted stale or foreign bounties                                                                                               | Code review                | #113    |
+| SIWE nonce replay; `AUTH_ORIGIN` not enforced                                                                                                   | Code review                | 9957554 |
+| Re-running the wei migration rescaled amounts                                                                                                   | Code review                | 4f275dc |
+| Internal RPC URL published to the browser                                                                                                       | Code review                | 99135d4 |
+| Demo banner shown in prod against the real API                                                                                                  | Manual check of prod       | #72     |
+
+## Known limitations and follow-ups
+
+- **Stateless sessions** (M5-4): logout cannot revoke a copied cookie before it expires.
+- **Stake checks live only in the API.** `AuditorStaking.lockSubmission` does not check
+  eligibility, so the API is the only gate on claims. A contract-level check is the stronger
+  fix but needs a redeploy of the Sepolia contracts.
+- **With claim locks disabled** there is no on-chain lock, so stake → claim → withdraw is
+  possible. PoC and finding submissions still check stake, so the harm is limited to holding
+  the claim window.
+- **`e2e-chain` is non-blocking** (`continue-on-error`, not in `CI OK`). Make it required once it
+  has a stable record.
+- **Each chain-mode integration run leaves anvil ~3 h ahead of wall time** on a reused stack;
+  use a fresh stack before running `E2E_CHAIN=1` specs (see [tests/README](../../tests/README.md)).
+- **Local stacks share the compose project name `bbm`**, so `stack:demo` from one worktree
+  tears down another's stack. Use `-p <name>` for parallel stacks.
+- **No coverage thresholds** yet; numbers are report only.
+
+## Reproducing
+
+```sh
+pnpm -r test                                   # unit (no stack)
+cd contracts && forge test && forge coverage --report summary
+
+pnpm stack:ci && pnpm stack:ci-chain           # compose stack + chain-mode API on :3002
+BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration
+pnpm test:regression && pnpm test:smoke
+
+scripts/ci-e2e-chain.sh                        # fresh stack:demo + full on-chain Playwright suite
+```
+
+See [tests/README.md](../../tests/README.md) for environment variables and per-tier details, and
+[testing/README.md](README.md) for where the JUnit and coverage files come from.
