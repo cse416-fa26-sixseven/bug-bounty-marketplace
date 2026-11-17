@@ -480,6 +480,42 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
   });
 
+  it("releases the lock and the claim with 403 when the stake is withdrawn before the lock lands", async () => {
+    // Race: the gate reads the requirement, then the wallet withdraws before
+    // lockSubmission is mined. The re-read after the lock sees 0.
+    let reads = 0;
+    const { seedContract, repository, claim, lock, unlock, stakeOf, queue } = chainSetup(undefined, async () =>
+      reads++ === 0 ? 100_000_000_000_000_000n : 0n,
+    );
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(stakeOf).toHaveBeenCalledTimes(2);
+    expect(lock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+    expect((await repository.findContractById(contract.id, T0))?.status).toBe("Open");
+    // The contract is claimable again: it is back in the queue.
+    expect((await queue()).json().map((c: { id: string }) => c.id)).toContain(contract.id);
+  });
+
+  it("keeps the claim when the stake re-read after the lock fails", async () => {
+    let reads = 0;
+    const { seedContract, repository, claim, unlock } = chainSetup(undefined, async () => {
+      if (reads++ === 0) return 100_000_000_000_000_000n;
+      throw new Error("rpc unavailable");
+    });
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(200);
+    expect(unlock).not.toHaveBeenCalled();
+    expect((await repository.findActiveClaim(contract.id, T0))?.auditorId).toBe(AUDITOR_A);
+  });
+
   it("does not let a zero-stake wallet block a staked auditor", async () => {
     const { seedContract, claim, lock } = chainSetup(undefined, async (auditor) =>
       auditor === AUDITOR_A ? 0n : 100_000_000_000_000_000n,
