@@ -26,7 +26,8 @@ cd "$ROOT"
 DOCKER_GID=${DOCKER_GID:-$(stat -c %g /var/run/docker.sock)}
 export DOCKER_GID
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.sandbox.yml -f docker-compose.chain.yml)
-for extra in ${BBM_COMPOSE_EXTRA:-}; do COMPOSE+=(-f "$extra"); done
+read -ra extras <<<"${BBM_COMPOSE_EXTRA:-}"
+for extra in "${extras[@]}"; do COMPOSE+=(-f "$extra"); done
 LOG=${E2E_COMPOSE_LOG:-$ROOT/compose-e2e-chain.log}
 
 step() { printf '\n== %s\n' "$*"; }

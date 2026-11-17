@@ -14,7 +14,8 @@ export DOCKER_GID
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.sandbox.yml -f docker-compose.chain.yml)
 # Optional extra overlays, space-separated (e.g. one that unpublishes a port
 # already taken on this machine): BBM_COMPOSE_EXTRA=/path/override.yml
-for extra in ${BBM_COMPOSE_EXTRA:-}; do COMPOSE+=(-f "$extra"); done
+read -ra extras <<<"${BBM_COMPOSE_EXTRA:-}"
+for extra in "${extras[@]}"; do COMPOSE+=(-f "$extra"); done
 
 step() { printf '\n== %s\n' "$*"; }
 
