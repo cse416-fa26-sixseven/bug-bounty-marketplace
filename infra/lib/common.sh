@@ -617,14 +617,26 @@ tf_out_json() { # tf_out_json <stack> <env> <name>
   die "terraform output '$3' of stack $1 ($2) is missing"
 }
 
-# tf_plan_apply <stack> <env> [--destroy]: plan to a file, skip when there are
-# no changes, confirm (unless ASSUME_YES), apply the saved plan.
+# tf_plan_apply <stack> <env> [--destroy] [--target <addr>]...: plan to a file,
+# skip when there are no changes, confirm (unless ASSUME_YES), apply the saved
+# plan. --target limits the plan to those resource addresses (-target).
 tf_plan_apply() {
-  local stack=$1 env=$2 mode=${3:-} plan="up.tfplan" rc=0 args=()
-  [[ "$mode" == --destroy ]] && {
-    plan="down.tfplan"
-    args+=(-destroy)
-  }
+  local stack=$1 env=$2 plan="up.tfplan" rc=0 args=()
+  shift 2
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --destroy)
+        plan="down.tfplan"
+        args+=(-destroy)
+        ;;
+      --target)
+        args+=("-target=$2")
+        shift
+        ;;
+      *) die "tf_plan_apply: unknown argument $1" ;;
+    esac
+    shift
+  done
   if [[ "$DRY_RUN" == 1 ]]; then
     run "$TF_SH" "$stack" "$env" plan ${args[@]+"${args[@]}"} -out="$plan"
     run "$TF_SH" "$stack" "$env" apply "$plan"

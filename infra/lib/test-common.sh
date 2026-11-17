@@ -620,6 +620,18 @@ has "up: acr import postgres" 'mirror/postgres:16-alpine'
 has "up: acr import curl" 'mirror/curl:8.10.1'
 has "up: prod env included" 'data prod init -reconfigure'
 has "up: llm-api-key placeholder" 'llm-api-key --value placeholder-set-me'
+has "up: vault applied alone first" 'data prod plan -target=module.keyvault.azurerm_key_vault.this -target=module.keyvault.azurerm_role_assignment.secrets_officer -target=module.keyvault.time_sleep.rbac_propagation -out=up.tfplan'
+# The worker's secret-scoped llm-api-key grant needs the secret to exist:
+# targeted vault apply, then the placeholder, then the full data apply.
+first_line() { grep -nF -- "$1" <<<"$out" | head -n1 | cut -d: -f1; }
+l_kv=$(first_line 'data prod plan -target=module.keyvault.azurerm_key_vault.this')
+l_llm=$(grep -nF -- 'llm-api-key --value placeholder-set-me' <<<"$out" | awk -F: -v a="${l_kv:-0}" '$1 > a { print $1; exit }')
+l_full=$(first_line 'data prod plan -out=up.tfplan')
+if [[ -n "$l_kv" && -n "$l_llm" && -n "$l_full" && $l_kv -lt $l_llm && $l_llm -lt $l_full ]]; then
+  ok_ "up: vault, then llm-api-key placeholder, then the full data apply"
+else
+  bad "up: vault, then llm-api-key placeholder, then the full data apply (lines: kv=$l_kv llm=$l_llm full=$l_full)"
+fi
 has "up: platform install" 'install.sh test --values'
 has "up: github_repo follows gh repo view" 'github_repo = "neworg/bbm-renamed"'
 has "up: gh admin check uses the new repo" 'gh: admin on neworg/bbm-renamed'
