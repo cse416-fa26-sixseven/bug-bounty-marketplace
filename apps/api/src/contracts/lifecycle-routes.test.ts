@@ -488,3 +488,124 @@ describe("review fixes", () => {
     expect(other.statusCode).toBe(403);
   });
 });
+
+describe("POST /api/contracts/:id/reclaim", () => {
+  const reclaim = (app: ReturnType<typeof setup>["app"], id: string, cookie?: string) =>
+    app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/reclaim`,
+      ...(cookie ? { headers: { cookie } } : {}),
+    });
+
+  function lockActions() {
+    return {
+      chainConfigured: true,
+      releaseClaimLock: vi.fn(async () => true),
+      releaseExpiredLocks: vi.fn(async () => 0),
+      lockClaim: vi.fn(async () => undefined),
+    };
+  }
+
+  it("is 401 without a session", async () => {
+    const { app, upload } = setup();
+    const id = (await upload(await signIn(app, DEVELOPER))).json().id as string;
+    expect((await reclaim(app, id)).statusCode).toBe(401);
+  });
+
+  it("is 404 for an unknown contract", async () => {
+    const { app } = setup();
+    const res = await reclaim(app, "contract_missing", await signIn(app, DEVELOPER));
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Contract not found" });
+  });
+
+  it("is 403 for a wallet that is not the contract's developer", async () => {
+    const { app, upload, fundOnChain } = setup();
+    const id = (await upload(await signIn(app, DEVELOPER))).json().id as string;
+    fundOnChain(id, 3);
+    const res = await reclaim(app, id, await signIn(app, AUDITOR));
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("says the bounty is not refunded while the developer's bounty is open or paid", async () => {
+    const chainActions = lockActions();
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    for (const state of [1, 2]) {
+      const id = (await upload(dev)).json().id as string;
+      fundOnChain(id, state);
+      const res = await reclaim(app, id, dev);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: "bounty not refunded on-chain" });
+    }
+    expect(chainActions.releaseClaimLock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a funded-in-API contract with no bounty on-chain", async () => {
+    const { app, upload, fundOnChain, bounties } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id);
+    const funded = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/funded`,
+      headers: { cookie: dev },
+    });
+    expect(funded.statusCode).toBe(200);
+    bounties.clear();
+    expect((await reclaim(app, id, dev)).statusCode).toBe(409);
+  });
+
+  it("releases the claim lock, expires the contract, and repeats idempotently", async () => {
+    const chainActions = lockActions();
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 3);
+
+    const first = await reclaim(app, id, dev);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ id, status: "Expired" });
+    expect(chainActions.releaseClaimLock).toHaveBeenCalledWith(id);
+
+    const second = await reclaim(app, id, dev);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().status).toBe("Expired");
+  });
+
+  it("is 409 when the contract can no longer move to Expired", async () => {
+    const { app, upload, fundOnChain, store } = setup();
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 3);
+    const stored = store.contracts.get(id)!;
+    stored.contract = { ...stored.contract, status: "Resolved" };
+
+    const res = await reclaim(app, id, dev);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toEqual(expect.stringContaining("Resolved"));
+  });
+
+  it("is 502 and leaves the contract Open when releasing the claim lock fails", async () => {
+    const chainActions = {
+      ...lockActions(),
+      releaseClaimLock: vi.fn(async (): Promise<boolean> => {
+        throw new Error("rpc down");
+      }),
+    };
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 3);
+
+    const res = await reclaim(app, id, dev);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "could not release the auditor's claim lock; try again" });
+    const contract = await app.inject({ method: "GET", url: `/api/contracts/${id}` });
+    expect(contract.json().status).toBe("Open");
+
+    // Once the release works, the retry succeeds.
+    chainActions.releaseClaimLock.mockResolvedValueOnce(true);
+    expect((await reclaim(app, id, dev)).statusCode).toBe(200);
+  });
+});

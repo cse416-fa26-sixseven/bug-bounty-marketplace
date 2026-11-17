@@ -34,6 +34,16 @@ contract AuditorStakingTest is Test {
     address internal auditor = makeAddr("auditor");
     address internal recipient = makeAddr("recipient");
 
+    // Mirrors AuditorStaking's events for vm.expectEmit (solc 0.8.19 cannot
+    // emit `AuditorStaking.Event` directly).
+    event DisputeResolutionBound(address indexed disputeResolution);
+    event Staked(address indexed auditor, uint256 amount, uint256 total);
+    event Withdrawn(address indexed auditor, uint256 amount, uint256 remaining);
+    event Slashed(address indexed auditor, uint256 amount, address indexed recipient);
+    event ReputationChanged(address indexed auditor, int256 delta, int256 total);
+    event SubmissionLocked(address indexed auditor, uint256 active);
+    event SubmissionUnlocked(address indexed auditor, uint256 active);
+
     function setUp() public {
         staking = new AuditorStaking(address(this));
         staking.bindDisputeResolution(dispute);
@@ -261,5 +271,153 @@ contract AuditorStakingTest is Test {
         AuditorStaking fresh = new AuditorStaking(address(this));
         vm.expectRevert(AuditorStaking.NotDisputeResolution.selector);
         fresh.slash(auditor, 1, recipient);
+    }
+
+    // --- stake() while locked / after slash ---
+
+    function test_stake_allowedWhileSubmissionLocked() public {
+        _stake(auditor, 0.1 ether);
+        staking.lockSubmission(auditor);
+
+        // Locking only blocks withdrawal; topping up still works.
+        _stake(auditor, 0.2 ether);
+        assertEq(staking.stakeOf(auditor), 0.3 ether);
+        assertEq(staking.activeSubmissions(auditor), 1);
+
+        vm.prank(auditor);
+        vm.expectRevert(AuditorStaking.ActiveSubmissions.selector);
+        staking.withdraw(0.1 ether);
+    }
+
+    function test_stake_afterSlashRestoresEligibility() public {
+        _stake(auditor, 0.1 ether);
+        vm.prank(dispute);
+        staking.slash(auditor, 0.05 ether, recipient);
+        assertFalse(staking.isEligible(auditor));
+
+        _stake(auditor, 0.05 ether);
+        assertEq(staking.stakeOf(auditor), 0.1 ether);
+        assertTrue(staking.isEligible(auditor));
+    }
+
+    function test_stake_afterFullSlashStartsFromZero() public {
+        _stake(auditor, 0.5 ether);
+        vm.prank(dispute);
+        staking.slash(auditor, 10 ether, recipient);
+        assertEq(staking.stakeOf(auditor), 0);
+
+        _stake(auditor, 0.2 ether);
+        assertEq(staking.stakeOf(auditor), 0.2 ether);
+    }
+
+    function test_stake_rejectsZeroWhileLocked() public {
+        staking.lockSubmission(auditor);
+        vm.prank(auditor);
+        vm.expectRevert(AuditorStaking.ZeroAmount.selector);
+        staking.stake{value: 0}();
+    }
+
+    // --- events ---
+
+    function test_bind_emitsDisputeResolutionBound() public {
+        AuditorStaking fresh = new AuditorStaking(address(this));
+        vm.expectEmit(true, false, false, false, address(fresh));
+        emit DisputeResolutionBound(dispute);
+        fresh.bindDisputeResolution(dispute);
+    }
+
+    function test_stake_emitsStaked() public {
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit Staked(auditor, 0.3 ether, 0.3 ether);
+        _stake(auditor, 0.3 ether);
+
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit Staked(auditor, 0.2 ether, 0.5 ether);
+        _stake(auditor, 0.2 ether);
+    }
+
+    function test_withdraw_emitsWithdrawn() public {
+        _stake(auditor, 1 ether);
+
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit Withdrawn(auditor, 0.4 ether, 0.6 ether);
+        vm.prank(auditor);
+        staking.withdraw(0.4 ether);
+    }
+
+    function test_lockUnlock_emitSubmissionEvents() public {
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit SubmissionLocked(auditor, 1);
+        staking.lockSubmission(auditor);
+
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit SubmissionLocked(auditor, 2);
+        staking.lockSubmission(auditor);
+
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit SubmissionUnlocked(auditor, 1);
+        staking.unlockSubmission(auditor);
+    }
+
+    function test_slash_emitsSlashedWithAmountTaken() public {
+        _stake(auditor, 0.5 ether);
+
+        // The event carries the floored amount, not the requested one.
+        vm.expectEmit(true, true, false, true, address(staking));
+        emit Slashed(auditor, 0.5 ether, recipient);
+        vm.prank(dispute);
+        staking.slash(auditor, 2 ether, recipient);
+    }
+
+    function test_adjustReputation_emitsReputationChanged() public {
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit ReputationChanged(auditor, 2, 2);
+        vm.prank(dispute);
+        staking.adjustReputation(auditor, 2);
+
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit ReputationChanged(auditor, -5, -3);
+        vm.prank(dispute);
+        staking.adjustReputation(auditor, -5);
+    }
+
+    // --- fuzz ---
+
+    /// @dev Stake then withdraw conserves ETH for any amount and split.
+    function testFuzz_stakeWithdraw_conservesBalance(uint256 amount, uint256 out) public {
+        amount = bound(amount, 1, 1_000_000 ether);
+        out = bound(out, 1, amount);
+        address who = makeAddr("fuzz-auditor");
+        vm.deal(who, amount);
+
+        _stake(who, amount);
+        assertEq(address(staking).balance, amount);
+        assertEq(staking.isEligible(who), amount >= staking.REQUIRED_STAKE());
+
+        vm.prank(who);
+        staking.withdraw(out);
+
+        assertEq(staking.stakeOf(who), amount - out);
+        assertEq(who.balance, out);
+        assertEq(address(staking).balance, amount - out);
+    }
+
+    /// @dev Slash takes min(stake, requested), sends exactly that to the
+    /// recipient and leaves the rest staked.
+    function testFuzz_slash_floorsAndConserves(uint256 staked, uint256 requested) public {
+        staked = bound(staked, 1, 1_000_000 ether);
+        requested = bound(requested, 1, 2_000_000 ether);
+        address who = makeAddr("fuzz-auditor");
+        vm.deal(who, staked);
+        _stake(who, staked);
+
+        vm.prank(dispute);
+        uint256 taken = staking.slash(who, requested, recipient);
+
+        uint256 expected = requested > staked ? staked : requested;
+        assertEq(taken, expected);
+        assertEq(staking.stakeOf(who), staked - expected);
+        assertEq(recipient.balance, expected);
+        assertEq(address(staking).balance, staked - expected);
     }
 }
