@@ -12,7 +12,7 @@ import {
   POC_SOURCE_MAX_BYTES,
 } from "@bbm/shared";
 import { buildApp } from "../app.js";
-import type { AuditorStakingPort } from "../chain/auditor-staking.js";
+import { StakeBelowRequiredError, type AuditorStakingPort } from "../chain/auditor-staking.js";
 import { createChainActions, type ChainActions } from "../chain/actions.js";
 import { MemoryChainActionStore } from "../chain/memory-action-store.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
@@ -480,9 +480,67 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
   });
 
-  it("releases the lock and the claim with 403 when the stake is withdrawn before the lock lands", async () => {
+  it("answers 403 like the gate and releases the claim when the contract refuses the lock for stake", async () => {
     // Race: the gate reads the requirement, then the wallet withdraws before
-    // lockSubmission is mined. The re-read after the lock sees 0.
+    // the lock is sent. AuditorStaking.lockSubmission reverts StakeBelowRequired.
+    const { seedContract, repository, claim, lock, unlock, queue } = chainSetup(async (auditor) => {
+      throw new StakeBelowRequiredError(auditor, 0n);
+    });
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(lock).toHaveBeenCalledWith(AUDITOR_A);
+    // Nothing was locked, so nothing is unlocked.
+    expect(unlock).not.toHaveBeenCalled();
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+    expect((await repository.findContractById(contract.id, T0))?.status).toBe("Open");
+    expect((await queue()).json().map((c: { id: string }) => c.id)).toContain(contract.id);
+  });
+
+  it("answers 403 when the lock is mined and reverts and the stake now reads below the requirement", async () => {
+    // The withdraw lands between the gas estimate and the lock being mined:
+    // the receipt says reverted without a reason, so the stake is read again.
+    let reads = 0;
+    const { seedContract, repository, claim, unlock, stakeOf } = chainSetup(
+      async () => {
+        throw new Error("AuditorStaking.lockSubmission reverted in 0xabc");
+      },
+      async () => (reads++ === 0 ? 100_000_000_000_000_000n : 0n),
+    );
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(stakeOf).toHaveBeenCalledTimes(2);
+    expect(unlock).not.toHaveBeenCalled();
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("answers 502 when the lock fails and the stake re-read fails too", async () => {
+    let reads = 0;
+    const { seedContract, repository, claim } = chainSetup(
+      async () => {
+        throw new Error("rpc unavailable");
+      },
+      async () => {
+        if (reads++ === 0) return 100_000_000_000_000_000n;
+        throw new Error("rpc unavailable");
+      },
+    );
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(502);
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("releases the lock and the claim with 403 when a contract without the stake check locks an emptied wallet", async () => {
+    // An AuditorStaking deployed before lockSubmission checked the stake: the
+    // gate reads the requirement, the wallet withdraws, and the lock still
+    // lands. The re-read after the lock sees 0.
     let reads = 0;
     const { seedContract, repository, claim, lock, unlock, stakeOf, queue } = chainSetup(undefined, async () =>
       reads++ === 0 ? 100_000_000_000_000_000n : 0n,

@@ -97,6 +97,13 @@ Deployed by hand on 2026-11-05 with Foundry 1.3.5 (`CHALLENGE_WINDOW=600`,
 | `challengeWindow` | 600 s      |
 | `refundDelay`     | 600 s      |
 
+This `AuditorStaking` predates the stake check in `lockSubmission` (#TBD): it
+locks a submission for any address, so on this deployment the API's stake
+gate is the only check on claims. Enforcing it on-chain on Sepolia needs a
+redeploy of all three contracts (`BountyEscrow` and `DisputeResolution` hold
+the staking address as an immutable), followed by new addresses and
+`deployBlock` here and in `deploy/helm/bbm/values-prod.yaml`.
+
 `deployments/*.json` is not committed, so this table is the shared record.
 To run the API against this deployment without the file, set
 `AUDITOR_STAKING_ADDRESS`, `BOUNTY_ESCROW_ADDRESS`,
