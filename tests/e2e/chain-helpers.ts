@@ -79,8 +79,17 @@ export async function stakeAndClaim(page: Page, amountLabel: string): Promise<vo
   await expect(page).toHaveURL(/\/auditor$/);
   // Wait for the profile to load, then stake only if the gate is locked.
   await expect(page.getByText(/PoC upload (locked|unlocked)/)).toBeVisible({ timeout: 30_000 });
+  // Right after the role switch the gate can briefly show "locked" for an
+  // auditor who already staked; let the profile requests settle first.
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+  await expect(page.getByText(/PoC upload (locked|unlocked)/)).toBeVisible();
   if (await page.getByText("PoC upload locked").isVisible()) {
-    await page.getByRole("button", { name: "Post stake" }).click();
+    // The form goes away once the stake lands (or if the gate was stale), so
+    // a click that finds no button is not an error: the check below decides.
+    await page
+      .getByRole("button", { name: "Post stake" })
+      .click({ timeout: 15_000 })
+      .catch(() => undefined);
   }
   await expect(page.getByText("PoC upload unlocked")).toBeVisible({ timeout: 30_000 });
   await page
