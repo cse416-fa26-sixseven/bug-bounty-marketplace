@@ -13,13 +13,13 @@ import {
 import { parseEther } from "viem";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  OPERATOR,
   Session,
   chainAddresses,
   chainNow,
   freshAccount,
   fund,
   increaseTime,
+  operatorWrite,
   onchainId,
   pollUntil,
   publicClient,
@@ -110,7 +110,10 @@ async function findings(contractId: string): Promise<Finding[]> {
 async function queueIds(): Promise<string[]> {
   const res = await fetch(`${api}/api/auditor/queue`);
   expect(res.status).toBe(200);
-  return ((await res.json()) as { id: string }[]).map((item) => item.id);
+  // Queue items are Contracts plus their bounty terms.
+  return ContractSchema.array()
+    .parse(await res.json())
+    .map((item) => item.id);
 }
 
 // Analysis of a cold worker alone can take minutes.
@@ -312,6 +315,7 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
 
       // The claim itself has no stake gate: it takes the on-chain lock.
       const claim = await auditor.postJson("/api/auditor/claim", { contractId: contract.id });
+      // TODO(fix/claim-stake-gate): expect 403 once claims need the required stake.
       expect(claim.status, JSON.stringify(claim.body)).toBe(200);
       expect(ContractSchema.parse(claim.body).status).toBe("Claimed");
       expect(await readStaking(chain.auditorStaking, "activeSubmissions", auditor.address)).toBe(
@@ -428,13 +432,13 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
       // PoC (the sandbox is out of scope here), then wait for the API to
       // pick the event up and move the finding Submitted -> Verified.
       const contractKey = onchainId(contract.id);
-      await write(OPERATOR, {
+      await operatorWrite({
         address: chain.bountyEscrow,
         abi: bountyEscrowAbi,
         functionName: "recordSubmission",
         args: [contractKey],
       });
-      await write(OPERATOR, {
+      await operatorWrite({
         address: chain.bountyEscrow,
         abi: bountyEscrowAbi,
         functionName: "recordVerification",
