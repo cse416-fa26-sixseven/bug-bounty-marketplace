@@ -17,6 +17,7 @@ shows it on the repo front page. Contributor conventions are in
   - [contracts/](contracts/overview.md): Foundry smart-contract project.
     - [Foundry setup](contracts/foundry-setup.md): installing Foundry and building and testing `contracts/`.
     - [Sepolia runbook](contracts/sepolia.md): deploying to Sepolia and running the API and the web app (MetaMask) against it.
+- [testing/](testing/README.md): JUnit XML and coverage reports, where CI uploads them and how to produce them locally.
 - [adr/](adr/): architecture decision records.
   - [ADR 0001: Azure environment topology](adr/0001-azure-environment-topology.md): AKS per env, data/compute split, OIDC, pinned stack interfaces (its ACA ephemeral envs are superseded by ADR 0002).
   - [ADR 0002: AKS for every environment, Azure DNS and one-command bring-up](adr/0002-aks-everywhere-and-azure-dns.md): test cluster with CI/preview namespaces, DNS zones, cert-manager TLS, `infra/up.sh` / `infra/down.sh`.

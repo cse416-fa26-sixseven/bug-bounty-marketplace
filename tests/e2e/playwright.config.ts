@@ -20,7 +20,13 @@ export default defineConfig({
   forbidOnly: ci,
   retries: ci ? 1 : 0,
   timeout: 30_000,
-  reporter: [[ci ? "github" : "list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+  reporter: [
+    [ci ? "github" : "list"],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+    // Relative to this config: tests/reports/junit-e2e.xml, next to the
+    // vitest tiers' JUnit files.
+    ["junit", { outputFile: "../reports/junit-e2e.xml" }],
+  ],
   use: {
     baseURL,
     trace: "on-first-retry",
