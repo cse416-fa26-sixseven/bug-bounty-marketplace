@@ -87,16 +87,22 @@ point it at another namespace or env with analysis and the sandbox enabled:
 PoC → sandbox verdict → dispute is not covered here (e2e `lifecycle` does it). Every test uses
 fresh wallets (funded with `anvil_setBalance`) and its own contracts, so the tier is
 independent of test order and reruns on the same stack. The reclaim test runs last and moves
-anvil's clock forward for good (deadline + refund delay; 3 h with the default deploy).
+anvil's clock forward for good (deadline + refund delay; 3 h with the default deploy). On a
+reused stack anvil is then about 3 h ahead of wall time per run, which matters to specs that
+compute on-chain deadlines from wall time (the `E2E_CHAIN=1` e2e specs): run those on a fresh
+stack, or derive deadlines from the latest block's timestamp as `chain-flows` does.
 
 It is skipped unless `BBM_CHAIN=1`. The CI compose stack keeps `api` (3001) in no-chain mode for
 the other tiers and adds a second, chain-mode API on **3002** (`docker-compose.ci-chain.yml`,
 service `api-chain`, profile `chain`) that reads the addresses from `.ci/deployments`, so it is
-started after the deploy:
+started after the deploy. `pnpm stack:ci-chain` needs the stack already running (`pnpm stack:ci`
+or `pnpm stack:up`): it runs the deploy and starts `api-chain` with `--no-deps`, so it never
+recreates `db`, `api` or `anvil`. Running it again redeploys the contracts and recreates
+`api-chain` on the new addresses.
 
 ```sh
 pnpm stack:ci                 # or `pnpm stack:up` (then BBM_TAG=local images are built)
-pnpm stack:ci-chain           # deploys the contracts to .ci/deployments, starts api-chain on 3002
+pnpm stack:ci-chain           # deploys to .ci/deployments, (re)starts api-chain on 3002 (--no-deps)
 BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration   # ~1 min on a warm worker
 docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml \
   --profile chain --profile deploy down -v
