@@ -6,12 +6,12 @@ supplies the RPC URL and funded keys, and every broadcast is deliberate.
 
 ## What you need
 
-| Thing                    | Notes                                                                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sepolia RPC URL          | An Alchemy or Infura URL. It usually carries an API key, so keep it secret (`SEPOLIA_RPC_URL` below; `sepolia-rpc-url` in the shared Key Vault). |
-| Deployer / operator key  | One funded Sepolia account. `Deploy.s.sol` requires the operator to be the broadcaster, so the API's `OPERATOR_PRIVATE_KEY` is this same key. It pays gas for the deploy and later for every verdict and payout, so give it ~0.2 Sepolia ETH. Shared Key Vault: `sepolia-deployer-key`. |
-| Arbiter address          | A separate account that rules on disputes, e.g. a MetaMask account. Only its address is needed at deploy time (`ARBITER`). |
-| Test users               | MetaMask accounts for a developer and an auditor, each with Sepolia ETH from a faucet. The auditor needs the required stake (0.1 ETH) plus gas. |
+| Thing                   | Notes                                                                                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sepolia RPC URL         | An Alchemy or Infura URL. It usually carries an API key, so keep it secret (`SEPOLIA_RPC_URL` below; `sepolia-rpc-url` in the shared Key Vault).                                                                                                                                        |
+| Deployer / operator key | One funded Sepolia account. `Deploy.s.sol` requires the operator to be the broadcaster, so the API's `OPERATOR_PRIVATE_KEY` is this same key. It pays gas for the deploy and later for every verdict and payout, so give it ~0.2 Sepolia ETH. Shared Key Vault: `sepolia-deployer-key`. |
+| Arbiter address         | A separate account that rules on disputes, e.g. a MetaMask account. Only its address is needed at deploy time (`ARBITER`).                                                                                                                                                              |
+| Test users              | MetaMask accounts for a developer and an auditor, each with Sepolia ETH from a faucet. The auditor needs the required stake (0.1 ETH) plus gas.                                                                                                                                         |
 
 Never commit a key or a keyed RPC URL, and never pass a key on the command
 line (it lands in shell history and `ps`): export it from a file or a vault.
@@ -97,7 +97,7 @@ Deployed by hand on 2026-11-05 with Foundry 1.3.5 (`CHALLENGE_WINDOW=600`,
 | `challengeWindow` | 600 s      |
 | `refundDelay`     | 600 s      |
 
-This `AuditorStaking` predates the stake check in `lockSubmission` (#TBD): it
+This `AuditorStaking` predates the stake check in `lockSubmission` (#152): it
 locks a submission for any address, so on this deployment the API's stake
 gate is the only check on claims. Enforcing it on-chain on Sepolia needs a
 redeploy of all three contracts (`BountyEscrow` and `DisputeResolution` hold
