@@ -22,7 +22,8 @@ import type { FindingRecord, NewJob, PipelineRepository } from "./repository.js"
 import type { PocVerdictSource } from "./verdict-source.js";
 import { resolveActor, type Auth } from "../auth/session.js";
 
-/** Minimum AuditorStaking.stakeOf an auditor needs before a PoC is accepted:
+/** Minimum AuditorStaking.stakeOf an auditor needs before a claim, a PoC or a
+ * reported finding is accepted:
  * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. */
 export const REQUIRED_STAKE_WEI = "100000000000000000";
 
@@ -34,7 +35,7 @@ export interface PipelineRouteDeps {
   /** Present only when a chain is configured. Claims lock the auditor's stake
    * and release it on expiry, through the chain actions. */
   chainActions?: ChainActions;
-  /** Read-only stake source for the PoC stake gate. Null when no chain is
+  /** Read-only stake source for the claim/PoC/finding stake gate. Null when no chain is
    * configured: the gate is then skipped and logged. Independent of the
    * claim-lock flag. */
   stakeReader: Pick<AuditorStakingPort, "stakeOf"> | null;
@@ -124,6 +125,12 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       // address, so reject anything else before the claim is written.
       if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
         return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
+      }
+      // With a chain, the same stake gate as PoCs and findings, checked before
+      // any on-chain lock or claim row: an unstaked wallet must not be able to
+      // hold a bounty for the claim window. No chain: unchanged, no check.
+      if (stakeReader !== null && !(await passesStakeGate("POST /api/auditor/claim", auditorId, reply))) {
+        return reply;
       }
       const now = config.now();
       const expiresAt = new Date(now.getTime() + config.claimWindowSeconds * 1000);
@@ -326,8 +333,8 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     ].map((issue) => issue.message);
   }
 
-  /** Stake gate: checked before any bytes are stored, so a rejected upload
-   * leaves nothing behind. Sends the error reply and returns false on failure. */
+  /** Stake gate: checked before any bytes are stored or any claim is taken, so
+   * a rejected request leaves nothing behind. Sends the error reply and returns false on failure. */
   async function passesStakeGate(
     route: string,
     auditorId: string,
