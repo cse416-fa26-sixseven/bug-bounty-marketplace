@@ -49,13 +49,20 @@ export function findAuditorById(auditorId: string): AuditorProfile | undefined {
 /** Findings whose stake lock outlives the claim, as in the real API. */
 const LOCKING_STATUSES = new Set<Finding["status"]>(["Submitted", "Verified", "Disputed"]);
 
-/** Findings whose outcome releases the claim lock at once, as in the real API
- * (PayoutCredited, a Failed verdict, a lost dispute). */
-const RELEASING_STATUSES = new Set<Finding["status"]>(["Paid", "Rejected"]);
+/** Whether the finding's outcome releases the claim lock at once, as in the
+ * real API: a payout or a lost dispute does. A Failed verdict does not while
+ * the claim runs (the auditor may still submit on it); the lock then goes
+ * when the claim expires. */
+function releasesClaimLock(finding: Finding): boolean {
+  if (finding.status === "Paid") return true;
+  return (
+    finding.status === "Rejected" && finding.statusHistory.some((h) => h.status === "Disputed")
+  );
+}
 
 /** Mirrors AuditorStaking.activeSubmissions: one lock per contract the
  * auditor holds an unexpired claim on or has a pending finding on. A claim
- * whose PoC'd finding was paid or rejected no longer holds one. */
+ * whose PoC'd finding was paid or lost its dispute no longer holds one. */
 export function activeSubmissionsFor(auditorId: string): number {
   const locked = new Set<string>();
   const released = new Set<string>();
@@ -64,7 +71,7 @@ export function activeSubmissionsFor(auditorId: string): number {
     const finding = findFindingById(poc.findingId);
     if (!finding) continue;
     if (LOCKING_STATUSES.has(finding.status)) locked.add(finding.contractId);
-    else if (RELEASING_STATUSES.has(finding.status)) released.add(finding.contractId);
+    else if (releasesClaimLock(finding)) released.add(finding.contractId);
   }
   for (const [contractId, claim] of Object.entries(db.claims)) {
     if (

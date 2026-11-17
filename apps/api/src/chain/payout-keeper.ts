@@ -50,7 +50,7 @@ export function startPayoutKeeper(options: PayoutKeeperOptions): PayoutKeeper {
 }
 
 export interface KeeperPassDeps {
-  chainActions: Pick<ChainActions, "finishPendingUnlocks" | "runPayoutsOnce">;
+  chainActions: Pick<ChainActions, "finishPendingUnlocks" | "releaseExpiredLocks" | "runPayoutsOnce">;
   /** Lapses disputes left unruled past their ruling window; omitted without a chain. */
   runLapses?: () => Promise<LapseSummary>;
   now: () => Date;
@@ -59,15 +59,22 @@ export interface KeeperPassDeps {
 }
 
 /**
- * One keeper pass: finish pending unlocks, lapse unruled disputes, then pay
- * out. The first two are best-effort: a failure is reported and the payout
- * step still runs, so an RPC hiccup in either never delays a payout.
+ * One keeper pass: finish pending unlocks, release the locks of lapsed claims
+ * (a claim that expired with no pending finding, e.g. after a failed PoC),
+ * lapse unruled disputes, then pay out. The first three are best-effort: a
+ * failure is reported and the payout step still runs, so an RPC hiccup in any
+ * of them never delays a payout.
  */
 export async function runKeeperPass(deps: KeeperPassDeps): Promise<void> {
   const log = deps.log ?? ((message: string) => console.log(`@bbm/api ${message}`));
   const onError = deps.onError ?? ((message: string, err: unknown) => console.error(`@bbm/api ${message}`, err));
 
   await deps.chainActions.finishPendingUnlocks().catch((err: unknown) => onError("unlock sweep failed", err));
+  // Without this, a lapsed claim's lock is released only by the next queue
+  // read, profile read or claim on that contract.
+  await deps.chainActions
+    .releaseExpiredLocks(deps.now())
+    .catch((err: unknown) => onError("expired lock sweep failed", err));
   if (deps.runLapses) {
     const lapses = await deps.runLapses().catch((err: unknown) => {
       onError("lapse pass failed", err);
