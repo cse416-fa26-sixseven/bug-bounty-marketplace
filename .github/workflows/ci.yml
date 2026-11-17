@@ -601,7 +601,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BBM_TAG: ci
-      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml
+      # ci-chain adds api-chain (profile `chain`, port 3002): a second API in
+      # chain mode for the chain-flows tier; `api` on 3001 stays no-chain.
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -653,6 +655,9 @@ jobs:
           $COMPOSE run --rm contracts-deploy
           cat .ci/deployments/31337.json
 
+      - name: Start chain-mode API (reads .ci/deployments, so after the deploy)
+        run: $COMPOSE up -d --wait --wait-timeout 120 --no-build api-chain
+
       - name: Smoke test
         run: |
           set -euo pipefail
@@ -691,6 +696,9 @@ jobs:
           pnpm --filter @bbm/system-tests run typecheck
 
       - name: Integration tests
+        env:
+          BBM_CHAIN: '1'
+          BBM_CHAIN_API_URL: http://localhost:3002
         run: pnpm --filter @bbm/system-tests run test:integration --outputFile.junit=reports/junit-integration.xml
 
       - name: Regression tests (API goldens)
@@ -738,7 +746,7 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: $COMPOSE logs --no-color > compose.log
+        run: $COMPOSE --profile chain logs --no-color > compose.log
 
       - name: Upload logs on failure
         if: failure()
@@ -749,7 +757,7 @@ jobs:
 
       - name: Stop stack
         if: always()
-        run: $COMPOSE --profile deploy down -v
+        run: $COMPOSE --profile deploy --profile chain down -v
 
   # ---------------------------------------------------------------------
   # infra/terraform - static checks only (no Azure credentials, no
