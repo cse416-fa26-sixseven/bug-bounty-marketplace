@@ -9,6 +9,7 @@ import type { ChainActions } from "./chain/actions.js";
 import type { ChainConfig } from "./chain/config.js";
 import { registerChainRoutes } from "./chain/routes.js";
 import { Auth } from "./auth/session.js";
+import type { SessionRevocationStore } from "./auth/revocation-store.js";
 import type { AuthConfig } from "./auth/config.js";
 
 /** anvil's chain id, which sign-in names when no chain is configured. */
@@ -61,6 +62,9 @@ export interface AppOptions {
   /** Sign-in origin and cookie settings (AUTH_ORIGIN, COOKIE_SECURE; see
    * loadAuthConfig). Defaults to the per-request origin and a plain cookie. */
   authConfig?: AuthConfig;
+  /** Sessions ended by logout. Defaults to an in-memory store (lost on
+   * restart); `index.ts` wires Postgres when DATABASE_URL is set. */
+  sessionRevocations?: SessionRevocationStore;
   /** Clock for sign-in; defaults to the pipeline config's clock. */
   now?: () => Date;
   /** BountyEscrow reads for the developer lifecycle routes. With it and a
@@ -118,6 +122,7 @@ function registerRoutes(app: FastifyInstance, options: AppOptions): void {
         chainId: options.chainConfig?.chainId ?? LOCAL_CHAIN_ID,
         origin: options.authConfig?.origin ?? null,
         secureCookie: options.authConfig?.secureCookie ?? false,
+        revocations: options.sessionRevocations,
       })
     : null;
   if (auth) registerAuthRoutes(app, auth);

@@ -40,7 +40,7 @@ export function registerContractRoutes(app: FastifyInstance, deps: ContractRoute
     if (!body.file) {
       return reply.code(400).send({ error: "file is required" });
     }
-    const actor = resolveActor(deps.identity ?? null, request, reply, body.fields.developerAddress);
+    const actor = await resolveActor(deps.identity ?? null, request, reply, body.fields.developerAddress);
     if (!actor.ok) return reply;
     const fields = actor.id ? { ...body.fields, developerAddress: actor.id } : body.fields;
 

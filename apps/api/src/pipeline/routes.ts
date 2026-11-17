@@ -109,7 +109,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
   app.post<{ Body: { contractId?: unknown; auditorId?: unknown } | undefined }>(
     "/api/auditor/claim",
     async (request, reply) => {
-      const actor = resolveActor(identity, request, reply, request.body?.auditorId);
+      const actor = await resolveActor(identity, request, reply, request.body?.auditorId);
       if (!actor.ok) return reply;
       const contractId = request.body?.contractId;
       const auditorId = actor.id;
@@ -204,7 +204,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         ? reply.code(413).send({ error: "PoC file exceeds the 100 KB limit" })
         : reply.code(400).send({ error: "Expected a multipart/form-data body" });
     }
-    const actor = resolveActor(identity, request, reply, body.fields.auditorId);
+    const actor = await resolveActor(identity, request, reply, body.fields.auditorId);
     if (!actor.ok) return reply;
     const findingId = body.fields.findingId;
     const auditorId = actor.id;
@@ -259,7 +259,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         ? reply.code(413).send({ error: "PoC file exceeds the 100 KB limit" })
         : reply.code(400).send({ error: "Expected a multipart/form-data body" });
     }
-    const actor = resolveActor(identity, request, reply, body.fields.auditorId);
+    const actor = await resolveActor(identity, request, reply, body.fields.auditorId);
     if (!actor.ok) return reply;
     const auditorId = actor.id;
     const { contractId, title, severity, description } = body.fields;
