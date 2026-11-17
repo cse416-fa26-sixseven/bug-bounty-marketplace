@@ -382,7 +382,7 @@ describe("applyVerdict with Failed", () => {
     advance(CLAIM_WINDOW_MS);
     await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(1);
     await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(0);
-    await actions.applyVerdict(findingId, "Failed");
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledWith(AUDITOR);
     expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
@@ -407,6 +407,47 @@ describe("applyVerdict with Failed", () => {
 
     store.findings.get(second)!.status = "Paid";
     await expect(actions.applyDisputeResolved(second)).resolves.toBe(true);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("a second finding still Submitted past expiry that then fails releases the kept lock exactly once", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const first = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(first, "Failed")).resolves.toBe("Rejected");
+    const second = seedFinding(contractId, "Submitted");
+
+    // Past expiry, the pending second finding keeps the lock from the sweep.
+    advance(CLAIM_WINDOW_MS * 2);
+    const later = new Date(T0.getTime() + CLAIM_WINDOW_MS * 2);
+    await expect(actions.releaseExpiredLocks(later)).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+
+    // Its own Failed verdict now comes after expiry with nothing else pending.
+    await expect(actions.applyVerdict(second, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    await expect(actions.releaseExpiredLocks(later)).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("a closed bounty releases the kept lock once; the later expiry sweep does not unlock again", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+
+    // The developer cancels or refunds while the claim still runs.
+    await expect(actions.releaseClaimLock(contractId)).resolves.toBe(true);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+
+    advance(CLAIM_WINDOW_MS);
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(0);
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(0);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
     expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
   });
