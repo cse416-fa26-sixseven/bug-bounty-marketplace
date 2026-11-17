@@ -173,7 +173,33 @@ jobs:
         run: pnpm --filter @bbm/web run --if-present typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/web run --if-present test
+        run: pnpm --filter @bbm/web run --if-present test --coverage
+
+      # Report only (no thresholds): JUnit + v8 coverage from apps/web/reports/.
+      - name: Coverage summary
+        if: always()
+        run: |
+          f=apps/web/reports/coverage/coverage-summary.json
+          if [ -f "$f" ]; then
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**web coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-web
+          path: apps/web/reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-web
+          path: apps/web/reports/coverage/
+          if-no-files-found: ignore
 
       - name: Build
         run: pnpm --filter @bbm/web run --if-present build
@@ -214,7 +240,33 @@ jobs:
         run: pnpm --filter @bbm/shared run --if-present typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/shared run --if-present test
+        run: pnpm --filter @bbm/shared run --if-present test --coverage
+
+      # Report only (no thresholds): JUnit + v8 coverage from packages/shared/reports/.
+      - name: Coverage summary
+        if: always()
+        run: |
+          f=packages/shared/reports/coverage/coverage-summary.json
+          if [ -f "$f" ]; then
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**shared coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-shared
+          path: packages/shared/reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-shared
+          path: packages/shared/reports/coverage/
+          if-no-files-found: ignore
 
       - name: Regenerate schema (if gen:schema exists)
         run: pnpm --filter @bbm/shared run --if-present gen:schema
@@ -274,7 +326,33 @@ jobs:
         run: pnpm --filter @bbm/api run typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/api run test
+        run: pnpm --filter @bbm/api run test --coverage
+
+      # Report only (no thresholds): JUnit + v8 coverage from apps/api/reports/.
+      - name: Coverage summary
+        if: always()
+        run: |
+          f=apps/api/reports/coverage/coverage-summary.json
+          if [ -f "$f" ]; then
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**api coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-api
+          path: apps/api/reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-api
+          path: apps/api/reports/coverage/
+          if-no-files-found: ignore
 
       - name: Build
         run: pnpm --filter @bbm/api run build
@@ -346,6 +424,34 @@ jobs:
         working-directory: contracts
         run: forge snapshot --check
 
+      # Report only and never gating: forge coverage rebuilds without the
+      # optimizer, which can fail on stack-too-deep code. Runs before Slither,
+      # whose container runs as root and can leave root-owned files behind.
+      - name: Forge coverage (report only)
+        id: forge-coverage
+        working-directory: contracts
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          forge coverage --report summary --report lcov | tee coverage-summary.txt
+          # The summary table, from its first border/header row on, in a code block.
+          {
+            echo '**contracts coverage:**'
+            echo '```'
+            sed -n '/^[╭+|]/,$p' coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always() && steps.forge-coverage.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-contracts
+          path: |
+            contracts/lcov.info
+            contracts/coverage-summary.txt
+          if-no-files-found: ignore
+
       - name: Deploy script dry run
         working-directory: contracts
         run: forge script script/Deploy.s.sol
@@ -411,7 +517,17 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Test (pytest)
-        run: uv run pytest -q
+        run: >-
+          uv run pytest -q --junitxml=reports/junit.xml
+          --cov=analysis --cov-report=xml:reports/coverage.xml --cov-report=term
+
+      # Report only (no thresholds).
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f reports/coverage.xml ]; then
+            python3 -c "import xml.etree.ElementTree as E; r = E.parse('reports/coverage.xml').getroot(); print(f\"**analysis coverage:** lines {float(r.get('line-rate')) * 100:.1f}%\")" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Fail if generated models are out of date
         run: |
@@ -422,7 +538,23 @@ jobs:
         run: xargs -a src/analysis/solc-versions.txt -n1 uv run solc-select install
 
       - name: Slither integration tests
-        run: uv run pytest -m slither -q
+        run: uv run pytest -m slither -q --junitxml=reports/junit-slither.xml
+
+      - name: Upload JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-analysis
+          path: workers/analysis/reports/junit*.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-analysis
+          path: workers/analysis/reports/coverage.xml
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------
   # sandbox - builds the offline Foundry image auditors' PoCs run in, then
@@ -559,15 +691,15 @@ jobs:
           pnpm --filter @bbm/system-tests run typecheck
 
       - name: Integration tests
-        run: pnpm --filter @bbm/system-tests run test:integration
+        run: pnpm --filter @bbm/system-tests run test:integration --outputFile.junit=reports/junit-integration.xml
 
       - name: Regression tests (API goldens)
-        run: pnpm --filter @bbm/system-tests run test:regression
+        run: pnpm --filter @bbm/system-tests run test:regression --outputFile.junit=reports/junit-regression.xml
 
       - name: Smoke tests
         env:
           BBM_SMOKE_WRITE: '1'
-        run: pnpm --filter @bbm/system-tests run test:smoke
+        run: pnpm --filter @bbm/system-tests run test:smoke --outputFile.junit=reports/junit-smoke.xml
 
       # Browser cached per Playwright version; system libs only via apt if
       # Chromium can't launch (see tests/e2e/install-browser.sh).
@@ -586,6 +718,15 @@ jobs:
 
       - name: E2E tests (Playwright)
         run: pnpm --filter @bbm/system-tests run e2e
+
+      # JUnit from every system-test tier (vitest tiers + Playwright).
+      - name: Upload JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-system-tests
+          path: tests/reports/junit-*.xml
+          if-no-files-found: ignore
 
       - name: Upload Playwright report
         if: always()
