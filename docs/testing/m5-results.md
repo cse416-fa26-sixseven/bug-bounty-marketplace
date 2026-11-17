@@ -139,8 +139,6 @@ Regression tests now exist for earlier fixes that had none: re-running wei migra
 - **With claim locks disabled** there is no on-chain lock, so stake → claim → withdraw is
   possible. PoC and finding submissions still check stake, so the harm is limited to holding
   the claim window.
-- **`e2e-chain` is non-blocking** (`continue-on-error`, not in `CI OK`). Make it required once it
-  has a stable record.
 - **Each chain-mode integration run leaves anvil ~3 h ahead of wall time** on a reused stack;
   use a fresh stack before running `E2E_CHAIN=1` specs (see [tests/README](../../tests/README.md)).
 - **Local stacks share the compose project name `bbm`**, so `stack:demo` from one worktree
