@@ -230,6 +230,11 @@ credentials, quota or uptime. `CI OK` is the required status check on `main`
 (ruleset source of truth: `.github/rulesets/main.json`; apply changes with
 `gh api -X PUT repos/cse416-fa26-sixseven/bug-bounty-marketplace/rulesets/24287837 --input .github/rulesets/main.json`).
 
+The `test-report` job (report only, not part of `CI OK`) adds test counts and
+line coverage per suite to the run summary and, on pull requests, to one
+sticky PR comment that is updated on every push
+([docs/testing](docs/testing/README.md)).
+
 ### Azure workflows
 
 All authenticate with GitHub OIDC (no secrets) and skip green until the
