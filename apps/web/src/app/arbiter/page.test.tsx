@@ -32,6 +32,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cancelAllScheduled();
+  // Restores the window.confirm spies so they never leak between tests.
+  vi.restoreAllMocks();
 });
 
 describe("ArbiterPage", () => {
