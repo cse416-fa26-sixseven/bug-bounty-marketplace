@@ -122,16 +122,12 @@ jobs:
               - 'workers/**'
               - 'contracts/**'
 
-            # The on-chain browser E2E run (e2e-chain job): its specs and
-            # the scripts that start the demo stack. The job also runs on
-            # every `containers` or `root` change.
+            # The scripts behind the on-chain browser E2E run (e2e-chain
+            # job). Its specs, compose files and ci.yml are already covered
+            # by `containers` / `root`, which the job's `if` also checks.
             e2e_chain:
-              - 'tests/e2e/**'
               - 'scripts/demo-stack.sh'
               - 'scripts/ci-e2e-chain.sh'
-              - 'docker-compose.chain.yml'
-              - 'docker-compose.sandbox.yml'
-              - '.github/workflows/ci.yml'
 
             # Terraform (separate toolchain, no JS deps) and the bring-up /
             # teardown scripts: static checks and offline self-tests only,
@@ -789,6 +785,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 45
+    permissions:
+      contents: read
     env:
       CI: 'true'
       E2E_COMPOSE_LOG: ${{ github.workspace }}/compose-e2e-chain.log
