@@ -19,6 +19,8 @@ export default tseslint.config(
       "workers/**",
       "tests/e2e/playwright-report/**",
       "tests/e2e/test-results/**",
+      // Local/CI test reports (coverage HTML ships its own JS).
+      "**/reports/**",
     ],
   },
   {

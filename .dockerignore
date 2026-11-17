@@ -4,6 +4,7 @@
 **/.next
 **/dist
 **/coverage
+**/reports
 **/*.tsbuildinfo
 **/.turbo
 **/.env

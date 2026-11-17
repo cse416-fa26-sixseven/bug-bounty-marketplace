@@ -10,6 +10,14 @@ out/
 .env.*
 !.env.example
 coverage/
+# Test reports (JUnit XML, coverage) written by CI runs; see docs/testing/README.md
+/apps/*/reports/
+/packages/*/reports/
+/tests/reports/
+/workers/*/reports/
+lcov.info
+.coverage
+coverage.xml
 *.log
 npm-debug.log*
 pnpm-debug.log*
@@ -43,7 +51,6 @@ broadcast/
 # System tests (tests/e2e Playwright output)
 tests/e2e/playwright-report/
 tests/e2e/test-results/
-tests/e2e/junit.xml
 compose-e2e-chain.log
 
 # Terraform ignores lock files in called modules; only stacks commit one.

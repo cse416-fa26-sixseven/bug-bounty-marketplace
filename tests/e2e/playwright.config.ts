@@ -23,9 +23,9 @@ export default defineConfig({
   reporter: [
     [ci ? "github" : "list"],
     ["html", { outputFolder: "playwright-report", open: "never" }],
-    // JUnit for CI test summaries (tests/e2e/junit.xml). Not inside
-    // playwright-report/, which the HTML reporter rewrites at the end.
-    ...(ci ? [["junit", { outputFile: "junit.xml" }] as const] : []),
+    // Relative to this config: tests/reports/junit-e2e.xml, next to the
+    // vitest tiers' JUnit files.
+    ["junit", { outputFile: "../reports/junit-e2e.xml" }],
   ],
   use: {
     baseURL,

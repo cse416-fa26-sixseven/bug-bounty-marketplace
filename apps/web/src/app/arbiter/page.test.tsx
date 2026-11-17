@@ -32,6 +32,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cancelAllScheduled();
+  // Restores the window.confirm spies so they never leak between tests.
+  vi.restoreAllMocks();
 });
 
 describe("ArbiterPage", () => {
@@ -62,6 +64,29 @@ describe("ArbiterPage", () => {
     });
 
     expect(screen.getByText(/No open disputes right now/i)).toBeInTheDocument();
+  });
+
+  it("rules for the auditor and moves the dispute to the 'Ruled for auditor' tab", async () => {
+    renderPage();
+
+    await screen.findByText(/dispute_1/i);
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    fireEvent.click(screen.getByText(/Rule for auditor/i));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/FOR the auditor/));
+    await waitFor(() => {
+      expect(screen.queryByText(/dispute_1/i)).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ruled for auditor" }));
+    expect(await screen.findByText(/dispute_1/i)).toBeInTheDocument();
+    // A ruled dispute offers no ruling buttons.
+    expect(screen.queryByText(/Rule for auditor/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ruled against auditor" }));
+    expect(await screen.findByText(/No disputes match this filter/i)).toBeInTheDocument();
   });
 
   it("does not rule when the confirmation is declined", async () => {

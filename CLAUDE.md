@@ -87,8 +87,8 @@ infra/down.sh --subscription <guid> (--envs <list> | --all) [--dry-run]
 ## Git workflow
 
 - Each milestone has an integration branch cut from `main`: currently
-  `feat/m3-devops` (DevOps milestone); previously `feat/m2-foundation`
-  (M2 foundation).
+  `feat/m5-testing` (Milestone 5 testing); previously `feat/m3-devops`
+  (DevOps milestone) and `feat/m2-foundation` (M2 foundation).
 - Each sub-branch (e.g. `ci/azure-workflows`, `docs/devops`) is cut from the
   **latest** integration branch — pull before cutting.
 - Commit in small Conventional Commits. Lint/typecheck/test/build whatever
