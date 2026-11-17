@@ -426,6 +426,24 @@ jobs:
         working-directory: contracts
         run: forge test -vvv
 
+      # JUnit for the test-report job: forge prints the XML to stdout. Report
+      # only; the step above is the one that fails the job.
+      - name: Forge JUnit report
+        if: always()
+        working-directory: contracts
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          forge test --junit > reports/junit.xml
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-contracts
+          path: contracts/reports/junit.xml
+          if-no-files-found: ignore
+
       # Regression: fail when gas usage changes without the committed
       # snapshot being updated (`forge snapshot` and commit the result).
       - name: Gas snapshot check
@@ -1153,6 +1171,64 @@ jobs:
             || warn="Advisories (or audit error) in workers/analysis/uv.lock - see the job summary."
           report "Python (workers/analysis/uv.lock)" "$RUNNER_TEMP/py.txt" "$warn"
           exit 0
+
+  # ---------------------------------------------------------------------
+  # Test report - test counts and line coverage per suite, from the
+  # junit-* and coverage-* artifacts the jobs above uploaded
+  # (scripts/ci-test-report.py). Written to the run summary on every run,
+  # and posted as one sticky PR comment (updated in place) on pull
+  # requests from this repository. Fork and Dependabot PRs get a read-only
+  # token, so they get the summary but no comment. Report only: never
+  # fails on test results and is not part of CI OK.
+  # ---------------------------------------------------------------------
+  test-report:
+    name: Test report
+    needs: [changes, web, shared, api, contracts, analysis, containers, e2e-chain]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      # Jobs skipped by their path filter upload nothing; the report shows
+      # those suites as "not run".
+      - name: Download JUnit reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: junit-*
+          path: artifacts
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          path: artifacts
+
+      - name: Build report
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p artifacts
+          python3 scripts/ci-test-report.py artifacts --results "$RESULTS" --sha "$SHA" --run-url "$RUN_URL" > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post sticky comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: test-report
+          path: report.md
 
   # ---------------------------------------------------------------------
   # Single required status check for branch protection: succeeds as

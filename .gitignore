@@ -15,6 +15,7 @@ coverage/
 /packages/*/reports/
 /tests/reports/
 /workers/*/reports/
+/contracts/reports/
 lcov.info
 .coverage
 coverage.xml
