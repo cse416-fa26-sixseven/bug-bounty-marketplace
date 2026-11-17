@@ -143,8 +143,8 @@ E2E_CHAIN=1 pnpm test:e2e -- lifecycle features flows-extra
 pnpm demo:lifecycle            # the payout and dispute paths from the command line; prints LIFECYCLE OK
 ```
 
-CI runs them in `ci.yml`'s `e2e-chain` job, which is non-blocking
-(`continue-on-error`, not part of `CI OK`).
+CI runs them in `ci.yml`'s `e2e-chain` job, which is part of `CI OK`, so a
+failing on-chain spec blocks the merge.
 `scripts/ci-e2e-chain.sh [playwright args]` does all of it in one go: a fresh
 `stack:demo`, the compose `web` service (production build, mocks off), every
 spec with `E2E_CHAIN=1` and no retries, compose logs to

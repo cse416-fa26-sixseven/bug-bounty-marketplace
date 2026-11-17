@@ -219,11 +219,11 @@ A `changes` job (`dorny/paths-filter`) decides which jobs run. Root config
 | `contracts`        | `forge build`, `forge test`, `forge snapshot --check`, deploy-script dry run, Slither (advisory, `fail-on: none`)                                               |
 | `analysis`         | `uv sync --frozen`, ruff check + format, pytest, generated-models drift check                                                                                   |
 | `containers`       | hadolint, build every image (GHA cache), non-root check, compose stack up, deploy to anvil, chain-mode API, integration (incl. chain tier)/regression/smoke/e2e |
-| `e2e-chain`        | non-blocking: fresh `stack:demo` with the sandbox, full on-chain Playwright suite                                                                               |
+| `e2e-chain`        | fresh `stack:demo` with the sandbox, full on-chain Playwright suite                                                                                             |
 | `terraform-static` | `infra/terraform/scripts/ci-static.sh`: fmt, validate, `terraform test`, tflint, shellcheck                                                                     |
 | `helm`             | `helm lint` every values layer, render + kubeconform, missing-tag render must fail, `ct lint`                                                                   |
 | `workflows`        | actionlint                                                                                                                                                      |
-| `CI OK`            | always runs; passes when `changes` succeeded and every other job (except `e2e-chain` and `deps-audit`) succeeded or was skipped                                 |
+| `CI OK`            | always runs; passes when `changes` succeeded and every other job (except `deps-audit`) succeeded or was skipped                                                 |
 
 `ci.yml` never logs in to Azure, so `CI OK` never depends on cloud
 credentials, quota or uptime. `CI OK` is the required status check on `main`

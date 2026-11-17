@@ -14,7 +14,7 @@ to the run's step summary.
 | `coverage-contracts`                         | contracts  | `contracts/lcov.info`, `contracts/coverage-summary.txt` (non-gating step)                  |
 | `junit-system-tests`                         | containers | `tests/reports/junit-{integration,regression,smoke,e2e}.xml`                               |
 | `playwright-report`                          | containers | Playwright HTML report                                                                     |
-| `junit-e2e-chain`, `playwright-report-chain` | e2e-chain  | `tests/reports/junit-e2e.xml`, Playwright HTML report (non-blocking job)                   |
+| `junit-e2e-chain`, `playwright-report-chain` | e2e-chain  | `tests/reports/junit-e2e.xml`, Playwright HTML report                                      |
 
 Vitest coverage directories hold `coverage-summary.json`, `lcov.info` and an HTML report
 (`lcov-report/`). Every `reports/` directory is gitignored.
