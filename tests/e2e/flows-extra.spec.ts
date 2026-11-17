@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { parseEther } from "viem";
 import {
   advanceChainTime,
   chainTime,
@@ -25,6 +26,10 @@ import {
  * a claim, so the tests do not depend on each other's state. The reclaim test
  * moves anvil's clock forward, so it runs last.
  *
+ * Serial mode: a test that fails midway can leave the auditor holding a claim
+ * (one claim per auditor), so the rest would fail for that reason; they are
+ * skipped instead.
+ *
  * Same setup as lifecycle.spec.ts:
  *   pnpm stack:demo
  *   NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
@@ -34,10 +39,24 @@ import {
 test.skip(!process.env.E2E_CHAIN, SKIP_REASON);
 test.describe.configure({ mode: "serial" });
 
-/** anvil account #1, the developer role's wallet (lib/chain/accounts.ts). */
+/** anvil accounts #1 and #2, the developer and auditor roles' wallets
+ * (apps/web/src/lib/chain/accounts.ts). */
 const DEVELOPER = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-/** deploy script's REFUND_DELAY on the demo stack. */
+const AUDITOR = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+/** BountyEscrow's refundDelay on the demo stack: REFUND_DELAY for
+ * contracts-deploy in docker-compose.chain.yml. */
 const REFUND_DELAY_SECONDS = 60;
+/** Headroom for the gas a withdraw or refund costs. */
+const GAS_ALLOWANCE = parseEther("0.01");
+
+/** The amount in wei of a bounty label like "1.234561 ETH". */
+function bountyWei(label: string): bigint {
+  return parseEther(label.replace(/ ETH$/, ""));
+}
+
+async function balanceOf(address: string): Promise<bigint> {
+  return BigInt(await rpc<string>("eth_getBalance", [address, "latest"]));
+}
 
 /** Developer: disputes the first verified finding on their contract page. Returns the reason. */
 async function dispute(page: Page, contractUrl: string): Promise<string> {
@@ -105,11 +124,13 @@ test("arbiter rules for the auditor: payout lands, reputation rises, stake is no
   await page.goto("/auditor");
   await expect(reputation).toHaveText(String(reputationBefore + 1), { timeout: 30_000 });
   await expect(stake).toHaveText(stakeBefore);
-  await expect(profileValue(page, "Payout to withdraw")).not.toHaveText("0 ETH", {
-    timeout: 30_000,
-  });
+  // The payout to withdraw may include an earlier spec's unwithdrawn one, so
+  // the check is on the wallet: withdrawing brings in at least this bounty.
+  const before = await balanceOf(AUDITOR);
   await page.getByRole("button", { name: "Withdraw", exact: true }).click();
   await expect(profileValue(page, "Payout to withdraw")).toHaveText("0 ETH", { timeout: 30_000 });
+  const after = await balanceOf(AUDITOR);
+  expect(after - before).toBeGreaterThan(bountyWei(bounty) - GAS_ALLOWANCE);
 });
 
 test("auditor's stake is locked while a claim is open and withdrawn once the payout releases it", async ({
@@ -202,7 +223,6 @@ test("developer reclaims the bounty after the deadline and refund delay", async 
 
   await startAsDeveloper(page);
   const bounty = await uploadFundedVault(page, { deadline });
-  const amountWei = BigInt(Math.round(Number.parseFloat(bounty) * 1e5)) * 10n ** 13n;
 
   // Before the deadline the button is shown but disabled.
   const reclaim = page.getByRole("button", { name: "Reclaim bounty" });
@@ -216,7 +236,7 @@ test("developer reclaims the bounty after the deadline and refund delay", async 
   await page.clock.install({ time: new Date((dueAt + 30) * 1000) });
   await page.reload();
 
-  const before = BigInt(await rpc<string>("eth_getBalance", [DEVELOPER, "latest"]));
+  const before = await balanceOf(DEVELOPER);
   await expect(reclaim).toBeEnabled({ timeout: 30_000 });
   await reclaim.click();
   await expect(page.getByText("Expired", { exact: true }).first()).toBeVisible({
@@ -224,6 +244,6 @@ test("developer reclaims the bounty after the deadline and refund delay", async 
   });
   await expect(reclaim).toBeHidden();
   // The bounty came back to the developer's wallet (less gas).
-  const after = BigInt(await rpc<string>("eth_getBalance", [DEVELOPER, "latest"]));
-  expect(after - before).toBeGreaterThan((amountWei * 99n) / 100n);
+  const after = await balanceOf(DEVELOPER);
+  expect(after - before).toBeGreaterThan(bountyWei(bounty) - GAS_ALLOWANCE);
 });
