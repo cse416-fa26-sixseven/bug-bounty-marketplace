@@ -103,7 +103,11 @@ something else.
 | `BBM_SMOKE_WRITE`      | unset                        | `1` adds smoke's create+read round-trip (CI, non-prod deploys)                          |
 | `BBM_SMOKE_READONLY`   | unset                        | `1` forces read-only even when `BBM_SMOKE_WRITE=1`                                      |
 | `BBM_WAIT_MS`          | `30000`                      | How long globalSetup waits for `GET /health`                                            |
-| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter                                      |
+| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter. Vitest tiers: JUnit to `reports/`   |
+
+Playwright always writes `tests/reports/junit-e2e.xml`; CI names each vitest
+tier's file with `--outputFile.junit=reports/junit-<tier>.xml`. See
+[docs/testing](../docs/testing/README.md).
 
 The vitest globalSetup fails fast with a clear message if the API isn't
 reachable. Without it, every test would time out separately.
