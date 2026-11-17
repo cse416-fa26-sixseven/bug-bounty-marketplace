@@ -311,6 +311,8 @@ for pair in northcentralus=ncus canadacentral=cac francecentral=frc eastus2=eus2
   eq "region_abbr ${pair%%=*}" "$(region_abbr "${pair%%=*}")" "${pair#*=}"
 done
 check_fails "region_abbr unknown region" region_abbr swedencentral
+check_fails "tf_plan_apply --target without an address dies" tf_plan_apply data test --target
+check_fails "tf_plan_apply unknown argument dies" tf_plan_apply data test --bogus
 eq "resolve: map" "$(resolve_location_abbr canadacentral)" "cac"
 eq "resolve: explicit abbr for unknown region" "$(resolve_location_abbr swedencentral sdc)" "sdc"
 eq "resolve: explicit abbr matching the map" "$(resolve_location_abbr northcentralus ncus)" "ncus"

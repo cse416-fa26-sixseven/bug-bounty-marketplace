@@ -630,6 +630,7 @@ tf_plan_apply() {
         args+=(-destroy)
         ;;
       --target)
+        [[ $# -ge 2 && -n "$2" ]] || die "tf_plan_apply: --target needs an address"
         args+=("-target=$2")
         shift
         ;;

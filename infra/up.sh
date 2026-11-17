@@ -747,7 +747,7 @@ ensure_llm_key() { # ensure_llm_key <vault>
     fi
     if [[ "$out" == *SecretNotFound* || "$out" == *"was not found"* ]]; then
       retry 10 30 run az keyvault secret set --vault-name "$kv" -n llm-api-key --value placeholder-set-me -o none ||
-        die "$kv: could not set llm-api-key"
+        die "$kv: could not set llm-api-key. If it is soft-deleted (ObjectIsDeletedButRecoverable), restore it with: az keyvault secret recover --vault-name $kv -n llm-api-key"
       warn "$kv: llm-api-key set to placeholder-set-me; replace it with the real key later"
       return 0
     fi
