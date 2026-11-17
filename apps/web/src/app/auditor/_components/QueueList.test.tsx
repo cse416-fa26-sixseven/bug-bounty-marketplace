@@ -41,14 +41,18 @@ function renderQueue() {
   );
 }
 
-/** Renders the queue with one item and the claim answering `status` with `error`. */
+/** Renders the queue with one item for a staked auditor, and the claim
+ * answering `status` with `error`. */
 async function claimRefusedWith(error: string, status = 409) {
   server.use(
     http.get("*/api/auditor/queue", () => HttpResponse.json([ITEM])),
+    http.get("*/api/auditor/profile", () => HttpResponse.json(profileWithStake(REQUIRED_STAKE_WEI))),
     http.post("*/api/auditor/claim", () => HttpResponse.json({ error }, { status })),
   );
   renderQueue();
-  fireEvent.click(await screen.findByRole("button", { name: "Claim" }));
+  const button = await screen.findByRole("button", { name: "Claim" });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
 }
 
 describe("QueueList stake requirement", () => {

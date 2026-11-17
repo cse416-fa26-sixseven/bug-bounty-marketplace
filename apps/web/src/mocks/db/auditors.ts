@@ -25,8 +25,9 @@ import { armChallengeWindow, findContractById, findFindingById, isAnalysisDone }
  * can pre-assign claims to this auditor in its own seed data. */
 export const SEED_AUDITOR_ID = "auditor_1";
 
-/** Demo stake an auditor needs to claim, submit a PoC or report a finding
- * (the UI's REQUIRED_STAKE). Above the seed auditor's 5,000 so the gate shows. */
+/** Demo stake an auditor needs to claim, submit a PoC or report a finding.
+ * Keep in sync with StakeGate's REQUIRED_STAKE (app/auditor/_components/StakeGate.tsx).
+ * Above the seed auditor's 5,000 so the gate shows. Unknown auditors count as 0. */
 const MOCK_REQUIRED_STAKE_WEI = ethToWei("10000");
 
 function stakeMet(auditorId: string): boolean {
@@ -129,7 +130,7 @@ export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] 
 /** As the API does on a chain: the stake gate runs first, so an unstaked
  * auditor (403) never takes a claim. */
 export function claimContract(contractId: string, auditorId: string): Contract {
-  if (findAuditorById(auditorId) && !stakeMet(auditorId))
+  if (!stakeMet(auditorId))
     throw new MockApiError(403, "Auditor stake is below the required stake");
   listQueue();
   const contract = findContractById(contractId);
