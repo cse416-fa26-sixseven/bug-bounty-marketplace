@@ -26,7 +26,7 @@ Playwright tiers already existed. A gap survey at the start of the milestone fou
 | #144 | `test/integration-gaps`             | Chain-mode integration tier: `api-chain` service, SIWE sign-in helpers, `tests/integration/chain-flows.test.ts` (15 tests), run in CI                                            |
 | #145 | `test/e2e-chain`                    | Four new on-chain browser specs; the whole on-chain suite runs in CI as the non-blocking `e2e-chain` job                                                                         |
 | #146 | `fix/claim-stake-gate`              | Fix for bug M5-1 (below), found by #144                                                                                                                                          |
-| —    | `fix/relock-stake-after-failed-poc` | Fix for bug M5-3 (below), found by #145. In progress                                                                                                                             |
+| #148 | `fix/relock-stake-after-failed-poc` | Fix for bug M5-3 (below), found by #145                                                                                                                                          |
 
 Every PR was reviewed by a fresh reviewer agent before merge (correctness, coverage, schema
 consistency across packages, no real network calls, scope), and the review findings were
@@ -36,16 +36,16 @@ fixed on the branch before merging.
 
 ### Test counts
 
-| Suite                        | Before M5                     | After M5 (incl. #146)                   | Runs in                          |
-| ---------------------------- | ----------------------------- | --------------------------------------- | -------------------------------- |
-| Contracts (`forge test`)     | 101                           | 149 (incl. 5 fuzz)                      | `contracts` job                  |
-| API (vitest, incl. Postgres) | 483 + 71 pg                   | 514 + 73 pg (580 in CI with pg at #143) | `api` job (Postgres service)     |
-| Web (vitest + MSW)           | 180                           | 206                                     | `web` job                        |
-| Shared (vitest)              | 69                            | 121                                     | `shared` job                     |
-| Analysis worker (pytest)     | 217 + 5 Slither               | unchanged                               | `analysis` job                   |
-| System integration           | 25 (chain routes unreachable) | 40 (+15 chain-mode)                     | `containers` job                 |
-| Regression / smoke           | 7 goldens + 2 gates / 5       | unchanged                               | `containers` job                 |
-| E2E (Playwright)             | 2 in CI (6 by hand)           | 10 in CI                                | `containers` (home), `e2e-chain` |
+| Suite                        | Before M5                     | After M5 (incl. #146, #148) | Runs in                          |
+| ---------------------------- | ----------------------------- | --------------------------- | -------------------------------- |
+| Contracts (`forge test`)     | 101                           | 149 (incl. 5 fuzz)          | `contracts` job                  |
+| API (vitest, incl. Postgres) | 483 + 71 pg                   | 591 with Postgres           | `api` job (Postgres service)     |
+| Web (vitest + MSW)           | 180                           | 207                         | `web` job                        |
+| Shared (vitest)              | 69                            | 121                         | `shared` job                     |
+| Analysis worker (pytest)     | 217 + 5 Slither               | unchanged                   | `analysis` job                   |
+| System integration           | 25 (chain routes unreachable) | 40 (+15 chain-mode)         | `containers` job                 |
+| Regression / smoke           | 7 goldens + 2 gates / 5       | unchanged                   | `containers` job                 |
+| E2E (Playwright)             | 2 in CI (6 by hand)           | 10 in CI                    | `containers` (home), `e2e-chain` |
 
 ### Coverage (report only, no thresholds)
 
@@ -76,13 +76,13 @@ Artifacts per run (Actions → run → Artifacts): `junit-{web,shared,api,analys
 
 ## Bugs found in M5
 
-| ID   | Found by                           | Bug                                                                                                                                                                                                                                                                                                                                 | Status                                                                             |
-| ---- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| M5-1 | Chain-mode integration tier (#144) | `POST /api/auditor/claim` never called the stake gate, so a zero-stake wallet could take the on-chain claim lock and block a bounty for the 10-minute claim window. Throwaway wallets could block every bounty.                                                                                                                     | Fixed in #146                                                                      |
-| M5-2 | Review of the M5-1 fix             | Check-then-act race in the new gate: between the stake read and the mined `lockSubmission`, the wallet can still `withdraw` (front-run with a higher fee), ending up holding the claim with zero stake. `lockSubmission` itself does not check stake.                                                                               | Fixed in #146 (re-read stake once the lock lands; release lock and claim if short) |
-| M5-3 | On-chain e2e tier (#145)           | A failed PoC verdict released the auditor's stake lock while the claim stayed active. The auditor could submit a second PoC on the same claim and withdraw the whole stake before its verdict; `recordVerification` then reverted with `AuditorNotEligible` on every pass and the finding stayed "awaiting sandbox result" forever. | Fix in progress                                                                    |
-| M5-4 | Chain-mode integration tier (#144) | Logout only clears the cookie. Sessions are stateless signed cookies valid for 8 hours, so a copied cookie keeps working until it expires.                                                                                                                                                                                          | Known limitation (needs a server-side session store)                               |
-| M5-5 | On-chain e2e run                   | Test-side flake: right after a role switch the stake gate briefly showed "locked" for a staked auditor, so `stakeAndClaim` staked twice and then waited on a button that had gone away.                                                                                                                                             | Fixed in #145 (helper waits for the profile to settle)                             |
+| ID   | Found by                           | Bug                                                                                                                                                                                                                                                                                                                                 | Status                                                                                                                                                               |
+| ---- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M5-1 | Chain-mode integration tier (#144) | `POST /api/auditor/claim` never called the stake gate, so a zero-stake wallet could take the on-chain claim lock and block a bounty for the 10-minute claim window. Throwaway wallets could block every bounty.                                                                                                                     | Fixed in #146                                                                                                                                                        |
+| M5-2 | Review of the M5-1 fix             | Check-then-act race in the new gate: between the stake read and the mined `lockSubmission`, the wallet can still `withdraw` (front-run with a higher fee), ending up holding the claim with zero stake. `lockSubmission` itself does not check stake.                                                                               | Fixed in #146 (re-read stake once the lock lands; release lock and claim if short)                                                                                   |
+| M5-3 | On-chain e2e tier (#145)           | A failed PoC verdict released the auditor's stake lock while the claim stayed active. The auditor could submit a second PoC on the same claim and withdraw the whole stake before its verdict; `recordVerification` then reverted with `AuditorNotEligible` on every pass and the finding stayed "awaiting sandbox result" forever. | Fixed in #148: a Failed verdict keeps the lock while the claim is held; the lock is released when the claim ends (expiry sweep, payout, lost dispute, cancel/refund) |
+| M5-4 | Chain-mode integration tier (#144) | Logout only clears the cookie. Sessions are stateless signed cookies valid for 8 hours, so a copied cookie keeps working until it expires.                                                                                                                                                                                          | Known limitation (needs a server-side session store)                                                                                                                 |
+| M5-5 | On-chain e2e run                   | Test-side flake: right after a role switch the stake gate briefly showed "locked" for a staked auditor, so `stakeAndClaim` staked twice and then waited on a button that had gone away.                                                                                                                                             | Fixed in #145 (helper waits for the profile to settle)                                                                                                               |
 
 Regression tests now exist for earlier fixes that had none: re-running wei migration 0003
 (4f275dc), the k6 payload sending wei (#61), and "Withdraw" vs "Withdraw stake" (#123).
@@ -118,6 +118,12 @@ Regression tests now exist for earlier fixes that had none: re-running wei migra
   use a fresh stack before running `E2E_CHAIN=1` specs (see [tests/README](../../tests/README.md)).
 - **Local stacks share the compose project name `bbm`**, so `stack:demo` from one worktree
   tears down another's stack. Use `-p <name>` for parallel stacks.
+- **After a failed PoC the stake stays locked until the claim lapses** (10 minutes), so the
+  auditor can retry on the same claim; it is then released by the keeper's expiry sweep (M5-3 fix).
+- **Follow-ups from the M5-3 review:** a PoC submitted within milliseconds of claim expiry can
+  race the expiry sweep (`submitPoc` does not lock the contract row); and a lost dispute can
+  release the lock while the claim is still active, so if that unlock is retried later by the
+  keeper the withdraw-then-resubmit window reopens.
 - **No coverage thresholds** yet; numbers are report only.
 
 ## Reproducing
@@ -132,6 +138,9 @@ pnpm test:regression && pnpm test:smoke
 
 scripts/ci-e2e-chain.sh                        # fresh stack:demo + full on-chain Playwright suite
 ```
+
+Each end-to-end and chain integration scenario, with expected and actual results, is listed in
+[m5-test-cases.md](m5-test-cases.md).
 
 See [tests/README.md](../../tests/README.md) for environment variables and per-tier details, and
 [testing/README.md](README.md) for where the JUnit and coverage files come from.
