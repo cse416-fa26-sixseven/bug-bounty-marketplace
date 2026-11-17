@@ -56,7 +56,10 @@ function setup() {
     reputation: vi.fn(async () => 3n),
     activeSubmissions: vi.fn(async () => 1n),
   };
-  const chainActions = { applyDisputeResolved: vi.fn(async () => true) };
+  const chainActions = {
+    applyDisputeResolved: vi.fn(async () => true),
+    releaseExpiredLocks: vi.fn(async (_now: Date) => 0),
+  };
   const disputes = new MemoryDisputeRepository();
   const app = buildApp({
     repository,
@@ -107,6 +110,7 @@ function setup() {
     seed,
     openOnChain,
     chainActions,
+    auditorStaking,
     setVerified: (f: string) => (verifiedFinding = onchainId(f)),
   };
 }
@@ -129,6 +133,32 @@ describe("auditor profile", () => {
       activeSubmissions: 1,
       claimedContractIds: [],
     });
+  });
+
+  it("releases lapsed claim locks before reading activeSubmissions", async () => {
+    const { app, chainActions, auditorStaking } = setup();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/auditor/profile",
+      headers: { cookie: await signIn(app, AUDITOR) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(chainActions.releaseExpiredLocks).toHaveBeenCalledWith(T0);
+    expect(chainActions.releaseExpiredLocks.mock.invocationCallOrder[0]!).toBeLessThan(
+      auditorStaking.activeSubmissions.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("still answers when the lapsed-lock sweep fails", async () => {
+    const { app, chainActions } = setup();
+    chainActions.releaseExpiredLocks.mockRejectedValueOnce(new Error("rpc down"));
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/auditor/profile",
+      headers: { cookie: await signIn(app, AUDITOR) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ activeSubmissions: 1 });
   });
 });
 
