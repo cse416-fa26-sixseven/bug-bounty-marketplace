@@ -77,8 +77,9 @@ point it at another namespace or env with analysis and the sandbox enabled:
   then; a wrong amount is refused); `deleteBounty` → `POST /cancel` → `Expired`; `refund` after
   the deadline + refund delay (anvil `evm_increaseTime`, no waiting) → `POST /reclaim` →
   `Expired`.
-- **Auditor**: claim takes the on-chain `lockSubmission`; `POST /api/auditor/findings` is
-  refused by the stake gate until the auditor stakes; `GET /api/auditor/profile`; cancelling a
+- **Auditor**: a claim without the required stake is refused by the stake gate (`403`, no
+  on-chain lock, no claim); once staked, the claim takes the on-chain `lockSubmission` and
+  `POST /api/auditor/findings` reports a finding; `GET /api/auditor/profile`; cancelling a
   claimed bounty releases the lock.
 - **Notes and indexer**: the developer's `PUT /api/findings/:id/note` on an auditor-reported
   finding; the operator's `recordVerification` on-chain is picked up by the indexer (polled,
