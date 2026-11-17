@@ -23,6 +23,32 @@ contract ReentrantPayoutReceiver {
     }
 }
 
+/// @dev Developer whose receive hook always reverts, so any ETH sent back to
+/// it fails with TransferFailed.
+contract RevertingDeveloper {
+    BountyEscrow public immutable escrow;
+
+    constructor(BountyEscrow _escrow) {
+        escrow = _escrow;
+    }
+
+    function fund(bytes32 contractId, uint256 deadline) external payable {
+        escrow.fund{value: msg.value}(contractId, deadline);
+    }
+
+    function deleteBounty(bytes32 contractId) external {
+        escrow.deleteBounty(contractId);
+    }
+
+    function refund(bytes32 contractId) external {
+        escrow.refund(contractId);
+    }
+
+    receive() external payable {
+        revert("no ETH");
+    }
+}
+
 contract BountyEscrowTest is Test {
     AuditorStaking internal staking;
     BountyEscrow internal escrow;
@@ -824,5 +850,34 @@ contract BountyEscrowTest is Test {
         assertEq(auditor.balance, auditorBefore + amount);
         assertEq(address(escrow).balance, 0);
         assertEq(escrow.pendingPayouts(auditor), 0);
+    }
+
+    // --- TransferFailed (reverting receiver) ---
+
+    function test_deleteBounty_revertsTransferFailedAndKeepsBountyOpen() public {
+        RevertingDeveloper dev = new RevertingDeveloper(escrow);
+        dev.fund{value: BOUNTY}(CONTRACT_ID, deadline);
+
+        vm.expectRevert(BountyEscrow.TransferFailed.selector);
+        dev.deleteBounty(CONTRACT_ID);
+
+        // The whole call reverted: the bounty is still Open and funded.
+        (, uint256 amount,, BountyEscrow.BountyState state,,,,,) = escrow.bounties(CONTRACT_ID);
+        assertEq(uint8(state), uint8(BountyEscrow.BountyState.Open));
+        assertEq(amount, BOUNTY);
+        assertEq(address(escrow).balance, BOUNTY);
+    }
+
+    function test_refund_revertsTransferFailedAndKeepsBountyOpen() public {
+        RevertingDeveloper dev = new RevertingDeveloper(escrow);
+        dev.fund{value: BOUNTY}(CONTRACT_ID, deadline);
+        vm.warp(deadline + REFUND_DELAY);
+
+        vm.expectRevert(BountyEscrow.TransferFailed.selector);
+        dev.refund(CONTRACT_ID);
+
+        (, uint256 amount,, BountyEscrow.BountyState state,,,,,) = escrow.bounties(CONTRACT_ID);
+        assertEq(uint8(state), uint8(BountyEscrow.BountyState.Open));
+        assertEq(amount, BOUNTY);
     }
 }
