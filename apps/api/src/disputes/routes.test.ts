@@ -526,7 +526,7 @@ describe("finding lifecycle route edge cases", () => {
     expect(ctx.chainActions.applyDisputeResolved).not.toHaveBeenCalled();
   });
 
-  it("a failing claim-lock release does not fail an AgainstAuditor ruling", async () => {
+  it("a rejected applyDisputeResolved does not fail an AgainstAuditor ruling", async () => {
     const ctx = setup();
     const { contractId, findingId, disputeId } = await openDispute(ctx);
     ctx.openOnChain(contractId, findingId, true);
@@ -539,5 +539,6 @@ describe("finding lifecycle route edge cases", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(ctx.store.findings.get(findingId)?.status).toBe("Rejected");
+    expect(ctx.chainActions.applyDisputeResolved).toHaveBeenCalledWith(findingId);
   });
 });
