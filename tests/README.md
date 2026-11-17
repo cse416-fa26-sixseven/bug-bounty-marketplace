@@ -121,18 +121,39 @@ window, withdraw) and dispute (disputed, arbiter rules against the auditor,
 Rejected, stake slashed). `e2e/features.spec.ts` covers the rest: a developer
 note that survives a reload, cancelling a funded bounty, the auditor's
 false-positive mark, and an auditor-reported finding that is verified and paid.
-Both are skipped unless `E2E_CHAIN=1`, because they need the chain demo stack
-and the web app against the real API, which CI does not start. They share the
-anvil role accounts, so with `E2E_CHAIN=1` Playwright runs one test at a time.
-A failed run can leave the auditor holding a claim, so start a fresh
-`pnpm stack:demo` before running them again.
+`e2e/flows-extra.spec.ts` adds the arbiter ruling for the auditor (payout,
+reputation +1, no slash), withdrawing stake once the payout releases its lock,
+a failing PoC that ends Rejected, and the developer reclaiming a bounty after
+its deadline and refund delay. The reclaim test moves anvil's clock with
+`evm_increaseTime` and the browser's with `page.clock` instead of waiting; the
+API's clock is never moved, and a chain ahead of the wall clock does not affect
+later specs. Each test funds its own contract and leaves the auditor without a
+claim.
+
+All three files are skipped unless `E2E_CHAIN=1`, because they need the chain
+demo stack and the web app against the real API. They share the anvil role
+accounts, so with `E2E_CHAIN=1` Playwright runs one test at a time. A failed
+run can leave the auditor holding a claim, so start a fresh `pnpm stack:demo`
+before running them again.
 
 ```sh
 pnpm stack:demo                # fresh database and chain, 60-second challenge window
 NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
-E2E_CHAIN=1 pnpm test:e2e -- lifecycle features   # about 6 minutes
-pnpm demo:lifecycle            # the same two paths from the command line; prints LIFECYCLE OK
+E2E_CHAIN=1 pnpm test:e2e -- lifecycle features flows-extra
+pnpm demo:lifecycle            # the payout and dispute paths from the command line; prints LIFECYCLE OK
 ```
+
+CI runs them in `ci.yml`'s `e2e-chain` job, which is non-blocking
+(`continue-on-error`, not part of `CI OK`).
+`scripts/ci-e2e-chain.sh [playwright args]` does all of it in one go: a fresh
+`stack:demo`, the compose `web` service (production build, mocks off), every
+spec with `E2E_CHAIN=1` and no retries, compose logs to
+`compose-e2e-chain.log` on failure, then `down -v` (`KEEP_STACK=1` keeps it;
+`E2E_WEB=host` uses a web app you already started; `BBM_COMPOSE_EXTRA` adds
+overlays, e.g. one that unpublishes a port taken on your machine). On Docker
+Desktop the socket inside its VM is `root:root`, so set `DOCKER_GID=0`;
+otherwise every PoC fails with `permission denied` on the socket and stays
+Submitted.
 
 ### Environment variables
 
