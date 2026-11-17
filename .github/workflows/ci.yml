@@ -181,7 +181,8 @@ jobs:
         run: |
           f=apps/web/reports/coverage/coverage-summary.json
           if [ -f "$f" ]; then
-            jq -r '.total | "**web coverage:** lines \(.lines.pct)% · statements \(.statements.pct)% · branches \(.branches.pct)% · functions \(.functions.pct)%"' "$f" >> "$GITHUB_STEP_SUMMARY"
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**web coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload JUnit report
@@ -247,7 +248,8 @@ jobs:
         run: |
           f=packages/shared/reports/coverage/coverage-summary.json
           if [ -f "$f" ]; then
-            jq -r '.total | "**shared coverage:** lines \(.lines.pct)% · statements \(.statements.pct)% · branches \(.branches.pct)% · functions \(.functions.pct)%"' "$f" >> "$GITHUB_STEP_SUMMARY"
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**shared coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload JUnit report
@@ -332,7 +334,8 @@ jobs:
         run: |
           f=apps/api/reports/coverage/coverage-summary.json
           if [ -f "$f" ]; then
-            jq -r '.total | "**api coverage:** lines \(.lines.pct)% · statements \(.statements.pct)% · branches \(.branches.pct)% · functions \(.functions.pct)%"' "$f" >> "$GITHUB_STEP_SUMMARY"
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**api coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload JUnit report
@@ -421,21 +424,9 @@ jobs:
         working-directory: contracts
         run: forge snapshot --check
 
-      - name: Deploy script dry run
-        working-directory: contracts
-        run: forge script script/Deploy.s.sol
-
-      - name: Slither static analysis
-        uses: crytic/slither-action@v0.4.2
-        with:
-          target: 'contracts/'
-          # Findings are advisory in this product (explained by the LLM,
-          # verified only via a sandboxed PoC) - CI should run Slither as a
-          # sanity check, not gate merges on every detector hit.
-          fail-on: none
-
       # Report only and never gating: forge coverage rebuilds without the
-      # optimizer, which can fail on stack-too-deep code.
+      # optimizer, which can fail on stack-too-deep code. Runs before Slither,
+      # whose container runs as root and can leave root-owned files behind.
       - name: Forge coverage (report only)
         id: forge-coverage
         working-directory: contracts
@@ -443,11 +434,11 @@ jobs:
         run: |
           set -o pipefail
           forge coverage --report summary --report lcov | tee coverage-summary.txt
-          # The summary table, from its header row on, in a code block.
+          # The summary table, from its first border/header row on, in a code block.
           {
             echo '**contracts coverage:**'
             echo '```'
-            sed -n '/File/,$p' coverage-summary.txt
+            sed -n '/^[╭+|]/,$p' coverage-summary.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -460,6 +451,19 @@ jobs:
             contracts/lcov.info
             contracts/coverage-summary.txt
           if-no-files-found: ignore
+
+      - name: Deploy script dry run
+        working-directory: contracts
+        run: forge script script/Deploy.s.sol
+
+      - name: Slither static analysis
+        uses: crytic/slither-action@v0.4.2
+        with:
+          target: 'contracts/'
+          # Findings are advisory in this product (explained by the LLM,
+          # verified only via a sandboxed PoC) - CI should run Slither as a
+          # sanity check, not gate merges on every detector hit.
+          fail-on: none
 
   # ---------------------------------------------------------------------
   # workers/analysis - Python (uv) worker. Unit tests run with sockets
