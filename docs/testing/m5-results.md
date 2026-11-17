@@ -133,9 +133,12 @@ Regression tests now exist for earlier fixes that had none: re-running wei migra
 ## Known limitations and follow-ups
 
 - **Stateless sessions** (M5-4): logout cannot revoke a copied cookie before it expires.
-- **Stake checks live only in the API.** `AuditorStaking.lockSubmission` does not check
-  eligibility, so the API is the only gate on claims. A contract-level check is the stronger
-  fix but needs a redeploy of the Sepolia contracts.
+- **Stake check on the claim lock** (follow-up to M5-1 and M5-2, #TBD):
+  `AuditorStaking.lockSubmission` now reverts with `StakeBelowRequired` below `REQUIRED_STAKE`,
+  so the contract, not the API, is the authority on claims; the API keeps its own check as a
+  faster answer and maps the revert to the same `403`. The Sepolia contracts deployed on
+  2026-11-05 predate this, so on Sepolia (prod) the API is still the only gate until they are
+  redeployed ([Sepolia runbook](../contracts/sepolia.md#current-deployment)).
 - **With claim locks disabled** there is no on-chain lock, so stake → claim → withdraw is
   possible. PoC and finding submissions still check stake, so the harm is limited to holding
   the claim window.

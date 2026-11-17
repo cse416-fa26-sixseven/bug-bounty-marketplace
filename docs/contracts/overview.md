@@ -9,7 +9,7 @@ auditor staking and dispute resolution. For installing Foundry, fetching
 
 | Path                        | Purpose                                                                                                                                                                                                         |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/AuditorStaking.sol`    | Auditor stakes (`REQUIRED_STAKE` = 0.1 ETH), reputation, submission locks, slashing.                                                                                                                            |
+| `src/AuditorStaking.sol`    | Auditor stakes (`REQUIRED_STAKE` = 0.1 ETH), reputation, submission locks (`lockSubmission` reverts `StakeBelowRequired` under the required stake; unlocking never checks it), slashing.                        |
 | `src/BountyEscrow.sol`      | Holds a developer's ETH bounty per contract. Records submissions and the first verified finding, pays it after the challenge window (pull-based), refunds after the deadline plus refund delay.                 |
 | `src/DisputeResolution.sol` | Developer opens a dispute on a verified finding during the challenge window; the arbiter rules within `RULING_WINDOW` (3 days), or the dispute lapses in the auditor's favour. A losing auditor is slashed 50%. |
 | `src/Placeholder.sol`       | Original scaffold contract.                                                                                                                                                                                     |
