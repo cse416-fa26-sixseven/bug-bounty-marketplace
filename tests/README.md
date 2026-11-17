@@ -100,7 +100,10 @@ pnpm demo:lifecycle            # the payout and dispute paths from the command l
 spec with `E2E_CHAIN=1` and no retries, compose logs to
 `compose-e2e-chain.log` on failure, then `down -v` (`KEEP_STACK=1` keeps it;
 `E2E_WEB=host` uses a web app you already started; `BBM_COMPOSE_EXTRA` adds
-overlays, e.g. one that unpublishes a port taken on your machine).
+overlays, e.g. one that unpublishes a port taken on your machine). On Docker
+Desktop the socket inside its VM is `root:root`, so set `DOCKER_GID=0`;
+otherwise every PoC fails with `permission denied` on the socket and stays
+Submitted.
 
 ### Environment variables
 
