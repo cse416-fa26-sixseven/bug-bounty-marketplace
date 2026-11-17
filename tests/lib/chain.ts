@@ -117,6 +117,27 @@ export async function write(
   return hash;
 }
 
+/** Nonce clashes worth one more try: viem fetched the pending nonce, but
+ * another sender on the same account got a transaction in first. */
+const NONCE_ERROR = /nonce|replacement (transaction )?underpriced/i;
+
+/**
+ * A write signed by the operator (anvil #0). The chain-mode API signs with
+ * the same key on its own schedule (payout keeper, verdict loop, claim-lock
+ * sweeps), so a test transaction can race it for a nonce. Retries up to twice
+ * on a nonce error, re-reading the nonce each time; anything else is thrown.
+ */
+export async function operatorWrite(request: Parameters<typeof write>[1]): Promise<Hash> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await write(OPERATOR, request);
+    } catch (err) {
+      if (attempt >= 2 || !NONCE_ERROR.test(String(err))) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+}
+
 /** BountyEscrow.fund(keccak(contractId), deadline) with `amount` wei. */
 export function fund(
   account: PrivateKeyAccount,
