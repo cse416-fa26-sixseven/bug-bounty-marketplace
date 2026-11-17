@@ -40,6 +40,9 @@ locals {
   dns  = module.naming.dns
   tags = module.naming.tags
   rg   = data.azurerm_resource_group.data.name
+
+  # Env KV secret names, shared with the app chart's secrets.csi.objects.
+  kv_secrets = module.naming.kv_secrets
 }
 
 module "network" {
@@ -98,8 +101,8 @@ module "keyvault" {
   # Both values are generated here and therefore live in <env>/data.tfstate.
   # llm-api-key is set out of band (az keyvault secret set), never by Terraform.
   secrets = var.postgres_enabled ? {
-    "database-url"      = module.postgres[0].database_url
-    "pg-admin-password" = module.postgres[0].administrator_password
+    (local.kv_secrets.database_url)      = module.postgres[0].database_url
+    (local.kv_secrets.pg_admin_password) = module.postgres[0].administrator_password
   } : {}
   tags = local.tags
 }

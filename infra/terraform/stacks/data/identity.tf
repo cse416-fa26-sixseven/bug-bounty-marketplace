@@ -21,6 +21,29 @@ locals {
       role     = "DNS Zone Contributor"
     }
   }
+
+  # worker (analysis): Key Vault Secrets User on exactly the two secrets its
+  # SecretProviderClass mounts (deploy/helm/bbm bbm-kv-analysis), never on
+  # the vault. The worker runs Slither on untrusted Solidity next to the PoC
+  # sandbox, and the vault also holds chain-operator-key and session-secret.
+  # Azure only accepts a secret-scoped assignment once the secret exists:
+  #   database-url  written by this stack (staging/prod only; test runs
+  #                 in-cluster Postgres and has none). The scope comes from
+  #                 the secret resource, so the grant waits for it.
+  #   llm-api-key   set out of band, never by Terraform (its value would land
+  #                 in state on refresh). infra/up.sh applies the vault alone
+  #                 first and seeds a placeholder before the full apply.
+  worker_kv_secret_scopes = merge(
+    { for k, s in module.keyvault.managed_secret_scopes : k => s if k == local.kv_secrets.database_url },
+    { (local.kv_secrets.llm_api_key) = "${module.keyvault.id}/secrets/${local.kv_secrets.llm_api_key}" },
+  )
+  worker_kv_grants = {
+    for name, scope in local.worker_kv_secret_scopes : "worker-kv-secret-${name}" => {
+      identity = "worker"
+      scope    = scope
+      role     = "Key Vault Secrets User"
+    }
+  }
 }
 
 module "identity" {
@@ -50,12 +73,8 @@ module "identity" {
       role     = "Storage Queue Data Message Sender"
     }
 
-    # worker (analysis): KV secrets, consume jobs, read sources.
-    worker-kv-secrets-user = {
-      identity = "worker"
-      scope    = module.keyvault.id
-      role     = "Key Vault Secrets User"
-    }
+    # worker (analysis): its two KV secrets (local.worker_kv_grants), consume
+    # jobs, read sources.
     worker-queue-processor = {
       identity = "worker"
       scope    = module.storage.queue_id
@@ -82,5 +101,5 @@ module "identity" {
     }
 
     # sandbox: runs untrusted PoC code, so it deliberately gets no grants.
-  }, local.certmgr_dns_grants)
+  }, local.worker_kv_grants, local.certmgr_dns_grants)
 }
