@@ -7,8 +7,8 @@ import { auditorApi, ApiError } from "@/lib/api";
 import { ethToWei, weiToEth } from "@/lib/money";
 import { useChainCalls, useRequiredStakeWei } from "@/lib/chain/use-chain";
 
-/** Minimum stake an auditor must have posted before the PoC-upload UI
- * unlocks, in demo ETH. Deliberately set above the seed auditor's starting
+/** Minimum stake an auditor must have posted before claiming a contract and
+ * before the PoC-upload UI unlocks, in demo ETH. Deliberately set above the seed auditor's starting
  * 5,000 stake so the gate is demonstrable rather than already-satisfied. */
 export const REQUIRED_STAKE = 10_000;
 export const REQUIRED_STAKE_WEI = ethToWei(String(REQUIRED_STAKE));
@@ -60,6 +60,11 @@ export function StakeGate({
             {Number(weiToEth(profile.stake)).toLocaleString()} /{" "}
             {Number(weiToEth(requiredWei)).toLocaleString()} required
           </p>
+          {!met && (
+            <p className="text-sm text-slate-400">
+              Claiming a contract and submitting a PoC both need the required stake.
+            </p>
+          )}
         </div>
         {met ? (
           <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-medium text-emerald-400">

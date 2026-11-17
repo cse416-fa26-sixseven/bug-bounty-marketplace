@@ -26,7 +26,7 @@ afterEach(() => {
 
 /** An unexpired claim on CONTRACT by the seed auditor, with one finding in
  * `status` backed by the auditor's PoC. */
-function claimWith(status: Finding["status"]) {
+function claimWith(status: Finding["status"], history: Finding["status"][] = [status]) {
   db.claims[CONTRACT] = {
     auditorId: SEED_AUDITOR_ID,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -36,6 +36,7 @@ function claimWith(status: Finding["status"]) {
     id: "finding_lock_test",
     contractId: CONTRACT,
     status,
+    statusHistory: history.map((s) => ({ status: s, changedAt: new Date().toISOString() })),
   };
   db.findings.push(finding);
   db.pocSubmissions.push({
@@ -58,15 +59,23 @@ describe("activeSubmissionsFor", () => {
     },
   );
 
-  it.each(["Paid", "Rejected"] as const)(
-    "releases the lock once the auditor's finding is %s, even with the claim unexpired",
-    (status) => {
-      // The real API unlocks on PayoutCredited, a Failed verdict and a lost
-      // dispute, without waiting for the claim to expire.
-      claimWith(status);
-      expect(activeSubmissionsFor(SEED_AUDITOR_ID)).toBe(0);
-    },
-  );
+  it("releases the lock once the auditor's finding is Paid, even with the claim unexpired", () => {
+    // The real API unlocks on PayoutCredited without waiting for the expiry.
+    claimWith("Paid");
+    expect(activeSubmissionsFor(SEED_AUDITOR_ID)).toBe(0);
+  });
+
+  it("releases the lock once a dispute goes against the auditor, even with the claim unexpired", () => {
+    claimWith("Rejected", ["Submitted", "Verified", "Disputed", "Rejected"]);
+    expect(activeSubmissionsFor(SEED_AUDITOR_ID)).toBe(0);
+  });
+
+  it("keeps the lock of an unexpired claim after a Failed verdict", () => {
+    // The auditor may still submit on the claim, and that finding's
+    // verification needs the stake: the real API keeps the lock until expiry.
+    claimWith("Rejected", ["Submitted", "Rejected"]);
+    expect(activeSubmissionsFor(SEED_AUDITOR_ID)).toBe(1);
+  });
 
   it("counts an auditor-reported finding past the claim's expiry", () => {
     // contract_2 is seeded Claimed by the seed auditor (claim on its findings).

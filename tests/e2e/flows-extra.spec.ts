@@ -191,11 +191,13 @@ test("a failing PoC ends Rejected for the auditor and the developer", async ({ p
   });
 
   // A failed verdict keeps the claim (the auditor may try again until it
-  // expires, 10 minutes on the demo stack), which would block the next
-  // spec's claim. Close it the way an auditor would: report the exploit with
-  // a passing PoC, which is verified and paid, and the payout ends the claim.
+  // expires, 10 minutes on the demo stack), and with it the stake lock. Try
+  // again the way an auditor would: report the exploit with a passing PoC on
+  // the same claim. It is verified and paid, and the payout ends the claim,
+  // which the next spec's claim needs.
   await switchRole(page, "Auditor");
-  await page.goto(contractUrl.replace("/contracts/", "/auditor/contracts/"));
+  const claimUrl = contractUrl.replace("/contracts/", "/auditor/contracts/");
+  await page.goto(claimUrl);
   const title = `Reentrancy in withdraw, second attempt (run ${Date.now()})`;
   await page.getByRole("button", { name: "Report a new finding" }).click();
   const form = page.getByRole("form", { name: "Report a new finding" });
@@ -209,6 +211,18 @@ test("a failing PoC ends Rejected for the auditor and the developer", async ({ p
     .setInputFiles(path.join(FIXTURES, "pocs", "PoC_pass.t.sol"));
   await form.getByRole("button", { name: "Submit finding and PoC" }).click();
   const reported = page.getByRole("listitem").filter({ hasText: title });
+  await expect(reported.getByText(/Submitted|Verified/).first()).toBeVisible({ timeout: 30_000 });
+
+  // The second finding's verification and payout need the stake: it must
+  // still be locked. (A Failed verdict used to release it: the auditor could
+  // withdraw here and recordVerification reverted AuditorNotEligible forever.)
+  await page.goto("/auditor");
+  await expect(page.getByText(/Locked while you have an active claim/)).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("button", { name: "Withdraw stake" })).toBeDisabled();
+
+  await page.goto(claimUrl);
   await expect(reported.getByText("Paid", { exact: true })).toBeVisible({ timeout: 270_000 });
 });
 

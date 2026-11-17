@@ -362,6 +362,18 @@ for (const [name, make, skip] of [
       ).resolves.toBe(auditor);
     });
 
+    it("settling with an expiry (a Failed verdict) keeps the lock until the claim has expired", async () => {
+      // While the claim runs the auditor may submit again on it, and that
+      // finding's verification needs the stake.
+      const { contractId, auditor, findingId } = await lockedWith("Submitted");
+      await expect(
+        h.store.takeClaimUnlock(contractId, { auditorId: auditor, settling: findingId, expiredBy: new Date(AT) }),
+      ).resolves.toBeNull();
+      await expect(
+        h.store.takeClaimUnlock(contractId, { auditorId: auditor, settling: findingId, expiredBy: AFTER }),
+      ).resolves.toBe(auditor);
+    });
+
     it("a cancelled or refunded bounty releases the lock of a finding still awaiting its verdict", async () => {
       // The finding is Submitted with the sandbox verdict pending, so nothing
       // is on-chain yet. Once the bounty is closed, a Passed verdict cannot be

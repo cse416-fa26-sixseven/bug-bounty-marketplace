@@ -27,8 +27,10 @@ export interface FindingLifecycleDeps {
     Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
   disputeResolution: Pick<DisputeResolutionPort, "getDispute">;
   auditorStaking: Pick<AuditorStakingPort, "stakeOf" | "reputation" | "activeSubmissions">;
-  /** Releases the auditor's claim lock once a dispute goes against them. */
-  chainActions?: Pick<ChainActions, "applyDisputeResolved">;
+  /** Releases the auditor's claim lock once a dispute goes against them, and
+   * (when present) lapsed claims' locks before the profile is read. */
+  chainActions?: Pick<ChainActions, "applyDisputeResolved"> &
+    Partial<Pick<ChainActions, "releaseExpiredLocks">>;
   arbiter: Address;
   auth: Auth;
   now: () => Date;
@@ -60,6 +62,12 @@ export function registerFindingLifecycleRoutes(
   app.get("/api/auditor/profile", async (request, reply) => {
     const address = auth.requireSession(request, reply);
     if (!address) return reply;
+    // Lazy expiry, as on the queue: a lapsed claim's lock is released before
+    // activeSubmissions is read, so the profile does not show it as locked.
+    // Best-effort: the keeper sweeps it too.
+    await deps.chainActions?.releaseExpiredLocks?.(now()).catch((err: unknown) => {
+      request.log.error({ err }, "releaseExpiredLocks failed");
+    });
     const [stake, reputation, active, pending, claimed] = await Promise.all([
       auditorStaking.stakeOf(address),
       auditorStaking.reputation(address),

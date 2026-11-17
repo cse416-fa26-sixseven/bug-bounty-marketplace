@@ -20,8 +20,8 @@ function chainGuides(stakeEth: string, windowSeconds: number) {
     {
       ...guides[1],
       steps: [
+        `Stake ${stakeEth} ETH from your auditor account first: claiming and PoC uploads both need the minimum stake.`,
         "Claim an open, funded contract exclusively for 10 minutes. You hold one claim at a time.",
-        `Stake ${stakeEth} ETH from your auditor account to unlock PoC uploads.`,
         "Upload a Foundry .t.sol test that imports the target as ../src/<filename>. It runs in an isolated sandbox; a passing test verifies the finding.",
       ],
     },
@@ -56,8 +56,8 @@ const guides = [
     href: "/auditor",
     action: "Open audit workspace",
     steps: [
+      "Post the required demo stake first: claiming and PoC uploads both need it. Stake values are simulated units.",
       "Claim an open contract exclusively for 10 minutes, or resume a claimed contract from your profile.",
-      "Post the required demo stake to unlock PoC uploads. Stake values are simulated units.",
       "Upload a nonempty Foundry .t.sol test. The demo resolves it after about 3 seconds; it does not execute your code. You can also mark flagged findings as false positives.",
     ],
   },
