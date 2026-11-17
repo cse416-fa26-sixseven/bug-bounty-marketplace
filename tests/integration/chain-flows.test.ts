@@ -305,7 +305,7 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
   });
 
   describe("auditor", () => {
-    it("claims without stake (locked on-chain), is stopped by the stake gate, stakes, then reports a finding", async () => {
+    it("is refused a claim without stake (no lock, no claim), stakes, claims, then reports a finding", async () => {
       const dev = await signIn(api, await freshAccount());
       const contract = await fundedContract(dev);
       const auditor = await signIn(api, await freshAccount());
@@ -313,9 +313,21 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
       const fresh = await profile(auditor);
       expect(fresh).toMatchObject({ stake: "0", activeSubmissions: 0, claimedContractIds: [] });
 
-      // The claim itself has no stake gate: it takes the on-chain lock.
+      // Claiming needs the required stake: refused before any lock or claim.
+      const refused = await auditor.postJson("/api/auditor/claim", { contractId: contract.id });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body).toEqual({ error: "Auditor stake is below the required stake" });
+      expect(await readStaking(chain.auditorStaking, "activeSubmissions", auditor.address)).toBe(
+        0n,
+      );
+      expect((await profile(auditor)).claimedContractIds).toEqual([]);
+      expect((await getContract(contract.id)).status).toBe("Open");
+
+      await stake(auditor.account, chain.auditorStaking, chain.requiredStakeWei);
+      expect((await profile(auditor)).stake).toBe(chain.requiredStakeWei.toString());
+
+      // Staked: the claim takes the on-chain lock.
       const claim = await auditor.postJson("/api/auditor/claim", { contractId: contract.id });
-      // TODO(fix/claim-stake-gate): expect 403 once claims need the required stake.
       expect(claim.status, JSON.stringify(claim.body)).toBe(200);
       expect(ContractSchema.parse(claim.body).status).toBe("Claimed");
       expect(await readStaking(chain.auditorStaking, "activeSubmissions", auditor.address)).toBe(
@@ -325,17 +337,6 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
       expect(claimed.activeSubmissions).toBe(1);
       expect(claimed.claimedContractIds).toContain(contract.id);
       expect((await getContract(contract.id)).status).toBe("Claimed");
-
-      // Reporting a finding needs the required stake.
-      const gated = await auditor.json("/api/auditor/findings", {
-        method: "POST",
-        body: reportForm(contract.id),
-      });
-      expect(gated.status).toBe(403);
-      expect(gated.body).toEqual({ error: "Auditor stake is below the required stake" });
-
-      await stake(auditor.account, chain.auditorStaking, chain.requiredStakeWei);
-      expect((await profile(auditor)).stake).toBe(chain.requiredStakeWei.toString());
 
       const reported = await auditor.json("/api/auditor/findings", {
         method: "POST",
@@ -357,7 +358,9 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
       const dev = await signIn(api, await freshAccount("0"));
       const contract = await upload(dev);
       await waitForAnalysis(contract.id);
-      const auditor = await signIn(api, await freshAccount("0"));
+      const auditor = await signIn(api, await freshAccount());
+      // Staked, so the claim gets past the stake gate to the funding check.
+      await stake(auditor.account, chain.auditorStaking, chain.requiredStakeWei);
       const res = await auditor.postJson("/api/auditor/claim", { contractId: contract.id });
       expect(res.status).toBe(409);
       expect(res.body).toEqual({ error: "bounty not funded on-chain" });
@@ -372,7 +375,8 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
     it("cancelling a claimed bounty releases the auditor's on-chain lock", async () => {
       const dev = await signIn(api, await freshAccount());
       const contract = await fundedContract(dev);
-      const auditor = await signIn(api, await freshAccount("0"));
+      const auditor = await signIn(api, await freshAccount());
+      await stake(auditor.account, chain.auditorStaking, chain.requiredStakeWei);
       expect(
         (await auditor.postJson("/api/auditor/claim", { contractId: contract.id })).status,
       ).toBe(200);

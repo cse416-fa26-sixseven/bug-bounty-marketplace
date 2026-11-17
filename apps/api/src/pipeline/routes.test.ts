@@ -376,7 +376,10 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
   const AUDITOR_B = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as Address;
   const LOCK_HASH = `0x${"cd".repeat(32)}` as Hash;
 
-  function chainSetup(lockImpl: (auditor: Address) => Promise<Hash> = async () => LOCK_HASH) {
+  function chainSetup(
+    lockImpl: (auditor: Address) => Promise<Hash> = async () => LOCK_HASH,
+    stakeImpl: (auditor: Address) => Promise<bigint> = async () => 100_000_000_000_000_000n,
+  ) {
     const store = new MemoryStore();
     const repository = new MemoryContractRepository(store);
     const clock = { now: T0 };
@@ -392,8 +395,9 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
       active -= 1n;
       return LOCK_HASH;
     });
+    const stakeOf = vi.fn(stakeImpl);
     const auditorStaking: AuditorStakingPort = {
-      stakeOf: vi.fn(),
+      stakeOf,
       reputation: vi.fn(),
       activeSubmissions: vi.fn(async () => active),
       lockSubmission: lock,
@@ -411,6 +415,8 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
       storage: new MemorySourceStorage(),
       config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => clock.now },
       chainActions,
+      // index.ts passes the same AuditorStaking port as the stake reader.
+      stakeReader: auditorStaking,
     });
     const seedContract = async () => {
       const record = makeContract();
@@ -424,8 +430,104 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     const advance = (seconds: number) => {
       clock.now = new Date(clock.now.getTime() + seconds * 1000);
     };
-    return { app, repository, lock, unlock, seedContract, claim, queue, advance };
+    return { app, store, repository, lock, unlock, stakeOf, seedContract, claim, queue, advance };
   }
+
+  it("rejects a wallet with zero stake with 403, before any lock or claim", async () => {
+    const { seedContract, store, repository, claim, lock, unlock, stakeOf } = chainSetup(undefined, async () => 0n);
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(stakeOf).toHaveBeenCalledWith(AUDITOR_A);
+    expect(lock).not.toHaveBeenCalled();
+    expect(unlock).not.toHaveBeenCalled();
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+    expect((await repository.findContractById(contract.id, T0))?.status).toBe("Open");
+    expect(store.contracts.get(contract.id)?.claimedByAuditorId ?? null).toBeNull();
+  });
+
+  it("rejects a stake one wei below the requirement with 403 and no lock", async () => {
+    const { seedContract, repository, claim, lock } = chainSetup(undefined, async () => 99_999_999_999_999_999n);
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(403);
+    expect(lock).not.toHaveBeenCalled();
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("claims and locks with a stake equal to the requirement", async () => {
+    const { seedContract, claim, lock, stakeOf } = chainSetup();
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(200);
+    expect(stakeOf).toHaveBeenCalledWith(AUDITOR_A);
+    expect(lock).toHaveBeenCalledWith(AUDITOR_A);
+  });
+
+  it("fails like the PoC gate (500) when the stake read fails, with no lock or claim", async () => {
+    const { seedContract, repository, claim, lock } = chainSetup(undefined, async () => {
+      throw new Error("rpc unavailable");
+    });
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(500);
+    expect(lock).not.toHaveBeenCalled();
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("releases the lock and the claim with 403 when the stake is withdrawn before the lock lands", async () => {
+    // Race: the gate reads the requirement, then the wallet withdraws before
+    // lockSubmission is mined. The re-read after the lock sees 0.
+    let reads = 0;
+    const { seedContract, repository, claim, lock, unlock, stakeOf, queue } = chainSetup(undefined, async () =>
+      reads++ === 0 ? 100_000_000_000_000_000n : 0n,
+    );
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(stakeOf).toHaveBeenCalledTimes(2);
+    expect(lock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+    expect((await repository.findContractById(contract.id, T0))?.status).toBe("Open");
+    // The contract is claimable again: it is back in the queue.
+    expect((await queue()).json().map((c: { id: string }) => c.id)).toContain(contract.id);
+  });
+
+  it("keeps the claim when the stake re-read after the lock fails", async () => {
+    let reads = 0;
+    const { seedContract, repository, claim, unlock } = chainSetup(undefined, async () => {
+      if (reads++ === 0) return 100_000_000_000_000_000n;
+      throw new Error("rpc unavailable");
+    });
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(200);
+    expect(unlock).not.toHaveBeenCalled();
+    expect((await repository.findActiveClaim(contract.id, T0))?.auditorId).toBe(AUDITOR_A);
+  });
+
+  it("does not let a zero-stake wallet block a staked auditor", async () => {
+    const { seedContract, claim, lock } = chainSetup(undefined, async (auditor) =>
+      auditor === AUDITOR_A ? 0n : 100_000_000_000_000_000n,
+    );
+    const contract = await seedContract();
+
+    expect((await claim(contract.id, AUDITOR_A)).statusCode).toBe(403);
+    const staked = await claim(contract.id, AUDITOR_B);
+    expect(staked.statusCode).toBe(200);
+    expect(lock).toHaveBeenCalledTimes(1);
+    expect(lock).toHaveBeenCalledWith(AUDITOR_B);
+  });
 
   it("locks the auditor's stake after a successful claim", async () => {
     const { seedContract, claim, lock } = chainSetup();
@@ -482,11 +584,12 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
   });
 
   it("rejects a non-address auditorId before claiming, so no lock is sent", async () => {
-    const { seedContract, repository, claim, lock } = chainSetup();
+    const { seedContract, repository, claim, lock, stakeOf } = chainSetup();
     const contract = await seedContract();
 
     const response = await claim(contract.id, "auditor_1");
     expect(response.statusCode).toBe(400);
+    expect(stakeOf).not.toHaveBeenCalled();
     expect(lock).not.toHaveBeenCalled();
     expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
   });
@@ -524,8 +627,15 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     const { contract } = await ctx.seedContract();
     // Without a port the route never reaches for the chain, so a plain
     // non-address auditor id still claims.
-    const response = await ctx.claim(contract.id, "auditor_1");
-    expect(response.statusCode).toBe(200);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await ctx.claim(contract.id, "auditor_1");
+      expect(response.statusCode).toBe(200);
+      // No chain: claiming is unchanged, so there is no stake check to log.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -652,9 +762,12 @@ describe("POST /api/auditor/poc verdicts and stake gate", () => {
   });
 
   it("rejects a stake below the requirement with 403 and stores nothing", async () => {
-    const stakeOf = vi.fn(async () => 99_999_999_999_999_999n);
+    // Staked enough to claim; the stake then drops below the requirement
+    // (e.g. slashed) before the PoC is uploaded.
+    const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
     const ctx = setup({ stakeOf });
     const finding = await claimedBy(ctx, auditorWallet);
+    stakeOf.mockClear().mockImplementation(async () => 99_999_999_999_999_999n);
     const put = vi.spyOn(ctx.storage, "put");
     const response = await ctx.submitPoc(
       { findingId: finding.id, auditorId: auditorWallet },
@@ -682,6 +795,7 @@ describe("POST /api/auditor/poc verdicts and stake gate", () => {
     const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
     const ctx = setup({ stakeOf });
     const finding = await claimedBy(ctx, "0x"+"a2".repeat(20));
+    stakeOf.mockClear();
     const response = await ctx.submitPoc(
       { findingId: finding.id, auditorId: "auditor_1" },
       { name: "Exploit.t.sol", content: poc },
@@ -930,9 +1044,11 @@ describe("POST /api/auditor/findings", () => {
   });
 
   it("rejects a stake below the requirement with 403 and stores nothing", async () => {
-    const stakeOf = vi.fn(async () => 99_999_999_999_999_999n);
+    // Staked enough to claim; the stake then drops below the requirement.
+    const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
     const ctx = setup({ stakeOf });
     const contract = await claimed(ctx, auditorWallet);
+    stakeOf.mockClear().mockImplementation(async () => 99_999_999_999_999_999n);
     const put = vi.spyOn(ctx.storage, "put");
     const response = await ctx.reportFinding(
       { contractId: contract.id, auditorId: auditorWallet, ...report },
@@ -960,6 +1076,7 @@ describe("POST /api/auditor/findings", () => {
     const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
     const ctx = setup({ stakeOf });
     const contract = await claimed(ctx, auditorWallet);
+    stakeOf.mockClear();
     const response = await ctx.reportFinding(
       { contractId: contract.id, auditorId: "auditor_1", ...report },
       pocFile,

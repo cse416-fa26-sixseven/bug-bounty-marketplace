@@ -45,6 +45,7 @@ describe("StakeGate", () => {
     expect(screen.getByText("PoC upload locked")).toBeInTheDocument();
     expect(screen.getByText(`5,000 / ${REQUIRED_STAKE.toLocaleString()} required`)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /post stake/i })).toBeInTheDocument();
+    expect(screen.getByText(/Claiming a contract and submitting a PoC both need/)).toBeInTheDocument();
   });
 
   it("shows the unlocked state and hides the stake form once stake meets the requirement", () => {
@@ -65,6 +66,7 @@ describe("StakeGate", () => {
     );
 
     expect(screen.getByText("PoC upload unlocked")).toBeInTheDocument();
+    expect(screen.queryByText(/Claiming a contract and submitting a PoC both need/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /post stake/i })).not.toBeInTheDocument();
   });
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from "fastify";
 import {
   AUDITOR_FINDING_DETECTOR,
   AuditorFindingFieldsSchema,
@@ -22,7 +22,8 @@ import type { FindingRecord, NewJob, PipelineRepository } from "./repository.js"
 import type { PocVerdictSource } from "./verdict-source.js";
 import { resolveActor, type Auth } from "../auth/session.js";
 
-/** Minimum AuditorStaking.stakeOf an auditor needs before a PoC is accepted:
+/** Minimum AuditorStaking.stakeOf an auditor needs before a claim, a PoC or a
+ * reported finding is accepted:
  * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. */
 export const REQUIRED_STAKE_WEI = "100000000000000000";
 
@@ -34,7 +35,7 @@ export interface PipelineRouteDeps {
   /** Present only when a chain is configured. Claims lock the auditor's stake
    * and release it on expiry, through the chain actions. */
   chainActions?: ChainActions;
-  /** Read-only stake source for the PoC stake gate. Null when no chain is
+  /** Read-only stake source for the claim/PoC/finding stake gate. Null when no chain is
    * configured: the gate is then skipped and logged. Independent of the
    * claim-lock flag. */
   stakeReader: Pick<AuditorStakingPort, "stakeOf"> | null;
@@ -125,6 +126,12 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
         return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
       }
+      // With a chain, the same stake gate as PoCs and findings, checked before
+      // any on-chain lock or claim row: an unstaked wallet must not be able to
+      // hold a bounty for the claim window. No chain: unchanged, no check.
+      if (stakeReader !== null && !(await passesStakeGate("POST /api/auditor/claim", auditorId, reply))) {
+        return reply;
+      }
       const now = config.now();
       const expiresAt = new Date(now.getTime() + config.claimWindowSeconds * 1000);
       if (chainActions) {
@@ -173,6 +180,18 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
           request.log.error({ err: releaseErr, contractId, auditorId }, "releaseClaim failed");
         });
         return reply.code(502).send({ error: "Could not lock the auditor stake on-chain; claim not applied" });
+      }
+      // Check-then-act: between the stake gate's read and the mined lock, the
+      // wallet held no lock and could withdraw (e.g. front-running the lock),
+      // keeping the claim and lock with no stake. AuditorStaking.lockSubmission
+      // does not check stake, so re-read it now that the lock holds it
+      // (withdraw reverts while locked). Below the requirement: release the
+      // lock and the claim, and answer as the gate does. With claim locks
+      // disabled there is no lock, so stake, claim, withdraw stays possible,
+      // but the PoC/findings gates still block submissions (claim-window
+      // griefing only).
+      if (stakeReader !== null && !(await stakeStillMet(contractId, auditorId, request.log))) {
+        return reply.code(403).send({ error: STAKE_BELOW_REQUIRED });
       }
       return result.contract;
     },
@@ -326,8 +345,8 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     ].map((issue) => issue.message);
   }
 
-  /** Stake gate: checked before any bytes are stored, so a rejected upload
-   * leaves nothing behind. Sends the error reply and returns false on failure. */
+  /** Stake gate: checked before any bytes are stored or any claim is taken, so
+   * a rejected request leaves nothing behind. Sends the error reply and returns false on failure. */
   async function passesStakeGate(
     route: string,
     auditorId: string,
@@ -347,10 +366,39 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     }
     const stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
     if (compareWei(stake, REQUIRED_STAKE_WEI) < 0) {
-      void reply.code(403).send({ error: "Auditor stake is below the required stake" });
+      void reply.code(403).send({ error: STAKE_BELOW_REQUIRED });
       return false;
     }
     return true;
+  }
+
+  /** Re-reads the stake after a claim's lock landed. False when it fell below
+   * the requirement: the lock and the claim are then released (an unlock that
+   * fails is left 'unlocking' for the keeper's sweep; the contract reopens
+   * either way). A failed read keeps the claim: it passed the gate, and the
+   * PoC/findings gates still apply. */
+  async function stakeStillMet(
+    contractId: string,
+    auditorId: string,
+    log: FastifyBaseLogger,
+  ): Promise<boolean> {
+    if (stakeReader === null) return true;
+    let stake: string;
+    try {
+      stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
+    } catch (err) {
+      log.error({ err, contractId, auditorId }, "stake re-read after lock failed; keeping the claim");
+      return true;
+    }
+    if (compareWei(stake, REQUIRED_STAKE_WEI) >= 0) return true;
+    log.warn({ contractId, auditorId, stake }, "stake fell below the requirement before the lock; releasing claim");
+    await chainActions?.releaseClaimLock(contractId).catch((err: unknown) => {
+      log.error({ err, contractId, auditorId }, "releasing the claim lock failed; left for the sweep");
+    });
+    await contracts.releaseClaim(contractId, auditorId).catch((err: unknown) => {
+      log.error({ err, contractId, auditorId }, "releaseClaim failed");
+    });
+    return false;
   }
 
   /** Stores the PoC bytes and returns its Pending submission. Bytes first,
@@ -389,6 +437,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
 }
 
 const NO_CLAIM = "You do not hold an active claim on this contract";
+const STAKE_BELOW_REQUIRED = "Auditor stake is below the required stake";
 
 function sandboxJob(poc: PoCSubmission): NewJob {
   return { id: `job_${randomUUID()}`, kind: "sandbox", subjectId: poc.id, createdAt: poc.submittedAt };

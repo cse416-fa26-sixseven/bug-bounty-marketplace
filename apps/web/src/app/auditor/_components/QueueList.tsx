@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { auditorApi, ApiError, type QueueItem } from "@/lib/api";
 import { weiToEth } from "@/lib/money";
+import { useRequiredStakeWei } from "@/lib/chain/use-chain";
+import { REQUIRED_STAKE_WEI, isStakeMet } from "./StakeGate";
 
 type SortOption = "newest" | "deadline" | "bounty";
 
@@ -27,6 +29,16 @@ export function QueueList({ auditorId }: { auditorId: string }) {
     refetchInterval: 3_000,
   });
 
+  // Same query as ProfileSummary, so it shares the cache. Claiming needs the
+  // required stake (the API answers 403 otherwise), so the buttons stay
+  // disabled until it is posted. While the profile is unknown, the API decides.
+  const profileQuery = useQuery({
+    queryKey: ["auditor-profile", auditorId],
+    queryFn: () => auditorApi.getProfile(auditorId),
+  });
+  const requiredStakeWei = useRequiredStakeWei(REQUIRED_STAKE_WEI);
+  const stakeShort = profileQuery.data ? !isStakeMet(profileQuery.data.stake, requiredStakeWei) : false;
+
   const claimMutation = useMutation({
     mutationFn: (contractId: string) => auditorApi.claimContract({ contractId, auditorId }),
     onSuccess: (contract) => {
@@ -36,6 +48,11 @@ export function QueueList({ auditorId }: { auditorId: string }) {
       router.push(`/auditor/contracts/${contract.id}`);
     },
     onError: (err) => {
+      if (err instanceof ApiError && err.status === 403 && /stake/i.test(err.message)) {
+        setClaimError("Your stake is below the required stake. Post the required stake above, then claim.");
+        void queryClient.invalidateQueries({ queryKey: ["auditor-profile"] });
+        return;
+      }
       if (err instanceof ApiError && err.status === 409) {
         // The API says why it refused; only a taken contract means someone else won.
         if (/already holds/i.test(err.message)) {
@@ -88,6 +105,11 @@ export function QueueList({ auditorId }: { auditorId: string }) {
         />
       </label>
 
+      {stakeShort && (
+        <p className="mt-3 text-sm text-amber-400">
+          Post the required stake above to claim a contract.
+        </p>
+      )}
       {claimError && <p className="mt-3 text-sm text-red-400">{claimError}</p>}
 
       {queueQuery.isLoading && <p className="mt-4 text-slate-400">Loading queue...</p>}
@@ -118,7 +140,8 @@ export function QueueList({ auditorId }: { auditorId: string }) {
                   setClaimError(null);
                   claimMutation.mutate(item.id);
                 }}
-                disabled={claimMutation.isPending}
+                disabled={claimMutation.isPending || stakeShort}
+                title={stakeShort ? "Post the required stake to claim" : undefined}
                 className="rounded bg-emerald-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
               >
                 {claimMutation.isPending && claimMutation.variables === item.id
