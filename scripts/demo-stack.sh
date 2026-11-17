@@ -12,6 +12,9 @@ cd "$ROOT"
 DOCKER_GID=${DOCKER_GID:-$(stat -c %g /var/run/docker.sock)}
 export DOCKER_GID
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.sandbox.yml -f docker-compose.chain.yml)
+# Optional extra overlays, space-separated (e.g. one that unpublishes a port
+# already taken on this machine): BBM_COMPOSE_EXTRA=/path/override.yml
+for extra in ${BBM_COMPOSE_EXTRA:-}; do COMPOSE+=(-f "$extra"); done
 
 step() { printf '\n== %s\n' "$*"; }
 
