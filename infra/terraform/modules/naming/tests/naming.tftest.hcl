@@ -76,7 +76,16 @@ run "staging_names" {
     error_message = "unexpected VNet CIDR or UAMI name"
   }
 
-  # Must match deploy/helm/bbm values.yaml secrets.csi.objects.
+  # Must match deploy/helm/bbm values.yaml secrets.csi.objects (read below,
+  # relative to this module dir, which terraform test runs in).
+  assert {
+    condition = (
+      yamldecode(file("../../../../deploy/helm/bbm/values.yaml")).secrets.csi.objects.databaseUrl == output.kv_secrets.database_url &&
+      yamldecode(file("../../../../deploy/helm/bbm/values.yaml")).secrets.csi.objects.llmApiKey == output.kv_secrets.llm_api_key
+    )
+    error_message = "kv_secrets must use the same names as deploy/helm/bbm values.yaml secrets.csi.objects"
+  }
+
   assert {
     condition = output.kv_secrets == {
       database_url      = "database-url"
