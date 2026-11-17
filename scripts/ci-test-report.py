@@ -105,7 +105,7 @@ def line_coverage(kind: str, path: Path) -> float | None:
 
 def build(artifacts: Path, results: dict[str, str], sha: str, run_url: str) -> str:
     rows = []
-    any_failed = False
+    tests_failed = False
     for label, job, globs, coverage in SUITES:
         files = sorted(f for g in globs for f in artifacts.glob(g))
         counts = count_cases(files) if files else None
@@ -117,26 +117,34 @@ def build(artifacts: Path, results: dict[str, str], sha: str, run_url: str) -> s
                 status = "not run"
             elif job_result in ("failure", "cancelled"):
                 status = f"❌ no report (job {job_result})"
-                any_failed = True
             else:
                 status = "no report"
             rows.append(f"| {label} | {status} | – | – | – | – | {cov_cell} |")
             continue
         failed = counts["failed"] > 0
-        any_failed = any_failed or failed
+        tests_failed = tests_failed or failed
         rows.append(
             f"| {label} | {'❌ failed' if failed else '✅ passed'} | {counts['tests']} | {counts['passed']} "
             f"| {counts['failed']} | {counts['skipped']} | {cov_cell} |"
         )
 
-    ran = [r for r in rows if "✅" in r or "❌" in r]
+    reported = [r for r in rows if "✅ passed" in r or "❌ failed" in r]
     head = "### Test report"
-    if not ran:
-        verdict = "No test job ran for this commit (no relevant paths changed)."
-    elif any_failed:
+    if tests_failed:
         verdict = "**Some tests failed.**"
-    else:
+    elif reported:
         verdict = "All reported tests passed."
+    elif results.get("changes", "success") != "success":
+        verdict = "**No test job ran: CI could not work out which paths changed.**"
+    else:
+        verdict = "No test job ran for this commit (no relevant paths changed)."
+    # The table only knows about tests. A job can also fail before its tests
+    # (install, lint) or after them (typecheck, gas snapshot), so name those.
+    unsuccessful = sorted(
+        job for job, result in results.items() if result in ("failure", "cancelled")
+    )
+    if unsuccessful:
+        verdict += f" Jobs that did not succeed: {', '.join(unsuccessful)}."
     meta = " · ".join(
         p for p in (f"`{sha[:7]}`" if sha else "", f"[run]({run_url})" if run_url else "") if p
     )

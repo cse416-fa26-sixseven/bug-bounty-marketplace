@@ -1177,9 +1177,10 @@ jobs:
   # junit-* and coverage-* artifacts the jobs above uploaded
   # (scripts/ci-test-report.py). Written to the run summary on every run,
   # and posted as one sticky PR comment (updated in place) on pull
-  # requests from this repository. Fork and Dependabot PRs get a read-only
-  # token, so they get the summary but no comment. Report only: never
-  # fails on test results and is not part of CI OK.
+  # requests from this repository. Fork PRs get a read-only token and
+  # Dependabot PRs are left out on purpose, so both get the summary but no
+  # comment. Report only: never fails on test results, a failed comment
+  # does not fail the job, and it is not part of CI OK.
   # ---------------------------------------------------------------------
   test-report:
     name: Test report
@@ -1188,7 +1189,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
       pull-requests: write
     steps:
       - name: Checkout
@@ -1225,6 +1225,7 @@ jobs:
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           github.event.pull_request.user.login != 'dependabot[bot]'
+        continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: test-report
