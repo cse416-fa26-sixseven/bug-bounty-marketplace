@@ -169,10 +169,24 @@ describe.skipIf(skip)(`chain mode (${api})`, { timeout: 8 * 60_000 }, () => {
       expect(me.status).toBe(200);
       expect(me.body.address).toBe(session.address);
 
+      // A second session for the same wallet, and a copy of the first one's
+      // cookie taken before it logs out.
+      const other = await signIn(api, session.account);
+      const copied = session.rawCookie ?? "";
+      expect(copied).not.toBe("");
+      const replay = (path: string) => fetch(`${api}${path}`, { headers: { cookie: copied } });
+      expect((await replay("/api/auditor/profile")).status).toBe(200);
+
       const logout = await session.json("/api/auth/logout", { method: "POST" });
       expect(logout.status).toBe(200);
       expect(session.rawCookie).toBeNull();
       expect((await session.json("/api/auth/me")).status).toBe(401);
+
+      // Logout ends the session server-side (M5-4): the copied cookie is
+      // refused, and the wallet's other session is not affected.
+      expect((await replay("/api/auth/me")).status).toBe(401);
+      expect((await replay("/api/auditor/profile")).status).toBe(401);
+      expect((await other.json("/api/auth/me")).status).toBe(200);
     });
 
     it("rejects a replayed (already used) nonce", async () => {

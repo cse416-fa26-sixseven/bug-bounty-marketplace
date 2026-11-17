@@ -38,13 +38,16 @@ export function registerAuthRoutes(app: FastifyInstance, auth: Auth): void {
   );
 
   app.get("/api/auth/me", async (request, reply) => {
-    const address = auth.requireSession(request, reply);
+    const address = await auth.requireSession(request, reply);
     if (!address) return reply;
     return { address };
   });
 
-  app.post("/api/auth/logout", async (_request, reply) => {
+  // Ends the session server-side, then clears the cookie. The cookie is
+  // cleared even when ending the session fails (which is a 500).
+  app.post("/api/auth/logout", async (request, reply) => {
     void reply.header("set-cookie", auth.clearedCookie());
+    await auth.revokeSession(request);
     return { ok: true };
   });
 }

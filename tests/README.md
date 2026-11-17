@@ -70,7 +70,8 @@ point it at another namespace or env with analysis and the sandbox enabled:
 `integration/chain-flows.test.ts` drives the API in chain mode (`CHAIN_RPC_URL` and
 `SESSION_SECRET` set), signing its own transactions on anvil with viem (`lib/chain.ts`):
 
-- **SIWE**: nonce → login → `me` → logout; a replayed nonce, another wallet's signature and
+- **SIWE**: nonce → login → `me` → logout (a copied cookie is refused afterwards, the wallet's
+  other session is not); a replayed nonce, another wallet's signature and
   another site's `Origin` are rejected; user routes need a session and refuse to act for
   another wallet.
 - **Developer**: upload → analysis → `fund` on-chain → `POST /funded` (the queue lists it only

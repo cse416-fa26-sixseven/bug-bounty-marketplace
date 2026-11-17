@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { getAddress, isAddress, isAddressEqual, verifyMessage, type Address, type Hex } from "viem";
 import { createSiweMessage, parseSiweMessage, validateSiweMessage } from "viem/siwe";
+import { MemorySessionRevocationStore, type SessionRevocationStore } from "./revocation-store.js";
 
 export const SESSION_COOKIE = "bbm_session";
 const NONCE_TTL_MS = 5 * 60_000;
@@ -27,7 +28,20 @@ export interface AuthOptions {
   origin: string | null;
   /** Add Secure to the session cookie. */
   secureCookie: boolean;
+  /** Sessions ended by logout. Defaults to an in-memory store, which forgets
+   * them on restart; `index.ts` passes the Postgres one when DATABASE_URL is set. */
+  revocations?: SessionRevocationStore;
 }
+
+/** What a valid session cookie carries. */
+interface Session {
+  address: Address;
+  /** Random id naming this sign-in, so logout can end it alone. */
+  id: string;
+  expiresAt: Date;
+}
+
+const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
 
 export type LoginResult = { ok: true; address: Address; token: string } | { ok: false; reason: string };
 
@@ -46,7 +60,13 @@ function originFromUrl(value: string): SignInOrigin | null {
  * naming the web app's domain and URI, the address, the API's chain, a
  * single-use nonce and a 5-minute expiry; POST /api/auth/login checks each of
  * those against what was issued, and the signature against the address. A
- * session is an HMAC-signed cookie (address + expiry) that lives 8 hours.
+ * session is an HMAC-signed cookie (address + expiry + a random session id)
+ * that lives 8 hours. POST /api/auth/logout records the session id in the
+ * revocation store, and every session check looks it up there, so a copy of
+ * the cookie is refused from then on (across restarts and replicas when the
+ * store is Postgres). Other sessions of the same address are not affected.
+ * Cookies signed before sessions had an id (address + expiry only) are
+ * refused, since they could not be revoked: their holders sign in again.
  * Nonces are held in memory, so sign-in needs a single API replica (as the
  * demo runs).
  */
@@ -57,6 +77,7 @@ export class Auth {
   private readonly chainId: number;
   private readonly fixedOrigin: SignInOrigin | null;
   private readonly secureCookie: boolean;
+  private readonly revocations: SessionRevocationStore;
 
   constructor(options: AuthOptions) {
     this.secret = options.secret;
@@ -64,6 +85,7 @@ export class Auth {
     this.chainId = options.chainId;
     this.fixedOrigin = options.origin ? originFromUrl(options.origin) : null;
     this.secureCookie = options.secureCookie;
+    this.revocations = options.revocations ?? new MemorySessionRevocationStore();
   }
 
   /**
@@ -177,25 +199,52 @@ export class Auth {
     return { ok: true, address: entry.address, token: this.sign(entry.address) };
   }
 
-  /** The signed-in address from the request's session cookie, or null. */
-  sessionAddress(request: FastifyRequest): Address | null {
-    const token = readCookie(request.headers.cookie, SESSION_COOKIE);
-    if (!token) return null;
-    const [payload, mac] = token.split(".");
-    if (!payload || !mac || !safeEqual(mac, this.mac(payload))) return null;
-    const [address, expires] = Buffer.from(payload, "base64url").toString("utf8").split("|");
-    if (!address || !isAddress(address) || !(Number(expires) > this.now().getTime())) return null;
-    return getAddress(address);
+  /**
+   * The signed-in address from the request's session cookie, or null. The
+   * cookie must be signed, unexpired and not logged out. Rejects (a 500) when
+   * the revocation store cannot be read, rather than letting the session in.
+   */
+  async sessionAddress(request: FastifyRequest): Promise<Address | null> {
+    const session = this.readSession(request);
+    if (!session || (await this.revocations.isRevoked(session.id))) return null;
+    return session.address;
   }
 
   /** The signed-in address, or sends 401 and returns undefined. */
-  requireSession(request: FastifyRequest, reply: FastifyReply): Address | undefined {
-    const address = this.sessionAddress(request);
+  async requireSession(request: FastifyRequest, reply: FastifyReply): Promise<Address | undefined> {
+    const address = await this.sessionAddress(request);
     if (!address) {
       void reply.code(401).send({ error: "sign in first" });
       return undefined;
     }
     return address;
+  }
+
+  /**
+   * Ends the session in the request's cookie, so that cookie (and any copy of
+   * it) is refused from now on. Does nothing without a signed, unexpired
+   * session cookie.
+   */
+  async revokeSession(request: FastifyRequest): Promise<void> {
+    const session = this.readSession(request);
+    if (session) await this.revocations.revoke(session.id, session.expiresAt, this.now());
+  }
+
+  /** The signed, unexpired session in the request's cookie, or null. Does not
+   * check for logout. */
+  private readSession(request: FastifyRequest): Session | null {
+    const token = readCookie(request.headers.cookie, SESSION_COOKIE);
+    if (!token) return null;
+    const [payload, mac] = token.split(".");
+    if (!payload || !mac || !safeEqual(mac, this.mac(payload))) return null;
+    // address|expiry|id. Cookies from before sessions had an id have two
+    // fields and are refused: they could not be revoked.
+    const fields = Buffer.from(payload, "base64url").toString("utf8").split("|");
+    if (fields.length !== 3) return null;
+    const [address, expires, id] = fields as [string, string, string];
+    const expiresAt = Number(expires);
+    if (!isAddress(address) || !(expiresAt > this.now().getTime()) || !SESSION_ID_PATTERN.test(id)) return null;
+    return { address: getAddress(address), id, expiresAt: new Date(expiresAt) };
   }
 
   sessionCookie(token: string): string {
@@ -211,7 +260,8 @@ export class Auth {
   }
 
   private sign(address: Address): string {
-    const payload = Buffer.from(`${address}|${this.now().getTime() + SESSION_TTL_MS}`).toString("base64url");
+    const id = randomBytes(16).toString("hex");
+    const payload = Buffer.from(`${address}|${this.now().getTime() + SESSION_TTL_MS}|${id}`).toString("base64url");
     return `${payload}.${this.mac(payload)}`;
   }
 
@@ -247,14 +297,14 @@ export type ActorResult = { ok: true; id: string | undefined } | { ok: false };
  * the client sent, unchanged. With sign-in it is the session's address: no
  * session is 401, and a client-sent id for someone else is 403.
  */
-export function resolveActor(
+export async function resolveActor(
   auth: Auth | null,
   request: FastifyRequest,
   reply: FastifyReply,
   claimed: unknown,
-): ActorResult {
+): Promise<ActorResult> {
   if (!auth) return { ok: true, id: typeof claimed === "string" && claimed ? claimed : undefined };
-  const address = auth.requireSession(request, reply);
+  const address = await auth.requireSession(request, reply);
   if (!address) return { ok: false };
   if (typeof claimed === "string" && claimed && claimed.toLowerCase() !== address.toLowerCase()) {
     void reply.code(403).send({ error: "you can only act for your signed-in wallet" });
