@@ -26,17 +26,22 @@ locals {
   # SecretProviderClass mounts (deploy/helm/bbm bbm-kv-analysis), never on
   # the vault. The worker runs Slither on untrusted Solidity next to the PoC
   # sandbox, and the vault also holds chain-operator-key and session-secret.
+  # Only where the app reads Key Vault at all. The test env's namespaces use
+  # secrets.provider=plain with in-cluster Postgres (values-test.yaml) and
+  # never mount the vault, and test is also the env without a PG server, so
+  # var.postgres_enabled marks exactly the envs that mount it (staging/prod).
   # Azure only accepts a secret-scoped assignment once the secret exists:
-  #   database-url  written by this stack (staging/prod only; test runs
-  #                 in-cluster Postgres and has none). The scope comes from
-  #                 the secret resource, so the grant waits for it.
+  #   database-url  written by this stack. The scope comes from the secret
+  #                 resource, so the grant waits for it.
   #   llm-api-key   set out of band, never by Terraform (its value would land
   #                 in state on refresh). infra/up.sh applies the vault alone
-  #                 first and seeds a placeholder before the full apply.
-  worker_kv_secret_scopes = merge(
+  #                 first and seeds a placeholder before the full apply; a
+  #                 full apply on a vault without it fails on this grant only.
+  worker_reads_key_vault = var.postgres_enabled
+  worker_kv_secret_scopes = local.worker_reads_key_vault ? merge(
     { for k, s in module.keyvault.managed_secret_scopes : k => s if k == local.kv_secrets.database_url },
     { (local.kv_secrets.llm_api_key) = "${module.keyvault.id}/secrets/${local.kv_secrets.llm_api_key}" },
-  )
+  ) : {}
   worker_kv_grants = {
     for name, scope in local.worker_kv_secret_scopes : "worker-kv-secret-${name}" => {
       identity = "worker"

@@ -387,22 +387,18 @@ run "test_env_without_postgres" {
     condition = (
       toset(keys(module.identity.role_assignment_ids)) == toset([
         "api-kv-secrets-user", "api-sources-blob-contributor", "api-queue-sender",
-        "worker-kv-secret-llm-api-key", "worker-queue-processor", "worker-queue-reader", "worker-sources-blob-reader",
+        "worker-queue-processor", "worker-queue-reader", "worker-sources-blob-reader",
         "aks-network-contributor", "certmgr-dns-test", "certmgr-dns-preview",
       ])
     )
-    error_message = "certmgr needs DNS Zone Contributor on both test zones; worker has no database-url grant without PG"
+    error_message = "certmgr needs DNS Zone Contributor on both test zones; the test worker has no KV grant"
   }
 
-  # No database-url in the test vault (in-cluster Postgres): the worker's only
-  # KV grant is llm-api-key, at secret scope.
+  # test namespaces use plain secrets and never mount the vault: the worker
+  # gets no Key Vault grant at all.
   assert {
-    condition = (
-      { for k, ra in module.identity.role_assignments : k => ra.scope if ra.identity == "worker" && ra.role == "Key Vault Secrets User" } == {
-        "worker-kv-secret-llm-api-key" = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2/secrets/llm-api-key"
-      }
-    )
-    error_message = "test worker must have Key Vault Secrets User on llm-api-key only"
+    condition     = length([for ra in values(module.identity.role_assignments) : ra if ra.identity == "worker" && strcontains(ra.scope, "/providers/Microsoft.KeyVault/")]) == 0
+    error_message = "test worker must have no Key Vault grant"
   }
 
   assert {
