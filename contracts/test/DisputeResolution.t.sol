@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {AuditorStaking} from "../src/AuditorStaking.sol";
 import {BountyEscrow} from "../src/BountyEscrow.sol";
 import {DisputeResolution} from "../src/DisputeResolution.sol";
@@ -56,6 +56,26 @@ contract DisputeResolutionTest is Test {
     uint256 internal constant BOUNTY = 2 ether;
 
     uint256 internal deadline;
+
+    // Mirrors the contracts' events for vm.expectEmit (solc 0.8.19 cannot
+    // emit `Contract.Event` directly).
+    event DisputeOpened(
+        bytes32 indexed key,
+        bytes32 indexed contractId,
+        bytes32 indexed findingId,
+        address developer,
+        address auditor,
+        uint256 ruleBy,
+        string reason
+    );
+    event DisputeRuled(bytes32 indexed key, bool auditorWon, uint256 slashed);
+    event DisputeLapsed(bytes32 indexed key);
+    event DisputeResolutionBound(address indexed disputeResolution);
+    event Frozen(bytes32 indexed contractId, bytes32 indexed findingId);
+    event Unfrozen(bytes32 indexed contractId, bytes32 indexed findingId, bool auditorWon, uint256 verifiedAt);
+    event VerificationCleared(bytes32 indexed contractId, bytes32 indexed findingId);
+    event Slashed(address indexed auditor, uint256 amount, address indexed recipient);
+    event ReputationChanged(address indexed auditor, int256 delta, int256 total);
 
     function setUp() public {
         staking = new AuditorStaking(address(this));
@@ -346,5 +366,134 @@ contract DisputeResolutionTest is Test {
         vm.prank(developer);
         vm.expectRevert(DisputeResolution.DisputeExists.selector);
         dr.openDispute(CONTRACT_ID, FINDING_1, "again");
+    }
+
+    // --- events ---
+
+    function test_openDispute_emitsDisputeOpenedAndFrozen() public {
+        _verified();
+        bytes32 key = dr.disputeKey(CONTRACT_ID, FINDING_1);
+        uint256 ruleBy = vm.getBlockTimestamp() + dr.RULING_WINDOW();
+
+        vm.expectEmit(true, true, false, false, address(escrow));
+        emit Frozen(CONTRACT_ID, FINDING_1);
+        vm.expectEmit(true, true, true, true, address(dr));
+        emit DisputeOpened(key, CONTRACT_ID, FINDING_1, developer, auditor, ruleBy, "reason");
+        _open();
+    }
+
+    function test_rule_auditorWins_emitsEvents() public {
+        _verified();
+        _open();
+        bytes32 key = dr.disputeKey(CONTRACT_ID, FINDING_1);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Unfrozen(CONTRACT_ID, FINDING_1, true, vm.getBlockTimestamp());
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit ReputationChanged(auditor, 1, 1);
+        vm.expectEmit(true, false, false, true, address(dr));
+        emit DisputeRuled(key, true, 0);
+        vm.prank(arbiter);
+        dr.rule(CONTRACT_ID, FINDING_1, true);
+    }
+
+    function test_rule_auditorLoses_emitsEvents() public {
+        _verified();
+        _open();
+        bytes32 key = dr.disputeKey(CONTRACT_ID, FINDING_1);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Unfrozen(CONTRACT_ID, FINDING_1, false, 0);
+        vm.expectEmit(true, true, false, false, address(escrow));
+        emit VerificationCleared(CONTRACT_ID, FINDING_1);
+        vm.expectEmit(true, true, false, true, address(staking));
+        emit Slashed(auditor, 0.5 ether, developer);
+        vm.expectEmit(true, false, false, true, address(staking));
+        emit ReputationChanged(auditor, -1, -1);
+        vm.expectEmit(true, false, false, true, address(dr));
+        emit DisputeRuled(key, false, 0.5 ether);
+        vm.prank(arbiter);
+        dr.rule(CONTRACT_ID, FINDING_1, false);
+    }
+
+    function test_lapse_emitsDisputeLapsed() public {
+        _verified();
+        _open();
+        bytes32 key = dr.disputeKey(CONTRACT_ID, FINDING_1);
+        (,, uint256 ruleBy,) = dr.disputes(key);
+        vm.warp(ruleBy + 1);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit Unfrozen(CONTRACT_ID, FINDING_1, true, ruleBy + 1);
+        vm.expectEmit(true, false, false, false, address(dr));
+        emit DisputeLapsed(key);
+        vm.prank(stranger);
+        dr.lapse(CONTRACT_ID, FINDING_1);
+    }
+
+    function test_bind_emitsDisputeResolutionBoundOnBothContracts() public {
+        AuditorStaking s = new AuditorStaking(address(this));
+        BountyEscrow e = new BountyEscrow(address(this), s, WINDOW, REFUND_DELAY);
+        DisputeResolution d = new DisputeResolution(arbiter, s, e);
+
+        vm.expectEmit(true, false, false, false, address(s));
+        emit DisputeResolutionBound(address(d));
+        s.bindDisputeResolution(address(d));
+
+        vm.expectEmit(true, false, false, false, address(e));
+        emit DisputeResolutionBound(address(d));
+        e.bindDisputeResolution(address(d));
+    }
+
+    /// @dev A losing auditor with no stake left is not slashed, but still
+    /// loses reputation and the ruling reports zero slashed.
+    function test_rule_auditorLosesWithNoStake_skipsSlash() public {
+        // auditor2 is eligible at verification time, then withdraws everything.
+        vm.prank(auditor2);
+        staking.stake{value: 0.1 ether}();
+        _fund();
+        escrow.recordSubmission(CONTRACT_ID);
+        escrow.recordVerification(CONTRACT_ID, FINDING_1, auditor2);
+        vm.prank(auditor2);
+        staking.withdraw(0.1 ether);
+        _open();
+
+        bytes32 key = dr.disputeKey(CONTRACT_ID, FINDING_1);
+        vm.recordLogs();
+        vm.expectEmit(true, false, false, true, address(dr));
+        emit DisputeRuled(key, false, 0);
+        vm.prank(arbiter);
+        dr.rule(CONTRACT_ID, FINDING_1, false);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 slashedSig = keccak256("Slashed(address,uint256,address)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertTrue(logs[i].topics.length == 0 || logs[i].topics[0] != slashedSig);
+        }
+        assertEq(staking.reputation(auditor2), -1);
+    }
+
+    // --- fuzz ---
+
+    /// @dev A lost dispute moves exactly SLASH_PERCENT of any stake from the
+    /// auditor to the developer.
+    function testFuzz_rule_auditorLoses_slashesHalf(uint256 staked) public {
+        staked = bound(staked, staking.REQUIRED_STAKE(), 1_000_000 ether);
+        vm.deal(auditor2, staked);
+        vm.prank(auditor2);
+        staking.stake{value: staked}();
+
+        _fund();
+        escrow.recordSubmission(CONTRACT_ID);
+        escrow.recordVerification(CONTRACT_ID, FINDING_1, auditor2);
+        _open();
+
+        uint256 devBefore = developer.balance;
+        vm.prank(arbiter);
+        dr.rule(CONTRACT_ID, FINDING_1, false);
+
+        uint256 slashed = staked * dr.SLASH_PERCENT() / 100;
+        assertEq(staking.stakeOf(auditor2), staked - slashed);
+        assertEq(developer.balance, devBefore + slashed);
     }
 }
