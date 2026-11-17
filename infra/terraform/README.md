@@ -161,8 +161,17 @@ Normally `infra/up.sh` does all of this; the manual steps are:
    `./scripts/tf.sh bootstrap global output -raw global_tfvars_hint`, and set
    `suffix` in every `envs/<env>/data.tfvars`. Then apply `global`, either
    locally or through the `infra-global` workflow.
-8. Per env: `data`, set `llm-api-key` in the env Key Vault, `compute`, then
-   `deploy/platform/install.sh <env>`.
+8. Per env: apply `data` with `-target` on the vault
+   (`module.keyvault.azurerm_key_vault.this`,
+   `module.keyvault.azurerm_role_assignment.secrets_officer`,
+   `module.keyvault.time_sleep.rbac_propagation`), set `llm-api-key` in the
+   env Key Vault (`placeholder-set-me` is fine), apply `data` in full, then
+   `compute` and `deploy/platform/install.sh <env>`. On staging/prod the
+   worker's `Key Vault Secrets User` grant is scoped to the `llm-api-key`
+   secret, which Azure accepts only once the secret exists: a full `data`
+   apply (local or `terraform.yml`) on a vault without it fails on
+   `module.identity.azurerm_role_assignment.this["worker-kv-secret-llm-api-key"]`
+   alone. Set the secret and re-run. `infra/up.sh` does this order itself.
 
 `preregistered_resource_providers` may list any registered namespace; names
 the stack does not manage are ignored.

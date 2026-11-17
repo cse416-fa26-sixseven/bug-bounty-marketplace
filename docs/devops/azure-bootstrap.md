@@ -321,9 +321,10 @@ Prod runs the api in chain mode (`chain.enabled` in `values-prod.yaml`), so the 
 needs `chain-operator-key` and `session-secret` before any prod deploy, or the CSI mount fails the
 same way. See [Sepolia runbook, Deployed environments](../contracts/sepolia.md#deployed-environments).
 
-The analysis worker identity (`id-bbm-<env>-worker`) has Key Vault Secrets User on `llm-api-key`
-and `database-url` only, scoped to each secret rather than the vault, so it can't read
-`chain-operator-key` or `session-secret`. Azure accepts a secret-scoped grant only once the secret
+On staging and prod the analysis worker identity (`id-bbm-<env>-worker`) has Key Vault Secrets
+User on `llm-api-key` and `database-url` only, scoped to each secret rather than the vault, so it
+can't read `chain-operator-key` or `session-secret` (on test, which never mounts the vault, it has
+no Key Vault grant). Azure accepts a secret-scoped grant only once the secret
 exists, which is why `up.sh` creates the vault and seeds the placeholder before the rest of the
 `data` stack. Update `llm-api-key` with `az keyvault secret set` (a new version); don't delete it.
 
@@ -543,9 +544,14 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
 9. **Per env** (`test`, `staging`, `prod`):
 
    ```sh
-   ./scripts/tf.sh data <env> init && ./scripts/tf.sh data <env> apply
+   ./scripts/tf.sh data <env> init
+   # Vault first: the worker's llm-api-key grant needs the secret to exist.
+   ./scripts/tf.sh data <env> apply -target=module.keyvault.azurerm_key_vault.this \
+     -target=module.keyvault.azurerm_role_assignment.secrets_officer \
+     -target=module.keyvault.time_sleep.rbac_propagation
    az keyvault secret set --vault-name "$(./scripts/tf.sh data <env> output -raw key_vault_name)" \
      -n llm-api-key --value placeholder-set-me
+   ./scripts/tf.sh data <env> apply
    ./scripts/tf.sh compute <env> init && ./scripts/tf.sh compute <env> apply
    source <(./scripts/env-region.sh <env>)   # COMPUTE_RG / CLUSTER in the env's region
    az aks get-credentials -g "$COMPUTE_RG" -n "$CLUSTER" --overwrite-existing
@@ -553,6 +559,12 @@ What `up.sh` runs, for debugging a single step. Commands run from `infra/terrafo
    ./scripts/tf.sh compute <env> output -raw helm_values > /tmp/values-infra.yaml
    ../../deploy/platform/install.sh <env> --values /tmp/values-infra.yaml --wait
    ```
+
+   On staging and prod the worker's Key Vault Secrets User grant is scoped to the `llm-api-key`
+   secret, and Azure accepts it only once the secret exists. A full `data` apply (local or the
+   `terraform` workflow) against a vault without `llm-api-key` fails on
+   `module.identity.azurerm_role_assignment.this["worker-kv-secret-llm-api-key"]` alone; set the
+   secret and re-run.
 
 Restoring a damaged state file: the state account keeps blob versions and 14 days of soft delete.
 Use **Portal → Storage account → Containers → tfstate → `<key>` → Versions**.

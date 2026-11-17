@@ -231,11 +231,12 @@ flowchart LR
   credential are left in place until a separate Terraform change removes them.
 - Key Vault secrets reach pods through the Secrets Store CSI driver: SecretProviderClass `bbm-kv`
   syncs them into the Kubernetes Secret `bbm-secrets`.
-- `id-bbm-<env>-worker` can read only `database-url` and `llm-api-key`: its Key Vault Secrets
-  User grants are scoped to those two secrets (test, with no `database-url`, gets `llm-api-key`
-  only), never to the vault. The analysis worker runs Slither on untrusted Solidity next to the
-  PoC sandbox, and the vault also holds `chain-operator-key` and `session-secret`, which only the
-  api identity reads.
+- `id-bbm-<env>-worker` can read only `database-url` and `llm-api-key`: on staging and prod its
+  Key Vault Secrets User grants are scoped to those two secrets, never to the vault. On test it has
+  no Key Vault grant, since test namespaces use plain secrets and never mount the vault. The
+  analysis worker runs Slither on untrusted Solidity next to the PoC sandbox, and the vault also
+  holds `chain-operator-key` and `session-secret`, which only the api identity reads (and the
+  migrations Job, which reuses it).
 - cert-manager answers Let's Encrypt DNS-01 challenges as `id-bbm-<env>-certmgr`, which has DNS
   Zone Contributor on the env's public zones only.
 - In CI-run and preview namespaces, `secrets.provider=plain` is used: the in-cluster Postgres
