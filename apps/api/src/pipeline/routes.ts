@@ -24,9 +24,10 @@ import { resolveActor, type Auth } from "../auth/session.js";
 
 /** Minimum AuditorStaking.stakeOf an auditor needs before a claim, a PoC or a
  * reported finding is accepted:
- * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. For claims the contract is
- * the authority (lockSubmission reverts below it); the API's own check is a
- * faster answer that costs no transaction. */
+ * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. With the claim lock on
+ * (CLAIM_LOCK_ENABLED), the contract is the authority for claims:
+ * lockSubmission reverts below it, and the API's own check is a faster answer
+ * that costs no transaction. With the lock off, the API check is the only one. */
 export const REQUIRED_STAKE_WEI = "100000000000000000";
 
 export interface PipelineRouteDeps {

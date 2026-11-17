@@ -134,8 +134,8 @@ Regression tests now exist for earlier fixes that had none: re-running wei migra
 
 - **Stake check on the claim lock** (follow-up to M5-1 and M5-2, #152):
   `AuditorStaking.lockSubmission` now reverts with `StakeBelowRequired` below `REQUIRED_STAKE`,
-  so the contract, not the API, is the authority on claims; the API keeps its own check as a
-  faster answer and maps the revert to the same `403`. The Sepolia contracts deployed on
+  so with the claim lock on the contract, not the API, is the authority on claims; the API keeps
+  its own check as a faster answer and maps the revert to the same `403`. The Sepolia contracts deployed on
   2026-11-05 predate this, so on Sepolia (prod) the API is still the only gate until they are
   redeployed ([Sepolia runbook](../contracts/sepolia.md#current-deployment)).
 - **With claim locks disabled** there is no on-chain lock, so stake → claim → withdraw is
