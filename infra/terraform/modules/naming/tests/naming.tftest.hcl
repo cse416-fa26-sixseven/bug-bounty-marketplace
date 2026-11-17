@@ -75,6 +75,16 @@ run "staging_names" {
     condition     = output.env.vnet_cidr == "10.20.0.0/16" && output.uamis.api == "id-bbm-staging-api" && output.uamis.certmgr == "id-bbm-staging-certmgr"
     error_message = "unexpected VNet CIDR or UAMI name"
   }
+
+  # Must match deploy/helm/bbm values.yaml secrets.csi.objects.
+  assert {
+    condition = output.kv_secrets == {
+      database_url      = "database-url"
+      pg_admin_password = "pg-admin-password"
+      llm_api_key       = "llm-api-key"
+    }
+    error_message = "env KV secret names must match the app chart's secrets.csi.objects"
+  }
 }
 
 run "staging_dns" {

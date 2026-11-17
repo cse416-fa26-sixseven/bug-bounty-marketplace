@@ -14,3 +14,14 @@ output "role_assignment_ids" {
   description = "Role assignment IDs keyed like var.role_assignments."
   value       = { for k, ra in azurerm_role_assignment.this : k => ra.id }
 }
+
+output "role_assignments" {
+  description = "Role assignments as created, keyed like var.role_assignments: { identity, scope, role }."
+  value = {
+    for k, ra in azurerm_role_assignment.this : k => {
+      identity = var.role_assignments[k].identity
+      scope    = ra.scope
+      role     = ra.role_definition_name
+    }
+  }
+}
