@@ -64,8 +64,6 @@ send real transactions to anvil and real HTTP requests to the chain-mode API.
 
 ## Scenarios not covered by an automated test
 
-- **Logout revocation (M5-4):** a copied session cookie stays valid until it expires (8 h). This
-  is a known limitation, not tested.
 - **Dispute lapse:** the arbiter misses the ruling window. The lapser is unit-tested, but no
   E2E covers it.
 - **Claim expiry after 10 minutes, and resuming a claim from the profile.** Unit-tested only.

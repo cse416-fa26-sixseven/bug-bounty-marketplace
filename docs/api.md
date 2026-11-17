@@ -62,7 +62,7 @@ for the signed-in wallet. Sign-in follows
 | `POST /api/auth/nonce`  | JSON `{address}`. `{nonce, message}`: a SIWE message naming the web app's domain and URI, the address, the API's `CHAIN_ID`, a single-use nonce, `Issued At` and an `Expiration Time` 5 minutes on. `400` for a bad address. |
 | `POST /api/auth/login`  | JSON `{message, signature}` (optional `address`, which must match). Sets the `bbm_session` cookie and returns `{address}`. `401` when the nonce is unknown, spent or expired, or the domain, URI, chain or address differs.     |
 | `GET /api/auth/me`      | `{address}` of the session, or `401`.                                                                                                                                                                                           |
-| `POST /api/auth/logout` | Clears the cookie.                                                                                                                                                                                                              |
+| `POST /api/auth/logout` | Ends the session in the request's cookie server-side (that cookie, and any copy of it, gets `401` from then on) and clears the cookie. `200` with or without a valid session cookie.                                            |
 
 **Which domain a message names.** With `AUTH_ORIGIN` set (e.g.
 `https://bountyguard.example`), every message names that origin, whatever the
@@ -81,9 +81,21 @@ message names. A nonce is spent before the signature check is awaited, so two
 concurrent logins with one signature cannot both succeed.
 
 Nonces live in memory for 5 minutes (at most 5 open per address), so sign-in
-needs a single API replica. The session is an HMAC-signed cookie (address and
-expiry, 8 hours), `HttpOnly; SameSite=Lax`, plus `Secure` when `COOKIE_SECURE`
-is on.
+needs a single API replica. The session is an HMAC-signed cookie (address,
+expiry and a random session id, 8 hours), `HttpOnly; SameSite=Lax`, plus
+`Secure` when `COOKIE_SECURE` is on.
+
+**Logout.** Logout records the session id as revoked, and every route that
+reads the session checks for it, so a copy of the cookie stops working at
+logout rather than at expiry. Only that session ends: the wallet's other
+sessions (another browser) stay signed in. With `DATABASE_URL` the revoked
+ids are kept in Postgres (`revoked_sessions`, migration `0012`), so they
+survive a restart and are seen by every replica; without it they are held in
+memory and forgotten on restart. An entry is dropped once its session would
+have expired anyway (pruned at each logout). If the lookup fails, the request
+fails with `500` rather than being let in. Cookies signed before sessions had
+an id (address and expiry only) are refused, so wallets signed in when this
+shipped sign in again once.
 
 ## Environment variables
 
