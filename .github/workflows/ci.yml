@@ -29,6 +29,7 @@ jobs:
       analysis: ${{ steps.filter.outputs.analysis }}
       sandbox: ${{ steps.filter.outputs.sandbox }}
       containers: ${{ steps.filter.outputs.containers }}
+      e2e_chain: ${{ steps.filter.outputs.e2e_chain }}
       infra: ${{ steps.filter.outputs.infra }}
       helm: ${{ steps.filter.outputs.helm }}
       workflows: ${{ steps.filter.outputs.workflows }}
@@ -120,6 +121,17 @@ jobs:
               - 'packages/shared/**'
               - 'workers/**'
               - 'contracts/**'
+
+            # The on-chain browser E2E run (e2e-chain job): its specs and
+            # the scripts that start the demo stack. The job also runs on
+            # every `containers` or `root` change.
+            e2e_chain:
+              - 'tests/e2e/**'
+              - 'scripts/demo-stack.sh'
+              - 'scripts/ci-e2e-chain.sh'
+              - 'docker-compose.chain.yml'
+              - 'docker-compose.sandbox.yml'
+              - '.github/workflows/ci.yml'
 
             # Terraform (separate toolchain, no JS deps) and the bring-up /
             # teardown scripts: static checks and offline self-tests only,
@@ -758,6 +770,92 @@ jobs:
       - name: Stop stack
         if: always()
         run: $COMPOSE --profile deploy --profile chain down -v
+
+  # ---------------------------------------------------------------------
+  # e2e-chain - the on-chain browser specs (tests/e2e/{lifecycle,features,
+  # flows-extra}.spec.ts, E2E_CHAIN=1) against a fresh demo stack: anvil
+  # with 60-second windows, the API in chain mode, analysis with the PoC
+  # sandbox, the web app with mocks off. scripts/ci-e2e-chain.sh runs it
+  # all (no retries), dumps compose logs on failure and tears down.
+  # Non-blocking: continue-on-error, and deliberately NOT in ci-ok's needs.
+  # ---------------------------------------------------------------------
+  e2e-chain:
+    name: e2e-chain (non-blocking)
+    needs: changes
+    if: >-
+      needs.changes.outputs.e2e_chain == 'true' ||
+      needs.changes.outputs.containers == 'true' ||
+      needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      E2E_COMPOSE_LOG: ${{ github.workspace }}/compose-e2e-chain.log
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # contracts/lib/forge-std for the anvil / contracts-deploy image.
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build sandbox image
+        run: docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(jq -r '.devDependencies["@playwright/test"]' tests/package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browser
+        run: tests/e2e/install-browser.sh
+
+      - name: Chain E2E (stack:demo + web + Playwright)
+        run: scripts/ci-e2e-chain.sh
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-e2e-chain
+          path: tests/reports/junit-e2e.xml
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-chain
+          path: tests/e2e/playwright-report/
+          if-no-files-found: ignore
+
+      - name: Upload compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs-e2e-chain
+          path: compose-e2e-chain.log
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------
   # infra/terraform - static checks only (no Azure credentials, no
