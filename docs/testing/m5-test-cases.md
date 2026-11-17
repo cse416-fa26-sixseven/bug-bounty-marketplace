@@ -4,8 +4,8 @@ These are the scenarios run against the full stack, with what each one expects a
 of the latest run. Each Actual Result is what the test asserted on that run.
 
 - **Source of results:** CI run
-  [43995840657](https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace/actions/runs/43995840657)
-  (PR #148, 2026-11-17).
+  [43998998097](https://github.com/cse416-fa26-sixseven/bug-bounty-marketplace/actions/runs/43998998097)
+  (PR #148 final head, 2026-11-17).
   - E2E: the `e2e-chain` job ran 10 tests, 10 passed (`junit-e2e-chain` artifact).
   - Chain-mode integration: the `containers` job ran 15 tests, 15 passed (`junit-system-tests`
     artifact).
