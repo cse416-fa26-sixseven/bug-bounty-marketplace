@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Address, Hash, Hex } from "viem";
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  encodeErrorResult,
+  type Address,
+  type Hash,
+  type Hex,
+} from "viem";
+import { auditorStakingAbi } from "@bbm/shared";
 import { privateKeyToAccount } from "viem/accounts";
 import { onchainId } from "./ids.js";
 import { claimLockEnabled, loadChainConfig } from "./config.js";
-import { createAuditorStakingPort } from "./auditor-staking.js";
+import { StakeBelowRequiredError, createAuditorStakingPort } from "./auditor-staking.js";
 
 const STAKING = "0x5FbDB2315678afecb367f032d93F642f64180aa3" as Address;
 const AUDITOR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as Address;
@@ -248,6 +256,47 @@ describe("createAuditorStakingPort", () => {
     const port = createAuditorStakingPort({ address: STAKING, publicClient, walletClient });
 
     await expect(port.lockSubmission(AUDITOR)).rejects.toThrow(/lockSubmission reverted/);
+  });
+
+  /** The error viem's writeContract throws when the gas estimate reverts with
+   * the given AuditorStaking custom error. */
+  function revertError(data: Hex): ContractFunctionExecutionError {
+    const reverted = new ContractFunctionRevertedError({
+      abi: auditorStakingAbi,
+      data,
+      functionName: "lockSubmission",
+    });
+    return new ContractFunctionExecutionError(reverted, {
+      abi: auditorStakingAbi,
+      functionName: "lockSubmission",
+      args: [AUDITOR],
+      contractAddress: STAKING,
+    });
+  }
+
+  it("turns a StakeBelowRequired revert into StakeBelowRequiredError, with nothing awaited", async () => {
+    const { publicClient, walletClient } = fakeClients();
+    const cause = revertError(
+      encodeErrorResult({ abi: auditorStakingAbi, errorName: "StakeBelowRequired", args: [AUDITOR, 5n] }),
+    );
+    walletClient.writeContract.mockRejectedValueOnce(cause);
+    const port = createAuditorStakingPort({ address: STAKING, publicClient, walletClient });
+
+    const error = await port.lockSubmission(AUDITOR).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(StakeBelowRequiredError);
+    expect(error).toMatchObject({ auditor: AUDITOR, stake: 5n, cause });
+    expect(publicClient.waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it("rethrows any other revert or send failure unchanged", async () => {
+    const { publicClient, walletClient } = fakeClients();
+    const notOperator = revertError(encodeErrorResult({ abi: auditorStakingAbi, errorName: "NotOperator" }));
+    const rpcDown = new Error("rpc unavailable");
+    walletClient.writeContract.mockRejectedValueOnce(notOperator).mockRejectedValueOnce(rpcDown);
+    const port = createAuditorStakingPort({ address: STAKING, publicClient, walletClient });
+
+    await expect(port.lockSubmission(AUDITOR)).rejects.toBe(notOperator);
+    await expect(port.lockSubmission(AUDITOR)).rejects.toBe(rpcDown);
   });
 });
 
