@@ -51,7 +51,8 @@
 #    7 GitHub               run the generated gh_setup_commands (unless --skip-github)
 #    8 DNS delegation       print NS; upsert in Cloudflare if CLOUDFLARE_API_TOKEN is set
 #    9 global               apply; mirror postgres/curl images into ACR
-#   10 per env              data, llm-api-key placeholder, compute, platform install
+#   10 per env              Key Vault, llm-api-key placeholder, rest of data, compute,
+#                           platform install
 #   11 summary              URLs, next steps, tfvars to commit
 #
 # Environment (optional):
@@ -746,7 +747,7 @@ ensure_llm_key() { # ensure_llm_key <vault>
     fi
     if [[ "$out" == *SecretNotFound* || "$out" == *"was not found"* ]]; then
       retry 10 30 run az keyvault secret set --vault-name "$kv" -n llm-api-key --value placeholder-set-me -o none ||
-        die "$kv: could not set llm-api-key"
+        die "$kv: could not set llm-api-key. If it is soft-deleted (ObjectIsDeletedButRecoverable), restore it with: az keyvault secret recover --vault-name $kv -n llm-api-key"
       warn "$kv: llm-api-key set to placeholder-set-me; replace it with the real key later"
       return 0
     fi
@@ -774,12 +775,21 @@ PENDING_CERTS=()
 for e in "${ENVS[@]}"; do
   info "---- env $e"
   retry 3 30 run "$TF_SH" data "$e" init -reconfigure || die "data/$e init failed"
+  # The worker's llm-api-key grant is scoped to that secret (stacks/data
+  # identity.tf), and Azure only accepts it once the secret exists: create
+  # the vault and its officer grants first, seed the placeholder, then apply
+  # the rest. A no-op on re-runs.
+  tf_plan_apply data "$e" \
+    --target module.keyvault.azurerm_key_vault.this \
+    --target module.keyvault.azurerm_role_assignment.secrets_officer \
+    --target module.keyvault.time_sleep.rbac_propagation ||
+    die "data/$e: Key Vault apply failed"
+  ensure_llm_key "$(tf_out data "$e" key_vault_name)"
   if ! tf_plan_apply data "$e"; then
     warn "data/$e apply failed; retrying once in 60s (Key Vault role assignments propagate slowly)"
     sleep 60
     tf_plan_apply data "$e" || die "data/$e apply failed"
   fi
-  ensure_llm_key "$(tf_out data "$e" key_vault_name)"
 
   retry 3 30 run "$TF_SH" compute "$e" init -reconfigure || die "compute/$e init failed"
   if ! tf_plan_apply compute "$e"; then

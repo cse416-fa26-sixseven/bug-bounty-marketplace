@@ -23,6 +23,11 @@ output "env" {
   value       = local.env
 }
 
+output "kv_secrets" {
+  description = "Env Key Vault secret names (database_url, pg_admin_password, llm_api_key), as the app chart's secrets.csi.objects names them."
+  value       = local.kv_secrets
+}
+
 output "uamis" {
   description = "Per-environment user-assigned managed identity names keyed by role (aks, api, worker, sandbox, certmgr)."
   value       = local.uamis

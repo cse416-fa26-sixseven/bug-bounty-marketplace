@@ -78,6 +78,16 @@ locals {
     aks_cluster             = "aks-${local.p}-${local.e}-${local.loc}"
   }
 
+  # Env Key Vault secret names. The app chart reads them under the same names
+  # (deploy/helm/bbm values.yaml secrets.csi.objects); keep the two in sync.
+  # database-url / pg-admin-password are written by the data stack,
+  # llm-api-key is set out of band (infra/up.sh seeds a placeholder).
+  kv_secrets = {
+    database_url      = "database-url"
+    pg_admin_password = "pg-admin-password"
+    llm_api_key       = "llm-api-key"
+  }
+
   uamis = {
     for role in ["aks", "api", "worker", "sandbox", "certmgr"] : role => "id-${local.p}-${local.e}-${role}"
   }

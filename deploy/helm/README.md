@@ -440,7 +440,10 @@ az acr import --name <acr> \
   `Storage Queue Data Reader` on the storage account.
 - **Role assignments:**
   - `Key Vault Secrets User` on the env Key Vault for the api identity.
-  - The same role for the worker identity when analysis is enabled.
+  - The same role for the worker identity (staging/prod), scoped to the two secrets
+    `bbm-kv-analysis` mounts (`database-url`, `llm-api-key`), never the whole
+    vault (`infra/terraform/stacks/data/identity.tf`). Mounting any other
+    secret into the analysis pod needs a new grant there.
   - `Network Contributor` on the data RG for the AKS cluster identity, so the
     Gateway's LoadBalancer Service can bind the static PIP.
 - **Node pools:**

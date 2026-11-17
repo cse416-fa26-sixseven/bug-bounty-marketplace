@@ -191,8 +191,8 @@ run "plan_names_and_settings" {
   }
 
   assert {
-    condition     = length(module.identity.role_assignment_ids) == 9
-    error_message = "expected 9 role assignments (api 3, worker 4, aks 1, certmgr 1, sandbox 0)"
+    condition     = length(module.identity.role_assignment_ids) == 10
+    error_message = "expected 10 role assignments (api 3, worker 5, aks 1, certmgr 1, sandbox 0)"
   }
 
   assert {
@@ -293,6 +293,29 @@ run "apply_with_mocks" {
     condition     = module.keyvault.secret_officer_principal_types == { "sp/88888888-8888-8888-8888-888888888888" = "ServicePrincipal", "user/99999999-9999-9999-9999-999999999999" = "User" }
     error_message = "KV officer grants must carry principal_type ServicePrincipal/User"
   }
+
+  # The worker runs untrusted analysis input: it must not read the whole env
+  # vault (chain-operator-key, session-secret), only database-url and
+  # llm-api-key, each at secret scope.
+  assert {
+    condition = (
+      { for k, ra in module.identity.role_assignments : k => ra.scope if ra.identity == "worker" && ra.role == "Key Vault Secrets User" } == {
+        "worker-kv-secret-database-url" = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2/secrets/database-url"
+        "worker-kv-secret-llm-api-key"  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-ncus/providers/Microsoft.KeyVault/vaults/kv-bbm-stg-a1b2/secrets/llm-api-key"
+      }
+    )
+    error_message = "worker must have Key Vault Secrets User on exactly database-url and llm-api-key, at secret scope"
+  }
+
+  assert {
+    condition     = alltrue([for ra in values(module.identity.role_assignments) : !(ra.identity == "worker" && strcontains(ra.scope, "/providers/Microsoft.KeyVault/vaults/") && !strcontains(ra.scope, "/secrets/"))])
+    error_message = "worker must have no role assignment on the env Key Vault itself"
+  }
+
+  assert {
+    condition     = length([for ra in values(module.identity.role_assignments) : ra if ra.identity == "sandbox"]) == 0
+    error_message = "sandbox must have no role assignments"
+  }
 }
 
 run "prod_cidrs" {
@@ -364,11 +387,18 @@ run "test_env_without_postgres" {
     condition = (
       toset(keys(module.identity.role_assignment_ids)) == toset([
         "api-kv-secrets-user", "api-sources-blob-contributor", "api-queue-sender",
-        "worker-kv-secrets-user", "worker-queue-processor", "worker-queue-reader", "worker-sources-blob-reader",
+        "worker-queue-processor", "worker-queue-reader", "worker-sources-blob-reader",
         "aks-network-contributor", "certmgr-dns-test", "certmgr-dns-preview",
       ])
     )
-    error_message = "certmgr needs DNS Zone Contributor on both test zones"
+    error_message = "certmgr needs DNS Zone Contributor on both test zones; the test worker has no KV grant"
+  }
+
+  # test namespaces use plain secrets and never mount the vault: the worker
+  # gets no Key Vault grant at all.
+  assert {
+    condition     = length([for ra in values(module.identity.role_assignments) : ra if ra.identity == "worker" && strcontains(ra.scope, "/providers/Microsoft.KeyVault/")]) == 0
+    error_message = "test worker must have no Key Vault grant"
   }
 
   assert {
