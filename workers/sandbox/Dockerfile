@@ -9,9 +9,9 @@
 #   checked against the sha256 published by soliditylang.org
 # - forge-std at /opt/forge-std, the commit contracts/lib/forge-std pins
 
-FROM alpine:3.20 AS fetch
+FROM alpine:3.24 AS fetch
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
-RUN apk add --no-cache curl=8.14.1-r2 git=2.45.4-r0 jq=1.7.1-r0
+RUN apk add --no-cache curl=8.23.0-r0 git=2.54.1-r0 jq=1.8.2-r0
 ARG FORGE_STD_COMMIT=f3dae6e6ee381f25eb6a246f7da9b85c91a68219
 COPY analysis/src/analysis/solc-versions.txt /tmp/solc-versions.txt
 RUN base=https://binaries.soliditylang.org/linux-amd64; \
