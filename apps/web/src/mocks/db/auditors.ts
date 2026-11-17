@@ -25,6 +25,14 @@ import { armChallengeWindow, findContractById, findFindingById, isAnalysisDone }
  * can pre-assign claims to this auditor in its own seed data. */
 export const SEED_AUDITOR_ID = "auditor_1";
 
+/** Demo stake an auditor needs to claim, submit a PoC or report a finding
+ * (the UI's REQUIRED_STAKE). Above the seed auditor's 5,000 so the gate shows. */
+const MOCK_REQUIRED_STAKE_WEI = ethToWei("10000");
+
+function stakeMet(auditorId: string): boolean {
+  return compareWei(findAuditorById(auditorId)?.stake ?? "0", MOCK_REQUIRED_STAKE_WEI) >= 0;
+}
+
 /** Finding ids whose PoC is seeded/designed to fail sandbox re-run, landing
  * the finding in Rejected instead of Verified. */
 const FORCE_REJECT_FINDING_IDS = new Set<string>();
@@ -118,7 +126,11 @@ export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] 
   return items;
 }
 
+/** As the API does on a chain: the stake gate runs first, so an unstaked
+ * auditor (403) never takes a claim. */
 export function claimContract(contractId: string, auditorId: string): Contract {
+  if (findAuditorById(auditorId) && !stakeMet(auditorId))
+    throw new MockApiError(403, "Auditor stake is below the required stake");
   listQueue();
   const contract = findContractById(contractId);
   if (!contract) throw new MockApiError(404, `Contract ${contractId} not found`);
@@ -204,7 +216,7 @@ export function submitPoc(
     new Date(finding.claimExpiresAt).getTime() <= Date.now()
   )
     throw new MockApiError(409, "An active claim is required");
-  if (compareWei(findAuditorById(auditorId)?.stake ?? "0", ethToWei("10000")) < 0)
+  if (!stakeMet(auditorId))
     throw new MockApiError(400, "Post the required demo stake before submitting a PoC");
   const contract = findContractById(finding.contractId);
   if (
@@ -286,7 +298,7 @@ export function reportFinding(
   const claim = contract.status === "Claimed" ? activeClaimFor(contract.id) : null;
   if (!claim || claim.auditorId !== auditorId)
     throw new MockApiError(403, "You do not hold an active claim on this contract");
-  if (compareWei(findAuditorById(auditorId)?.stake ?? "0", ethToWei("10000")) < 0)
+  if (!stakeMet(auditorId))
     throw new MockApiError(403, "Auditor stake is below the required stake");
   const testFilename = file.name;
 

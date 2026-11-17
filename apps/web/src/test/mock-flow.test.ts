@@ -89,15 +89,38 @@ describe("seeded failing PoC", () => {
   });
 });
 
+/** Tops the seed auditor (5,000 demo stake) up to the 10,000 claim requirement. */
+async function stakeSeedAuditor() {
+  await auditorApi.postStake({ auditorId: SEED_AUDITOR_ID, amount: ethToWei("5000") });
+}
+
 describe("auditor queue + claim", () => {
+  it("refuses a claim below the required stake with 403 and leaves the contract open", async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+    const [item] = await auditorApi.listQueue();
+    const refused = auditorApi.claimContract({ contractId: item!.id, auditorId: SEED_AUDITOR_ID });
+    await expect(refused).rejects.toBeInstanceOf(ApiError);
+    await expect(refused).rejects.toMatchObject({
+      status: 403,
+      message: "Auditor stake is below the required stake",
+    });
+    expect((await auditorApi.listQueue()).map((c) => c.id)).toContain(item!.id);
+
+    await stakeSeedAuditor();
+    const claimed = await auditorApi.claimContract({ contractId: item!.id, auditorId: SEED_AUDITOR_ID });
+    expect(claimed.status).toBe("Claimed");
+  });
+
   it("lists no contract while its analysis runs, and refuses to claim it", async () => {
+    await stakeSeedAuditor();
     expect(await auditorApi.listQueue()).toHaveLength(0);
     await expect(
       auditorApi.claimContract({ contractId: "contract_1", auditorId: SEED_AUDITOR_ID }),
     ).rejects.toMatchObject({ status: 409 });
   });
 
-  it("lists the open contract once analysed and lets the seed auditor claim it", async () => {
+  it("lists the open contract once analysed and lets the staked seed auditor claim it", async () => {
+    await stakeSeedAuditor();
     await vi.advanceTimersByTimeAsync(3000);
     const queue = await auditorApi.listQueue();
     expect(queue).toHaveLength(1);
@@ -157,6 +180,7 @@ describe("developer notes on findings", () => {
 
 describe("claim and analysis", () => {
   it("refuses a claim during analysis, then gives the claimant every finding", async () => {
+    await stakeSeedAuditor();
     const contract = await developerApi.submitContract({
       file: new File(["contract Demo {}"], "Demo.sol"),
       developerAddress: SEED_DEVELOPER_ADDRESS,
@@ -176,6 +200,7 @@ describe("claim and analysis", () => {
   });
 
   it("never lists a contract whose analysis failed", async () => {
+    await stakeSeedAuditor();
     const contract = await developerApi.submitContract({
       file: new File(["contract Demo {"], "BrokenDemo.sol"),
       developerAddress: SEED_DEVELOPER_ADDRESS,
