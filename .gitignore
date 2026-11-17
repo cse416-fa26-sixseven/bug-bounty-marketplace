@@ -11,7 +11,10 @@ out/
 !.env.example
 coverage/
 # Test reports (JUnit XML, coverage) written by CI runs; see docs/testing/README.md
-reports/
+/apps/*/reports/
+/packages/*/reports/
+/tests/reports/
+/workers/*/reports/
 lcov.info
 .coverage
 coverage.xml

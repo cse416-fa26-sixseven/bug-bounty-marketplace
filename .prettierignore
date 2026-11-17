@@ -9,3 +9,4 @@ pnpm-lock.yaml
 contracts/out
 contracts/cache
 *.sol
+reports
