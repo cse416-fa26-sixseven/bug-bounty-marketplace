@@ -185,17 +185,17 @@ DOCKER_CONFIG=/tmp/dc pnpm stack:demo`.
 
 ## Testing
 
-| Tier               | Where                                                       | Command                                                         |
-| ------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
-| Unit               | next to the code (vitest, `forge test`, pytest)             | `pnpm test`, `forge test`, `uv run pytest`                      |
-| DB integration     | `apps/api/src/**/pg-repository.test.ts`                     | `pnpm --filter @bbm/api test` with `DATABASE_URL`               |
-| System integration | `tests/integration/`                                        | `pnpm test:integration`                                         |
-| Chain integration  | `tests/integration/chain-flows.test.ts` (anvil, SIWE)       | `pnpm stack:ci-chain`, then `BBM_CHAIN=1 pnpm test:integration` |
-| Regression         | API goldens, `contracts/.gas-snapshot`, shared schema drift | `pnpm test:regression`, `forge snapshot --check`                |
-| Smoke              | `tests/smoke/`                                              | `pnpm test:smoke`                                               |
-| E2E                | `tests/e2e/` (Playwright)                                   | `pnpm test:e2e`                                                 |
-| On-chain E2E       | `tests/e2e/{lifecycle,features,flows-extra}.spec.ts`        | `scripts/ci-e2e-chain.sh` (fresh `stack:demo`)                  |
-| Load               | `tests/load/` (k6)                                          | see `tests/load/README.md`                                      |
+| Tier               | Where                                                       | Command                                                                                                                  |
+| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Unit               | next to the code (vitest, `forge test`, pytest)             | `pnpm test`, `forge test`, `uv run pytest`                                                                               |
+| DB integration     | `apps/api/src/**/pg-repository.test.ts`                     | `pnpm --filter @bbm/api test` with `DATABASE_URL`                                                                        |
+| System integration | `tests/integration/`                                        | `pnpm test:integration`                                                                                                  |
+| Chain integration  | `tests/integration/chain-flows.test.ts` (anvil, SIWE)       | `pnpm stack:ci && pnpm stack:ci-chain`, then `BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration` |
+| Regression         | API goldens, `contracts/.gas-snapshot`, shared schema drift | `pnpm test:regression`, `forge snapshot --check`                                                                         |
+| Smoke              | `tests/smoke/`                                              | `pnpm test:smoke`                                                                                                        |
+| E2E                | `tests/e2e/` (Playwright)                                   | `pnpm test:e2e`                                                                                                          |
+| On-chain E2E       | `tests/e2e/{lifecycle,features,flows-extra}.spec.ts`        | `scripts/ci-e2e-chain.sh` (fresh `stack:demo`)                                                                           |
+| Load               | `tests/load/` (k6)                                          | see `tests/load/README.md`                                                                                               |
 
 Unit tests never touch the network. The system tiers run against a live
 stack (`pnpm stack:up` first) and are never part of `pnpm test`. Details,
@@ -223,7 +223,7 @@ A `changes` job (`dorny/paths-filter`) decides which jobs run. Root config
 | `terraform-static` | `infra/terraform/scripts/ci-static.sh`: fmt, validate, `terraform test`, tflint, shellcheck                                                                     |
 | `helm`             | `helm lint` every values layer, render + kubeconform, missing-tag render must fail, `ct lint`                                                                   |
 | `workflows`        | actionlint                                                                                                                                                      |
-| `CI OK`            | always runs; passes when `changes` succeeded and every other job (except `e2e-chain`) succeeded or was skipped                                                  |
+| `CI OK`            | always runs; passes when `changes` succeeded and every other job (except `e2e-chain` and `deps-audit`) succeeded or was skipped                                 |
 
 `ci.yml` never logs in to Azure, so `CI OK` never depends on cloud
 credentials, quota or uptime. `CI OK` is the required status check on `main`

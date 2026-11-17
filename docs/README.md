@@ -9,7 +9,6 @@ shows it on the repo front page. Contributor conventions are in
 
 ## Contents
 
-- [Developer Guide](developer-guide.md): architecture overview, dev environment setup, codebase structure, how to contribute and extend the system.
 - Packages and services
   - [@bbm/web](web.md): Next.js frontend, `/api` proxy, MSW mocks.
   - [@bbm/api](api.md): Fastify API, contract upload endpoints, Postgres and migrations.
