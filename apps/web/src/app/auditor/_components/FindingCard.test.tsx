@@ -24,28 +24,30 @@ const markFalsePositive = vi.mocked(auditorApi.markFalsePositive);
 
 const AUDITOR = "auditor_1";
 
+// `satisfies` (not `as`) so a field added to or renamed in FindingSchema fails typecheck here.
+const BASE_FINDING = {
+  id: "finding_1",
+  contractId: "contract_1",
+  severity: "High",
+  slitherDetector: "reentrancy-eth",
+  rawOutputReference: "mock://slither/contract_1/reentrancy-eth.json",
+  llmExplanation: "A reentrancy bug lets an attacker drain funds.",
+  status: "Flagged",
+  statusHistory: [{ status: "Flagged", changedAt: "2026-10-20T12:00:00.000Z" }],
+  claimedByAuditorId: AUDITOR,
+  // Far in the future, so the claim is live whatever the clock says.
+  claimExpiresAt: "2099-01-01T00:00:00.000Z",
+  isFalsePositive: false,
+  source: "slither",
+  title: null,
+  reportedByAuditorId: null,
+  developerNote: null,
+  developerNoteUpdatedAt: null,
+  challengeWindowExpiresAt: null,
+} satisfies Finding;
+
 function finding(overrides: Partial<Finding> = {}): Finding {
-  return {
-    id: "finding_1",
-    contractId: "contract_1",
-    severity: "High",
-    slitherDetector: "reentrancy-eth",
-    rawOutputReference: "mock://slither/contract_1/reentrancy-eth.json",
-    llmExplanation: "A reentrancy bug lets an attacker drain funds.",
-    status: "Flagged",
-    statusHistory: [{ status: "Flagged", changedAt: "2026-10-20T12:00:00.000Z" }],
-    claimedByAuditorId: AUDITOR,
-    // Far in the future, so the claim is live whatever the clock says.
-    claimExpiresAt: "2099-01-01T00:00:00.000Z",
-    isFalsePositive: false,
-    source: "slither",
-    title: null,
-    reportedByAuditorId: null,
-    developerNote: null,
-    developerNoteUpdatedAt: null,
-    challengeWindowExpiresAt: null,
-    ...overrides,
-  } as Finding;
+  return { ...BASE_FINDING, ...overrides };
 }
 
 function renderCard(props: { finding?: Finding; stakeMet?: boolean; onChanged?: () => void } = {}) {
