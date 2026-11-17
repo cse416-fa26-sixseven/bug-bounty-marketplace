@@ -91,9 +91,9 @@ earlier ones that testing or review caught (B6–B16, see
 | B6     | A second proven finding on an already-verified bounty reverted forever (`AlreadyVerified` / `BountyNotOpen`)                                      | High     | Fixed in #127                                                                                   |
 | B7     | Stake lock released too early (finding pending, dispute won, or another finding still needing it)                                                 | High     | Fixed in #99                                                                                    |
 | B8     | Funding and cancel accepted stale or foreign bounties                                                                                             | High     | Fixed in #113                                                                                   |
-| B9     | SIWE nonce could be replayed, and `AUTH_ORIGIN` was not enforced                                                                                  | High     | Fixed in 9957554                                                                                |
+| B9     | SIWE nonce could be replayed, and `AUTH_ORIGIN` was not enforced (the API could also start without it)                                            | High     | Fixed in 9957554 and 8a454dd                                                                    |
 | B10    | Re-running the wei migration rescaled stored amounts                                                                                              | High     | Fixed in 4f275dc; regression test added in M5                                                   |
-| B11    | Sepolia deploy failed on-chain (gas underestimated ~7x); indexer ignored `INDEXER_CONFIRMATIONS`; API started without `AUTH_ORIGIN`               | Medium   | Fixed in #105                                                                                   |
+| B11    | Sepolia deploy failed on-chain (gas underestimated ~7x); indexer ignored `INDEXER_CONFIRMATIONS`                                                  | Medium   | Fixed in #105                                                                                   |
 | B12    | Internal RPC URL published to the browser                                                                                                         | Medium   | Fixed in 99135d4                                                                                |
 | B13    | Postgres repository tests failing: non-idempotent migrations, claimable-contract listing, expired-claim test                                      | Medium   | Fixed in #44                                                                                    |
 | B14    | Demo banner shown in prod against the real API                                                                                                    | Low      | Fixed in #72                                                                                    |
@@ -116,19 +116,19 @@ Regression tests now exist for earlier fixes that had none: re-running wei migra
 
 ### Bugs fixed earlier, and how they were caught
 
-| Bug                                                                                                                                             | Caught by                  | Fix     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------- |
-| A second proven finding on a bounty that had already verified another reverted forever (`AlreadyVerified`/`BountyNotOpen`)                      | Production on Sepolia      | #127    |
-| Payout "Withdraw" selector also matched "Withdraw stake"                                                                                        | Unmocked e2e run           | #123    |
-| Postgres repository tests failing: non-idempotent migrations, claimable-contract listing, expired-claim test                                    | DB integration tests in CI | #44     |
-| k6 load test sent the bounty in ETH instead of wei                                                                                              | Load test                  | #61     |
-| Sepolia deploy failed on-chain (forge 1.3.5 underestimated gas ~7x); indexer ignored `INDEXER_CONFIRMATIONS`; API started without `AUTH_ORIGIN` | Sepolia deployment         | #105    |
-| Stake lock released too early (finding pending, dispute won, another finding still needing it)                                                  | Code review                | #99     |
-| Funding/cancel accepted stale or foreign bounties                                                                                               | Code review                | #113    |
-| SIWE nonce replay; `AUTH_ORIGIN` not enforced                                                                                                   | Code review                | 9957554 |
-| Re-running the wei migration rescaled amounts                                                                                                   | Code review                | 4f275dc |
-| Internal RPC URL published to the browser                                                                                                       | Code review                | 99135d4 |
-| Demo banner shown in prod against the real API                                                                                                  | Manual check of prod       | #72     |
+| Bug                                                                                                                        | Caught by                  | Fix              |
+| -------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ---------------- |
+| A second proven finding on a bounty that had already verified another reverted forever (`AlreadyVerified`/`BountyNotOpen`) | Production on Sepolia      | #127             |
+| Payout "Withdraw" selector also matched "Withdraw stake"                                                                   | Unmocked e2e run           | #123             |
+| Postgres repository tests failing: non-idempotent migrations, claimable-contract listing, expired-claim test               | DB integration tests in CI | #44              |
+| k6 load test sent the bounty in ETH instead of wei                                                                         | Load test                  | #61              |
+| Sepolia deploy failed on-chain (forge 1.3.5 underestimated gas ~7x); indexer ignored `INDEXER_CONFIRMATIONS`               | Sepolia deployment         | #105             |
+| Stake lock released too early (finding pending, dispute won, another finding still needing it)                             | Code review                | #99              |
+| Funding/cancel accepted stale or foreign bounties                                                                          | Code review                | #113             |
+| SIWE nonce replay; `AUTH_ORIGIN` not enforced (the API could start without it)                                             | Code review                | 9957554, 8a454dd |
+| Re-running the wei migration rescaled amounts                                                                              | Code review                | 4f275dc          |
+| Internal RPC URL published to the browser                                                                                  | Code review                | 99135d4          |
+| Demo banner shown in prod against the real API                                                                             | Manual check of prod       | #72              |
 
 ## Known limitations and follow-ups
 
