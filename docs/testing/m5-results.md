@@ -85,7 +85,7 @@ earlier ones that testing or review caught (B6–B16, see
 | B1     | (M5-1) Claim route skipped the stake gate, so a zero-stake wallet could lock any bounty for the 10-minute claim window                            | High     | Fixed in #146                                                                                |
 | B2     | (M5-2) Race in the new stake gate: a wallet could withdraw its stake between the stake check and the on-chain lock                                | Medium   | Fixed in #146 (stake re-read after the lock lands; lock and claim released if short)         |
 | B3     | (M5-3) A failed PoC released the stake lock mid-claim; a withdraw before the next verdict left the finding stuck forever                          | High     | Fixed in #148 (lock held until the claim ends)                                               |
-| B4     | (M5-4) Logout only clears the cookie; a copied session cookie stays valid for up to 8 hours                                                       | Medium   | Known limitation (needs a server-side session store)                                         |
+| B4     | (M5-4) Logout only clears the cookie; a copied session cookie stays valid for up to 8 hours                                                       | Medium   | Fixed in #152 (logout revokes the session server-side)                                       |
 | B5     | (M5-5) E2E flake: the stake gate briefly showed "locked" after a role switch, so the test helper staked twice                                     | Low      | Fixed in #145 (helper waits for the profile to settle)                                       |
 | B17    | (M5-6) The analysis worker's identity could read every secret in the env Key Vault, including prod's on-chain operator key and the session secret | High     | Fix in review: #150 scopes the worker to `database-url` and `llm-api-key` only (into `main`) |
 | B6     | A second proven finding on an already-verified bounty reverted forever (`AlreadyVerified` / `BountyNotOpen`)                                      | High     | Fixed in #127                                                                                |
@@ -107,7 +107,7 @@ earlier ones that testing or review caught (B6–B16, see
 | M5-1 | Chain-mode integration tier (#144) | `POST /api/auditor/claim` never called the stake gate, so a zero-stake wallet could take the on-chain claim lock and block a bounty for the 10-minute claim window. Throwaway wallets could block every bounty.                                                                                                                     | Fixed in #146                                                                                                                                                        |
 | M5-2 | Review of the M5-1 fix             | Check-then-act race in the new gate: between the stake read and the mined `lockSubmission`, the wallet can still `withdraw` (front-run with a higher fee), ending up holding the claim with zero stake. `lockSubmission` itself does not check stake.                                                                               | Fixed in #146 (re-read stake once the lock lands; release lock and claim if short)                                                                                   |
 | M5-3 | On-chain e2e tier (#145)           | A failed PoC verdict released the auditor's stake lock while the claim stayed active. The auditor could submit a second PoC on the same claim and withdraw the whole stake before its verdict; `recordVerification` then reverted with `AuditorNotEligible` on every pass and the finding stayed "awaiting sandbox result" forever. | Fixed in #148: a Failed verdict keeps the lock while the claim is held; the lock is released when the claim ends (expiry sweep, payout, lost dispute, cancel/refund) |
-| M5-4 | Chain-mode integration tier (#144) | Logout only clears the cookie. Sessions are stateless signed cookies valid for 8 hours, so a copied cookie keeps working until it expires.                                                                                                                                                                                          | Known limitation (needs a server-side session store)                                                                                                                 |
+| M5-4 | Chain-mode integration tier (#144) | Logout only clears the cookie. Sessions are stateless signed cookies valid for 8 hours, so a copied cookie keeps working until it expires.                                                                                                                                                                                          | Fixed in #152: sessions carry a random id; logout records it as revoked (in Postgres, so it survives a restart) and every session check looks it up                  |
 | M5-5 | On-chain e2e run                   | Test-side flake: right after a role switch the stake gate briefly showed "locked" for a staked auditor, so `stakeAndClaim` staked twice and then waited on a button that had gone away.                                                                                                                                             | Fixed in #145 (helper waits for the profile to settle)                                                                                                               |
 | M5-6 | Review of the stale PR #125        | `stacks/data/identity.tf` gave the analysis worker _Key Vault Secrets User_ on the whole env vault, which since #124 holds prod's `chain-operator-key` and `session-secret`. The worker runs Slither on untrusted Solidity next to the PoC sandbox.                                                                                 | Fix in review: #150 (into `main`), secret-scoped role assignments for `database-url` and `llm-api-key` only                                                          |
 
@@ -132,15 +132,15 @@ Regression tests now exist for earlier fixes that had none: re-running wei migra
 
 ## Known limitations and follow-ups
 
-- **Stateless sessions** (M5-4): logout cannot revoke a copied cookie before it expires.
-- **Stake checks live only in the API.** `AuditorStaking.lockSubmission` does not check
-  eligibility, so the API is the only gate on claims. A contract-level check is the stronger
-  fix but needs a redeploy of the Sepolia contracts.
+- **Stake check on the claim lock** (follow-up to M5-1 and M5-2, #152):
+  `AuditorStaking.lockSubmission` now reverts with `StakeBelowRequired` below `REQUIRED_STAKE`,
+  so with the claim lock on the contract, not the API, is the authority on claims; the API keeps
+  its own check as a faster answer and maps the revert to the same `403`. The Sepolia contracts deployed on
+  2026-11-05 predate this, so on Sepolia (prod) the API is still the only gate until they are
+  redeployed ([Sepolia runbook](../contracts/sepolia.md#current-deployment)).
 - **With claim locks disabled** there is no on-chain lock, so stake → claim → withdraw is
   possible. PoC and finding submissions still check stake, so the harm is limited to holding
   the claim window.
-- **`e2e-chain` is non-blocking** (`continue-on-error`, not in `CI OK`). Make it required once it
-  has a stable record.
 - **Each chain-mode integration run leaves anvil ~3 h ahead of wall time** on a reused stack;
   use a fresh stack before running `E2E_CHAIN=1` specs (see [tests/README](../../tests/README.md)).
 - **Local stacks share the compose project name `bbm`**, so `stack:demo` from one worktree

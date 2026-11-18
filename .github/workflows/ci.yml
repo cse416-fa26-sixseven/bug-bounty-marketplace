@@ -791,17 +791,16 @@ jobs:
   # with 60-second windows, the API in chain mode, analysis with the PoC
   # sandbox, the web app with mocks off. scripts/ci-e2e-chain.sh runs it
   # all (no retries), dumps compose logs on failure and tears down.
-  # Non-blocking: continue-on-error, and deliberately NOT in ci-ok's needs.
+  # Blocking: part of ci-ok's needs, so a failed on-chain run fails CI OK.
   # ---------------------------------------------------------------------
   e2e-chain:
-    name: e2e-chain (non-blocking)
+    name: e2e-chain
     needs: changes
     if: >-
       needs.changes.outputs.e2e_chain == 'true' ||
       needs.changes.outputs.containers == 'true' ||
       needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 45
     permissions:
       contents: read
@@ -1249,6 +1248,7 @@ jobs:
       - analysis
       - sandbox
       - containers
+      - e2e-chain
       - terraform-static
       - helm
       - workflows
@@ -1270,6 +1270,7 @@ jobs:
             [analysis]="${{ needs.analysis.result }}"
             [sandbox]="${{ needs.sandbox.result }}"
             [containers]="${{ needs.containers.result }}"
+            [e2e-chain]="${{ needs.e2e-chain.result }}"
             [terraform-static]="${{ needs.terraform-static.result }}"
             [helm]="${{ needs.helm.result }}"
             [workflows]="${{ needs.workflows.result }}"

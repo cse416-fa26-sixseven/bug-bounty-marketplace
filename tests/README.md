@@ -70,7 +70,8 @@ point it at another namespace or env with analysis and the sandbox enabled:
 `integration/chain-flows.test.ts` drives the API in chain mode (`CHAIN_RPC_URL` and
 `SESSION_SECRET` set), signing its own transactions on anvil with viem (`lib/chain.ts`):
 
-- **SIWE**: nonce → login → `me` → logout; a replayed nonce, another wallet's signature and
+- **SIWE**: nonce → login → `me` → logout (a copied cookie is refused afterwards, the wallet's
+  other session is not); a replayed nonce, another wallet's signature and
   another site's `Origin` are rejected; user routes need a session and refuse to act for
   another wallet.
 - **Developer**: upload → analysis → `fund` on-chain → `POST /funded` (the queue lists it only
@@ -143,8 +144,8 @@ E2E_CHAIN=1 pnpm test:e2e -- lifecycle features flows-extra
 pnpm demo:lifecycle            # the payout and dispute paths from the command line; prints LIFECYCLE OK
 ```
 
-CI runs them in `ci.yml`'s `e2e-chain` job, which is non-blocking
-(`continue-on-error`, not part of `CI OK`).
+CI runs them in `ci.yml`'s `e2e-chain` job, which is part of `CI OK`, so a
+failing on-chain spec blocks the merge.
 `scripts/ci-e2e-chain.sh [playwright args]` does all of it in one go: a fresh
 `stack:demo`, the compose `web` service (production build, mocks off), every
 spec with `E2E_CHAIN=1` and no retries, compose logs to

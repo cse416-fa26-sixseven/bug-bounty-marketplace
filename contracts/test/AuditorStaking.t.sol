@@ -185,6 +185,7 @@ contract AuditorStakingTest is Test {
     }
 
     function test_unlockSubmission_onlyOperator() public {
+        _stake(auditor, 0.1 ether);
         staking.lockSubmission(auditor);
 
         vm.prank(auditor);
@@ -198,12 +199,87 @@ contract AuditorStakingTest is Test {
     }
 
     function test_lockSubmission_countsNestedSubmissions() public {
+        _stake(auditor, 0.1 ether);
         staking.lockSubmission(auditor);
         staking.lockSubmission(auditor);
         assertEq(staking.activeSubmissions(auditor), 2);
 
         staking.unlockSubmission(auditor);
         assertEq(staking.activeSubmissions(auditor), 1);
+    }
+
+    // --- stake required to lock ---
+
+    function test_lockSubmission_rejectsUnstakedAuditor() public {
+        vm.expectRevert(abi.encodeWithSelector(AuditorStaking.StakeBelowRequired.selector, auditor, 0));
+        staking.lockSubmission(auditor);
+        assertEq(staking.activeSubmissions(auditor), 0);
+    }
+
+    function test_lockSubmission_rejectsStakeBelowRequired() public {
+        _stake(auditor, 0.1 ether - 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(AuditorStaking.StakeBelowRequired.selector, auditor, 0.1 ether - 1)
+        );
+        staking.lockSubmission(auditor);
+        assertEq(staking.activeSubmissions(auditor), 0);
+    }
+
+    function test_lockSubmission_allowedAtExactlyRequiredStake() public {
+        _stake(auditor, staking.REQUIRED_STAKE());
+
+        staking.lockSubmission(auditor);
+        assertEq(staking.activeSubmissions(auditor), 1);
+    }
+
+    function test_lockSubmission_rejectsAfterWithdrawBelowRequired() public {
+        _stake(auditor, 0.1 ether);
+        vm.prank(auditor);
+        staking.withdraw(1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(AuditorStaking.StakeBelowRequired.selector, auditor, 0.1 ether - 1)
+        );
+        staking.lockSubmission(auditor);
+    }
+
+    function test_unlockSubmission_allowedAfterSlashBelowRequired() public {
+        _stake(auditor, 0.1 ether);
+        staking.lockSubmission(auditor);
+        staking.lockSubmission(auditor);
+
+        vm.prank(dispute);
+        staking.slash(auditor, 0.05 ether, recipient);
+        assertFalse(staking.isEligible(auditor));
+
+        // Locks opened before the slash are still closable, down to zero.
+        staking.unlockSubmission(auditor);
+        staking.unlockSubmission(auditor);
+        assertEq(staking.activeSubmissions(auditor), 0);
+
+        // And the remaining stake is withdrawable once they are closed.
+        vm.prank(auditor);
+        staking.withdraw(0.05 ether);
+        assertEq(staking.stakeOf(auditor), 0);
+    }
+
+    function test_lockSubmission_rejectsRelockAfterSlashBelowRequired() public {
+        _stake(auditor, 0.1 ether);
+        staking.lockSubmission(auditor);
+
+        vm.prank(dispute);
+        staking.slash(auditor, 0.05 ether, recipient);
+
+        // The open lock stays, but no further one can be opened.
+        vm.expectRevert(abi.encodeWithSelector(AuditorStaking.StakeBelowRequired.selector, auditor, 0.05 ether));
+        staking.lockSubmission(auditor);
+        assertEq(staking.activeSubmissions(auditor), 1);
+
+        // Topping the stake back up makes the auditor lockable again.
+        _stake(auditor, 0.05 ether);
+        staking.lockSubmission(auditor);
+        assertEq(staking.activeSubmissions(auditor), 2);
     }
 
     // --- slashing (DisputeResolution only) ---
@@ -311,6 +387,7 @@ contract AuditorStakingTest is Test {
     }
 
     function test_stake_rejectsZeroWhileLocked() public {
+        _stake(auditor, 0.1 ether);
         staking.lockSubmission(auditor);
         vm.prank(auditor);
         vm.expectRevert(AuditorStaking.ZeroAmount.selector);
@@ -346,6 +423,8 @@ contract AuditorStakingTest is Test {
     }
 
     function test_lockUnlock_emitSubmissionEvents() public {
+        _stake(auditor, 0.1 ether);
+
         vm.expectEmit(true, false, false, true, address(staking));
         emit SubmissionLocked(auditor, 1);
         staking.lockSubmission(auditor);

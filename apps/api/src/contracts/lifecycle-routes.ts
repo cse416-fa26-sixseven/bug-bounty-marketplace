@@ -38,7 +38,7 @@ export function registerContractLifecycleRoutes(
     request: FastifyRequest<{ Params: { id: string } }>,
     reply: FastifyReply,
   ): Promise<Contract | undefined> {
-    const address = auth.requireSession(request, reply);
+    const address = await auth.requireSession(request, reply);
     if (!address) return undefined;
     const contract = await contracts.findContractById(request.params.id, now());
     if (!contract) {

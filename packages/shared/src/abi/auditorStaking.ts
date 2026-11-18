@@ -426,6 +426,22 @@ export const auditorStakingAbi = [
   },
   {
     "type": "error",
+    "name": "StakeBelowRequired",
+    "inputs": [
+      {
+        "name": "auditor",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "stake",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "TransferFailed",
     "inputs": []
   },
