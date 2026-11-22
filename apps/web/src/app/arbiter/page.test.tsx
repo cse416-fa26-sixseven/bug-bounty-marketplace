@@ -127,6 +127,31 @@ describe("ArbiterPage", () => {
     expect(listed).toBe(0);
   }, 10_000);
 
+  it("tells a signed-in account that is not the arbiter so, and stops polling", async () => {
+    let listed = 0;
+    server.use(
+      http.get("*/api/arbiter/disputes", () => {
+        listed += 1;
+        return HttpResponse.json({ error: "only the arbiter can do this" }, { status: 403 });
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText(/Only the arbiter can view and rule on disputes/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load disputes/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No open disputes/i)).not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+    expect(listed).toBe(1);
+  }, 10_000);
+
+  it("still reports other failures to load the list", async () => {
+    server.use(http.get("*/api/arbiter/disputes", () => HttpResponse.json({ error: "boom" }, { status: 500 })));
+    renderPage();
+    expect(await screen.findByText(/Failed to load disputes/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Only the arbiter/i)).not.toBeInTheDocument();
+  });
+
   it("does not rule when the confirmation is declined", async () => {
     renderPage();
 
