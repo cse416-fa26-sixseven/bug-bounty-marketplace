@@ -362,12 +362,102 @@ describe("applyVerdict with Passed on a bounty that verified another finding", (
 });
 
 describe("applyVerdict with Failed", () => {
-  it("unlocks the auditor once and moves the finding to Rejected", async () => {
+  it("keeps the lock while the claim is active; the expiry sweep then unlocks it once", async () => {
+    // The auditor may submit another PoC or report another finding until the
+    // claim expires. Unlocked here, they could withdraw first and that
+    // finding's recordVerification would revert AuditorNotEligible forever.
     const { actions, ports, seedFinding, seedContract, claim, store, advance } = setup();
     const contractId = await seedContract();
     const findingId = seedFinding(contractId, "Submitted");
     await claim(contractId);
-    ports.auditorStaking.unlockSubmission.mockClear();
+
+    await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
+    expect(store.findings.get(findingId)?.status).toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("locked");
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS - 1))).resolves.toBe(0);
+
+    // The claim lapses: the sweep releases the lock, once.
+    advance(CLAIM_WINDOW_MS);
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(1);
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(0);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledWith(AUDITOR);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("keeps the lock through a second finding reported on the same claim, until its payout", async () => {
+    // The e2e repro: PoC fails, the auditor reports the exploit again on the
+    // same claim and tries to withdraw. The lock must still be held.
+    const { actions, ports, seedFinding, seedContract, claim, store, advance } = setup();
+    const contractId = await seedContract();
+    const failing = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(failing, "Failed")).resolves.toBe("Rejected");
+
+    const second = seedFinding(contractId, "Submitted");
+    await expect(actions.applyVerdict(second, "Passed")).resolves.toBe("Verified");
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
+    // Past the claim's expiry the pending finding still holds the lock.
+    advance(CLAIM_WINDOW_MS * 2);
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS * 2))).resolves.toBe(0);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(1n);
+
+    store.findings.get(second)!.status = "Paid";
+    await expect(actions.applyDisputeResolved(second)).resolves.toBe(true);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("a second finding still Submitted past expiry that then fails releases the kept lock exactly once", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const first = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(first, "Failed")).resolves.toBe("Rejected");
+    const second = seedFinding(contractId, "Submitted");
+
+    // Past expiry, the pending second finding keeps the lock from the sweep.
+    advance(CLAIM_WINDOW_MS * 2);
+    const later = new Date(T0.getTime() + CLAIM_WINDOW_MS * 2);
+    await expect(actions.releaseExpiredLocks(later)).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+
+    // Its own Failed verdict now comes after expiry with nothing else pending.
+    await expect(actions.applyVerdict(second, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    await expect(actions.releaseExpiredLocks(later)).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("a closed bounty releases the kept lock once; the later expiry sweep does not unlock again", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+
+    // The developer cancels or refunds while the claim still runs.
+    await expect(actions.releaseClaimLock(contractId)).resolves.toBe(true);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+
+    advance(CLAIM_WINDOW_MS);
+    await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS))).resolves.toBe(0);
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(await ports.auditorStaking.activeSubmissions()).toBe(0n);
+  });
+
+  it("unlocks once when the claim has already expired", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store, advance } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    advance(CLAIM_WINDOW_MS);
 
     await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
     expect(store.findings.get(findingId)?.status).toBe("Rejected");
@@ -376,16 +466,17 @@ describe("applyVerdict with Failed", () => {
 
     // A repeat verdict and a later expiry sweep must not unlock again.
     await actions.applyVerdict(findingId, "Failed");
-    advance(CLAIM_WINDOW_MS + 1);
+    advance(1);
     await expect(actions.releaseExpiredLocks(new Date(T0.getTime() + CLAIM_WINDOW_MS + 1))).resolves.toBe(0);
     expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the status when the unlock fails, and a retry unlocks exactly once", async () => {
-    const { actions, ports, seedFinding, seedContract, claim, store } = setup();
+    const { actions, ports, seedFinding, seedContract, claim, store, advance } = setup();
     const contractId = await seedContract();
     const findingId = seedFinding(contractId, "Submitted");
     await claim(contractId);
+    advance(CLAIM_WINDOW_MS);
     ports.auditorStaking.unlockSubmission.mockRejectedValueOnce(new Error("rpc unavailable"));
 
     await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("rpc unavailable");
@@ -542,11 +633,12 @@ describe("dispute resolution", () => {
   });
 
   it("a lost dispute keeps the lock while another finding of the auditor's on the contract is pending", async () => {
-    const { actions, ports, seedFinding, seedContract, claim } = setup();
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
     const contractId = await seedContract();
     const lost = seedFinding(contractId, "Rejected");
     const pending = seedFinding(contractId, "Submitted");
     await claim(contractId);
+    advance(CLAIM_WINDOW_MS);
 
     await expect(actions.applyDisputeResolved(lost)).resolves.toBe(false);
     expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
@@ -568,10 +660,11 @@ describe("dispute resolution", () => {
   });
 
   it("does not unlock again after a Failed verdict already released the lock", async () => {
-    const { actions, ports, seedFinding, seedContract, claim } = setup();
+    const { actions, ports, seedFinding, seedContract, claim, advance } = setup();
     const contractId = await seedContract();
     const findingId = seedFinding(contractId, "Submitted");
     await claim(contractId);
+    advance(CLAIM_WINDOW_MS);
     await actions.applyVerdict(findingId, "Failed");
 
     await expect(actions.applyDisputeResolved(findingId)).resolves.toBe(false);
@@ -683,10 +776,12 @@ describe("retries after a chain send whose marker write failed", () => {
 
 describe("unlock intent ('unlocking')", () => {
   it("a failed unlock leaves an intent that the sweep finishes with one send", async () => {
-    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore, advance } = setup();
     const contractId = await seedContract();
     const findingId = seedFinding(contractId, "Submitted");
     await claim(contractId);
+    // Lapsed, so the Failed verdict releases the lock.
+    advance(CLAIM_WINDOW_MS);
     ports.auditorStaking.unlockSubmission.mockRejectedValueOnce(new Error("rpc unavailable"));
 
     await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("rpc unavailable");
@@ -703,10 +798,12 @@ describe("unlock intent ('unlocking')", () => {
   });
 
   it("does not send unlock again when the send landed but its marker write failed", async () => {
-    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore, advance } = setup();
     const contractId = await seedContract();
     const findingId = seedFinding(contractId, "Submitted");
     await claim(contractId);
+    // Lapsed, so the Failed verdict releases the lock.
+    advance(CLAIM_WINDOW_MS);
     vi.spyOn(chainStore, "markClaimReleased").mockRejectedValueOnce(new Error("db write failed"));
 
     await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("db write failed");
@@ -864,7 +961,7 @@ describe("one claim per auditor", () => {
   });
 
   it("refuses a second claim while the first is locked or unlocking, and allows it once the first is released", async () => {
-    const { actions, ports, seedFinding, seedContract, claim, repository, store } = setup();
+    const { actions, ports, seedFinding, seedContract, claim, repository, store, advance } = setup();
     const first = await seedContract();
     const second = await seedContract();
     const findingId = seedFinding(first, "Submitted");
@@ -874,6 +971,8 @@ describe("one claim per auditor", () => {
       ok: false,
       reason: "auditor_has_claim",
     });
+    // The verdict comes after the claim lapsed, so it unlocks.
+    advance(CLAIM_WINDOW_MS);
 
     ports.auditorStaking.unlockSubmission.mockRejectedValueOnce(new Error("rpc unavailable"));
     await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("rpc unavailable");

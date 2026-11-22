@@ -12,4 +12,15 @@ export const env = {
    * Needs the analysis worker with a sandbox backend (compose with
    * docker-compose.sandbox.yml, or an AKS namespace with the Kata pool). */
   pipeline: process.env.BBM_PIPELINE === "1",
+  /** BBM_CHAIN=1 runs integration/chain-flows: wallet sign-in, on-chain
+   * funding, stake and claim locks, through an API in chain mode. */
+  chain: process.env.BBM_CHAIN === "1",
+  /** The chain-mode API. Defaults to BBM_API_URL (`pnpm stack:demo` runs the
+   * one API in chain mode); CI runs a second one on 3002
+   * (docker-compose.ci-chain.yml). */
+  chainApiUrl: (
+    process.env.BBM_CHAIN_API_URL ??
+    process.env.BBM_API_URL ??
+    "http://localhost:3001"
+  ).replace(/\/+$/, ""),
 };

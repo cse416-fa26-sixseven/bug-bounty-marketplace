@@ -65,6 +65,55 @@ On AKS the same test runs in `integration-azure.yml` against the CI-run namespac
 point it at another namespace or env with analysis and the sandbox enabled:
 `BBM_API_URL=https://<host> BBM_PIPELINE=1 pnpm test:integration -- pipeline`.
 
+### Chain-mode tier (wallet sign-in, funding, stake, claim locks, indexer)
+
+`integration/chain-flows.test.ts` drives the API in chain mode (`CHAIN_RPC_URL` and
+`SESSION_SECRET` set), signing its own transactions on anvil with viem (`lib/chain.ts`):
+
+- **SIWE**: nonce → login → `me` → logout (a copied cookie is refused afterwards, the wallet's
+  other session is not); a replayed nonce, another wallet's signature and
+  another site's `Origin` are rejected; user routes need a session and refuse to act for
+  another wallet.
+- **Developer**: upload → analysis → `fund` on-chain → `POST /funded` (the queue lists it only
+  then; a wrong amount is refused); `deleteBounty` → `POST /cancel` → `Expired`; `refund` after
+  the deadline + refund delay (anvil `evm_increaseTime`, no waiting) → `POST /reclaim` →
+  `Expired`.
+- **Auditor**: a claim without the required stake is refused by the stake gate (`403`, no
+  on-chain lock, no claim); once staked, the claim takes the on-chain `lockSubmission` and
+  `POST /api/auditor/findings` reports a finding; `GET /api/auditor/profile`; cancelling a
+  claimed bounty releases the lock.
+- **Notes and indexer**: the developer's `PUT /api/findings/:id/note` on an auditor-reported
+  finding; the operator's `recordVerification` on-chain is picked up by the indexer (polled,
+  ≤ 60 s) and the finding moves `Submitted → Verified`.
+
+PoC → sandbox verdict → dispute is not covered here (e2e `lifecycle` does it). Every test uses
+fresh wallets (funded with `anvil_setBalance`) and its own contracts, so the tier is
+independent of test order and reruns on the same stack. The reclaim test runs last and moves
+anvil's clock forward for good (deadline + refund delay; 3 h with the default deploy). On a
+reused stack anvil is then about 3 h ahead of wall time per run, which matters to specs that
+compute on-chain deadlines from wall time (the `E2E_CHAIN=1` e2e specs): run those on a fresh
+stack, or derive deadlines from the latest block's timestamp as `chain-flows` does.
+
+It is skipped unless `BBM_CHAIN=1`. The CI compose stack keeps `api` (3001) in no-chain mode for
+the other tiers and adds a second, chain-mode API on **3002** (`docker-compose.ci-chain.yml`,
+service `api-chain`, profile `chain`) that reads the addresses from `.ci/deployments`, so it is
+started after the deploy. `pnpm stack:ci-chain` needs the stack already running (`pnpm stack:ci`
+or `pnpm stack:up`): it runs the deploy and starts `api-chain` with `--no-deps`, so it never
+recreates `db`, `api` or `anvil`. Running it again redeploys the contracts and recreates
+`api-chain` on the new addresses.
+
+```sh
+pnpm stack:ci                 # or `pnpm stack:up` (then BBM_TAG=local images are built)
+pnpm stack:ci-chain           # deploys to .ci/deployments, (re)starts api-chain on 3002 (--no-deps)
+BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration   # ~1 min on a warm worker
+docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml \
+  --profile chain --profile deploy down -v
+```
+
+Against `pnpm stack:demo` (one API, already in chain mode, 60 s refund delay) no overlay is
+needed: `BBM_CHAIN=1 pnpm test:integration -- chain-flows`. There the other integration tests
+that upload without signing in fail, so filter to `chain-flows`.
+
 ### On-chain lifecycle (manual)
 
 `e2e/lifecycle.spec.ts` drives the full on-chain lifecycle in the browser:
@@ -73,18 +122,39 @@ window, withdraw) and dispute (disputed, arbiter rules against the auditor,
 Rejected, stake slashed). `e2e/features.spec.ts` covers the rest: a developer
 note that survives a reload, cancelling a funded bounty, the auditor's
 false-positive mark, and an auditor-reported finding that is verified and paid.
-Both are skipped unless `E2E_CHAIN=1`, because they need the chain demo stack
-and the web app against the real API, which CI does not start. They share the
-anvil role accounts, so with `E2E_CHAIN=1` Playwright runs one test at a time.
-A failed run can leave the auditor holding a claim, so start a fresh
-`pnpm stack:demo` before running them again.
+`e2e/flows-extra.spec.ts` adds the arbiter ruling for the auditor (payout,
+reputation +1, no slash), withdrawing stake once the payout releases its lock,
+a failing PoC that ends Rejected, and the developer reclaiming a bounty after
+its deadline and refund delay. The reclaim test moves anvil's clock with
+`evm_increaseTime` and the browser's with `page.clock` instead of waiting; the
+API's clock is never moved, and a chain ahead of the wall clock does not affect
+later specs. Each test funds its own contract and leaves the auditor without a
+claim.
+
+All three files are skipped unless `E2E_CHAIN=1`, because they need the chain
+demo stack and the web app against the real API. They share the anvil role
+accounts, so with `E2E_CHAIN=1` Playwright runs one test at a time. A failed
+run can leave the auditor holding a claim, so start a fresh `pnpm stack:demo`
+before running them again.
 
 ```sh
 pnpm stack:demo                # fresh database and chain, 60-second challenge window
 NEXT_PUBLIC_API_MOCKING=disabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
-E2E_CHAIN=1 pnpm test:e2e -- lifecycle features   # about 6 minutes
-pnpm demo:lifecycle            # the same two paths from the command line; prints LIFECYCLE OK
+E2E_CHAIN=1 pnpm test:e2e -- lifecycle features flows-extra
+pnpm demo:lifecycle            # the payout and dispute paths from the command line; prints LIFECYCLE OK
 ```
+
+CI runs them in `ci.yml`'s `e2e-chain` job, which is part of `CI OK`, so a
+failing on-chain spec blocks the merge.
+`scripts/ci-e2e-chain.sh [playwright args]` does all of it in one go: a fresh
+`stack:demo`, the compose `web` service (production build, mocks off), every
+spec with `E2E_CHAIN=1` and no retries, compose logs to
+`compose-e2e-chain.log` on failure, then `down -v` (`KEEP_STACK=1` keeps it;
+`E2E_WEB=host` uses a web app you already started; `BBM_COMPOSE_EXTRA` adds
+overlays, e.g. one that unpublishes a port taken on your machine). On Docker
+Desktop the socket inside its VM is `root:root`, so set `DOCKER_GID=0`;
+otherwise every PoC fails with `permission denied` on the socket and stays
+Submitted.
 
 ### Environment variables
 
@@ -100,10 +170,16 @@ something else.
 | `BBM_DEPLOYMENTS_FILE` | `.ci/deployments/31337.json` | integration/chain. The tests skip when the file is missing.                             |
 | `BBM_SKIP_ANALYSIS`    | unset                        | `1` skips the direct `/analyze` checks. Analysis is internal-only on AKS.               |
 | `BBM_PIPELINE`         | unset                        | `1` runs integration/pipeline (upload → PoC verdict through the API; needs the sandbox) |
+| `BBM_CHAIN`            | unset                        | `1` runs integration/chain-flows (chain-mode API: sign-in, funding, stake, indexer)     |
+| `BBM_CHAIN_API_URL`    | `BBM_API_URL`                | integration/chain-flows: the chain-mode API (`http://localhost:3002` with ci-chain)     |
 | `BBM_SMOKE_WRITE`      | unset                        | `1` adds smoke's create+read round-trip (CI, non-prod deploys)                          |
 | `BBM_SMOKE_READONLY`   | unset                        | `1` forces read-only even when `BBM_SMOKE_WRITE=1`                                      |
 | `BBM_WAIT_MS`          | `30000`                      | How long globalSetup waits for `GET /health`                                            |
-| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter                                      |
+| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter. Vitest tiers: JUnit to `reports/`   |
+
+Playwright always writes `tests/reports/junit-e2e.xml`; CI names each vitest
+tier's file with `--outputFile.junit=reports/junit-<tier>.xml`. See
+[docs/testing](../docs/testing/README.md).
 
 The vitest globalSetup fails fast with a clear message if the API isn't
 reachable. Without it, every test would time out separately.

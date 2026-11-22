@@ -239,6 +239,7 @@ describe("Sign-In with Ethereum (EIP-4361)", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  // Ending the session server-side is covered in revocation.test.ts.
   it("logs out by clearing the cookie", async () => {
     const { app } = setup();
     const res = await app.inject({ method: "POST", url: "/api/auth/logout" });

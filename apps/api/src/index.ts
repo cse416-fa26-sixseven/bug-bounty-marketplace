@@ -31,6 +31,7 @@ import { runMigrations } from "./db/migrate.js";
 import { parseBoolEnv, parseIntEnv } from "./env.js";
 import { loadRateLimitConfig, parseTrustProxy } from "./http/rate-limit.js";
 import { checkAuthOrigin, loadAuthConfig } from "./auth/config.js";
+import { PgSessionRevocationStore } from "./auth/pg-revocation-store.js";
 
 // DATABASE_URL selects Postgres. Without it the API keeps contracts in memory,
 // which is fine for local UI work and tests. MIGRATE_ON_BOOT (default true)
@@ -120,6 +121,9 @@ const app = buildApp({
   chainConfig,
   sessionSecret,
   authConfig,
+  // Logged-out sessions are kept in Postgres so they stay logged out across
+  // restarts; without DATABASE_URL they are held in memory.
+  sessionRevocations: pool ? new PgSessionRevocationStore(pool) : undefined,
   bountyEscrow: bountyEscrowPort,
   disputeResolution: disputeResolutionPort,
   auditorStaking: stakingPort ?? undefined,

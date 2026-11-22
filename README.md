@@ -185,19 +185,23 @@ DOCKER_CONFIG=/tmp/dc pnpm stack:demo`.
 
 ## Testing
 
-| Tier               | Where                                                       | Command                                           |
-| ------------------ | ----------------------------------------------------------- | ------------------------------------------------- |
-| Unit               | next to the code (vitest, `forge test`, pytest)             | `pnpm test`, `forge test`, `uv run pytest`        |
-| DB integration     | `apps/api/src/**/pg-repository.test.ts`                     | `pnpm --filter @bbm/api test` with `DATABASE_URL` |
-| System integration | `tests/integration/`                                        | `pnpm test:integration`                           |
-| Regression         | API goldens, `contracts/.gas-snapshot`, shared schema drift | `pnpm test:regression`, `forge snapshot --check`  |
-| Smoke              | `tests/smoke/`                                              | `pnpm test:smoke`                                 |
-| E2E                | `tests/e2e/` (Playwright)                                   | `pnpm test:e2e`                                   |
-| Load               | `tests/load/` (k6)                                          | see `tests/load/README.md`                        |
+| Tier               | Where                                                       | Command                                                                                                                  |
+| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Unit               | next to the code (vitest, `forge test`, pytest)             | `pnpm test`, `forge test`, `uv run pytest`                                                                               |
+| DB integration     | `apps/api/src/**/pg-repository.test.ts`                     | `pnpm --filter @bbm/api test` with `DATABASE_URL`                                                                        |
+| System integration | `tests/integration/`                                        | `pnpm test:integration`                                                                                                  |
+| Chain integration  | `tests/integration/chain-flows.test.ts` (anvil, SIWE)       | `pnpm stack:ci && pnpm stack:ci-chain`, then `BBM_CHAIN=1 BBM_CHAIN_API_URL=http://localhost:3002 pnpm test:integration` |
+| Regression         | API goldens, `contracts/.gas-snapshot`, shared schema drift | `pnpm test:regression`, `forge snapshot --check`                                                                         |
+| Smoke              | `tests/smoke/`                                              | `pnpm test:smoke`                                                                                                        |
+| E2E                | `tests/e2e/` (Playwright)                                   | `pnpm test:e2e`                                                                                                          |
+| On-chain E2E       | `tests/e2e/{lifecycle,features,flows-extra}.spec.ts`        | `scripts/ci-e2e-chain.sh` (fresh `stack:demo`)                                                                           |
+| Load               | `tests/load/` (k6)                                          | see `tests/load/README.md`                                                                                               |
 
 Unit tests never touch the network. The system tiers run against a live
 stack (`pnpm stack:up` first) and are never part of `pnpm test`. Details,
 environment variables and how to update goldens: [tests/README.md](tests/README.md).
+CI uploads JUnit XML and coverage for every tier ([docs/testing](docs/testing/README.md));
+the Milestone 5 results and bugs found are in [docs/testing/m5-results.md](docs/testing/m5-results.md).
 
 ## CI/CD
 
@@ -207,41 +211,47 @@ A `changes` job (`dorny/paths-filter`) decides which jobs run. Root config
 (`package.json`, lockfile, workspace, base tsconfig, ESLint/Prettier config,
 `ci.yml`) fans out to every TS job.
 
-| Job                | What it does                                                                                                                 |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `web`              | lint, typecheck, test, build                                                                                                 |
-| `shared`           | lint, typecheck, test, `gen:schema`, fail if `packages/shared/schema` drifted                                                |
-| `api`              | lint, typecheck, test (with a Postgres service), build, boot the built API and wait for `/health`                            |
-| `contracts`        | `forge build`, `forge test`, `forge snapshot --check`, deploy-script dry run, Slither (advisory, `fail-on: none`)            |
-| `analysis`         | `uv sync --frozen`, ruff check + format, pytest, generated-models drift check                                                |
-| `containers`       | hadolint, build every image (GHA cache), non-root check, compose stack up, deploy to anvil, integration/regression/smoke/e2e |
-| `terraform-static` | `infra/terraform/scripts/ci-static.sh`: fmt, validate, `terraform test`, tflint, shellcheck                                  |
-| `helm`             | `helm lint` every values layer, render + kubeconform, missing-tag render must fail, `ct lint`                                |
-| `workflows`        | actionlint                                                                                                                   |
-| `CI OK`            | always runs; passes when `changes` succeeded and every other job succeeded or was skipped                                    |
+| Job                | What it does                                                                                                                                                    |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`              | lint, typecheck, test, build                                                                                                                                    |
+| `shared`           | lint, typecheck, test, `gen:schema`, fail if `packages/shared/schema` drifted                                                                                   |
+| `api`              | lint, typecheck, test (with a Postgres service), build, boot the built API and wait for `/health`                                                               |
+| `contracts`        | `forge build`, `forge test`, `forge snapshot --check`, deploy-script dry run, Slither (advisory, `fail-on: none`)                                               |
+| `analysis`         | `uv sync --frozen`, ruff check + format, pytest, generated-models drift check                                                                                   |
+| `containers`       | hadolint, build every image (GHA cache), non-root check, compose stack up, deploy to anvil, chain-mode API, integration (incl. chain tier)/regression/smoke/e2e |
+| `e2e-chain`        | fresh `stack:demo` with the sandbox, full on-chain Playwright suite                                                                                             |
+| `terraform-static` | `infra/terraform/scripts/ci-static.sh`: fmt, validate, `terraform test`, tflint, shellcheck                                                                     |
+| `helm`             | `helm lint` every values layer, render + kubeconform, missing-tag render must fail, `ct lint`                                                                   |
+| `workflows`        | actionlint                                                                                                                                                      |
+| `CI OK`            | always runs; passes when `changes` succeeded and every other job (except `deps-audit`) succeeded or was skipped                                                 |
 
 `ci.yml` never logs in to Azure, so `CI OK` never depends on cloud
 credentials, quota or uptime. `CI OK` is the required status check on `main`
 (ruleset source of truth: `.github/rulesets/main.json`; apply changes with
 `gh api -X PUT repos/cse416-fa26-sixseven/bug-bounty-marketplace/rulesets/24287837 --input .github/rulesets/main.json`).
 
+The `test-report` job (report only, not part of `CI OK`) adds test counts and
+line coverage per suite to the run summary and, on pull requests, to one
+sticky PR comment that is updated on every push
+([docs/testing](docs/testing/README.md)).
+
 ### Azure workflows
 
 All authenticate with GitHub OIDC (no secrets) and skip green until the
 bootstrap repo variables exist.
 
-| Workflow                | Trigger                         | What it does                                                                                       |
-| ----------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `_build-push.yml`       | reusable                        | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance                            |
-| `_ephemeral-env.yml`    | reusable                        | deploy or delete one namespace on the test AKS cluster (auto-resumes a paused cluster)             |
-| `integration-azure.yml` | push to `main`, nightly, manual | namespace `run-<id>-<attempt>` on the test cluster: smoke, integration, e2e (+ k6), always deleted |
-| `preview.yml`           | PR open/push/close              | namespace `pr-<n>` on the test cluster (mocked web), sticky comment, deleted on close              |
-| `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, apply `global` on `main` (infra-global approval), manual plan/apply per stack         |
-| `cd.yml`                | green `integration-azure` on a push to `main` | deploy that build to staging, then prod after reviewer approval ([cd.md](docs/devops/cd.md)) |
-| `deploy.yml`            | called by `cd.yml` / env-power, or manual | platform install, Helm deploy to staging/prod AKS, then smoke; manual runs for rollbacks |
-| `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for test/staging/prod, nightly auto-pause            |
-| `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                                               |
-| `infra-janitor.yml`     | every 6 h, weekly, manual       | delete expired ephemeral namespaces, weekly ACR purge                                              |
+| Workflow                | Trigger                                       | What it does                                                                                       |
+| ----------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `_build-push.yml`       | reusable                                      | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance                            |
+| `_ephemeral-env.yml`    | reusable                                      | deploy or delete one namespace on the test AKS cluster (auto-resumes a paused cluster)             |
+| `integration-azure.yml` | push to `main`, nightly, manual               | namespace `run-<id>-<attempt>` on the test cluster: smoke, integration, e2e (+ k6), always deleted |
+| `preview.yml`           | PR open/push/close                            | namespace `pr-<n>` on the test cluster (mocked web), sticky comment, deleted on close              |
+| `terraform.yml`         | PR, push to `main`, manual                    | plan on PRs, apply `global` on `main` (infra-global approval), manual plan/apply per stack         |
+| `cd.yml`                | green `integration-azure` on a push to `main` | deploy that build to staging, then prod after reviewer approval ([cd.md](docs/devops/cd.md))       |
+| `deploy.yml`            | called by `cd.yml` / env-power, or manual     | platform install, Helm deploy to staging/prod AKS, then smoke; manual runs for rollbacks           |
+| `env-power.yml`         | manual, schedules                             | `status` / `pause` / `resume` / `down` / `up` for test/staging/prod, nightly auto-pause            |
+| `contracts-deploy.yml`  | manual                                        | deploy the contracts to Sepolia (dry run by default)                                               |
+| `infra-janitor.yml`     | every 6 h, weekly, manual                     | delete expired ephemeral namespaces, weekly ACR purge                                              |
 
 ## Infrastructure and environments
 
@@ -270,7 +280,7 @@ whole footprint up on a subscription and `infra/down.sh` tears it down.
 
 ## Contributing
 
-Work happens on milestone integration branches (currently `feat/m3-devops`)
+Work happens on milestone integration branches (currently `feat/m5-testing`)
 via small, reviewed sub-branches. See [CLAUDE.md](CLAUDE.md) for commands,
 conventions and the git workflow, and [docs/](docs/README.md) for everything
 else.

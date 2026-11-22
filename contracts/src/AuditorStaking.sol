@@ -3,11 +3,13 @@ pragma solidity ^0.8.19;
 
 /// @title AuditorStaking
 /// @notice Holds each auditor's ETH stake and reputation score. A stake of at
-/// least REQUIRED_STAKE makes an auditor's submissions eligible for payout (R9).
+/// least REQUIRED_STAKE makes an auditor's submissions eligible for payout (R9)
+/// and is required to open a submission (lockSubmission).
 /// Slashing and reputation changes are only applied by the DisputeResolution
 /// contract, once it is bound.
 contract AuditorStaking {
-    /// @notice Minimum stake for a submission to be eligible for payout.
+    /// @notice Minimum stake to open a submission and for it to be eligible
+    /// for payout.
     uint256 public constant REQUIRED_STAKE = 0.1 ether;
 
     /// @notice Backend role that opens and closes submissions for an auditor.
@@ -33,6 +35,9 @@ contract AuditorStaking {
     error ActiveSubmissions();
     error NoActiveSubmission();
     error InsufficientStake(uint256 available, uint256 requested);
+    /// @notice The auditor's stake is below REQUIRED_STAKE, so no submission
+    /// can be opened for them. `stake` is their stake at the time of the call.
+    error StakeBelowRequired(address auditor, uint256 stake);
     error TransferFailed();
 
     event DisputeResolutionBound(address indexed disputeResolution);
@@ -95,12 +100,21 @@ contract AuditorStaking {
     }
 
     /// @notice Marks a submission as open for an auditor, blocking withdrawal.
+    /// @dev Reverts with StakeBelowRequired unless the auditor's stake meets
+    /// REQUIRED_STAKE at the time of the call, so the operator cannot open a
+    /// submission for an unstaked auditor. The check is made only here: a
+    /// slash can take the stake below the threshold while submissions are
+    /// open, and those stay open until unlockSubmission closes them.
     function lockSubmission(address auditor) external onlyOperator {
+        uint256 staked = stakeOf[auditor];
+        if (staked < REQUIRED_STAKE) revert StakeBelowRequired(auditor, staked);
         activeSubmissions[auditor] += 1;
         emit SubmissionLocked(auditor, activeSubmissions[auditor]);
     }
 
     /// @notice Closes one open submission for an auditor.
+    /// @dev Deliberately has no stake check: a submission opened before a
+    /// slash must stay closable whatever the stake is now.
     function unlockSubmission(address auditor) external onlyOperator {
         if (activeSubmissions[auditor] == 0) revert NoActiveSubmission();
         activeSubmissions[auditor] -= 1;

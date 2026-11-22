@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from "fastify";
 import {
   AUDITOR_FINDING_DETECTOR,
   AuditorFindingFieldsSchema,
@@ -12,7 +12,7 @@ import {
 import type { ContractRepository, QueueItem } from "../contracts/repository.js";
 import type { SourceStorage } from "../contracts/storage.js";
 import { readMultipart } from "../http/multipart.js";
-import type { AuditorStakingPort } from "../chain/auditor-staking.js";
+import { StakeBelowRequiredError, type AuditorStakingPort } from "../chain/auditor-staking.js";
 import type { ChainActions } from "../chain/actions.js";
 import type { PipelineConfig } from "./config.js";
 import { canTransitionFinding } from "../status/transitions.js";
@@ -22,8 +22,12 @@ import type { FindingRecord, NewJob, PipelineRepository } from "./repository.js"
 import type { PocVerdictSource } from "./verdict-source.js";
 import { resolveActor, type Auth } from "../auth/session.js";
 
-/** Minimum AuditorStaking.stakeOf an auditor needs before a PoC is accepted:
- * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. */
+/** Minimum AuditorStaking.stakeOf an auditor needs before a claim, a PoC or a
+ * reported finding is accepted:
+ * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. With the claim lock on
+ * (CLAIM_LOCK_ENABLED), the contract is the authority for claims:
+ * lockSubmission reverts below it, and the API's own check is a faster answer
+ * that costs no transaction. With the lock off, the API check is the only one. */
 export const REQUIRED_STAKE_WEI = "100000000000000000";
 
 export interface PipelineRouteDeps {
@@ -34,7 +38,7 @@ export interface PipelineRouteDeps {
   /** Present only when a chain is configured. Claims lock the auditor's stake
    * and release it on expiry, through the chain actions. */
   chainActions?: ChainActions;
-  /** Read-only stake source for the PoC stake gate. Null when no chain is
+  /** Read-only stake source for the claim/PoC/finding stake gate. Null when no chain is
    * configured: the gate is then skipped and logged. Independent of the
    * claim-lock flag. */
   stakeReader: Pick<AuditorStakingPort, "stakeOf"> | null;
@@ -108,7 +112,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
   app.post<{ Body: { contractId?: unknown; auditorId?: unknown } | undefined }>(
     "/api/auditor/claim",
     async (request, reply) => {
-      const actor = resolveActor(identity, request, reply, request.body?.auditorId);
+      const actor = await resolveActor(identity, request, reply, request.body?.auditorId);
       if (!actor.ok) return reply;
       const contractId = request.body?.contractId;
       const auditorId = actor.id;
@@ -124,6 +128,14 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       // address, so reject anything else before the claim is written.
       if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
         return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
+      }
+      // With a chain, the same stake gate as PoCs and findings, checked before
+      // any on-chain lock or claim row: an unstaked wallet must not be able to
+      // hold a bounty for the claim window. AuditorStaking.lockSubmission
+      // enforces the same requirement; this read answers first, without a
+      // transaction. No chain: unchanged, no check.
+      if (stakeReader !== null && !(await passesStakeGate("POST /api/auditor/claim", auditorId, reply))) {
+        return reply;
       }
       const now = config.now();
       const expiresAt = new Date(now.getTime() + config.claimWindowSeconds * 1000);
@@ -172,7 +184,26 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         await contracts.releaseClaim(contractId, auditorId).catch((releaseErr: unknown) => {
           request.log.error({ err: releaseErr, contractId, auditorId }, "releaseClaim failed");
         });
+        // The contract refused the lock for lack of stake (the wallet withdrew
+        // after the gate's read): the gate's answer, not an upstream failure.
+        if (await lockRefusedForStake(err, auditorId, request.log)) {
+          return reply.code(403).send({ error: STAKE_BELOW_REQUIRED });
+        }
         return reply.code(502).send({ error: "Could not lock the auditor stake on-chain; claim not applied" });
+      }
+      // Check-then-act: between the stake gate's read and the mined lock, the
+      // wallet held no lock and could withdraw (e.g. front-running the lock).
+      // AuditorStaking.lockSubmission now reverts in that case (handled
+      // above), so with a current contract this re-read always passes. It is
+      // kept for a deployment whose AuditorStaking predates that check, where
+      // the lock would land with no stake: re-read the stake now that the
+      // lock holds it (withdraw reverts while locked). Below the requirement:
+      // release the lock and the claim, and answer as the gate does. With
+      // claim locks disabled there is no lock, so stake, claim, withdraw stays
+      // possible, but the PoC/findings gates still block submissions
+      // (claim-window griefing only).
+      if (stakeReader !== null && !(await stakeStillMet(contractId, auditorId, request.log))) {
+        return reply.code(403).send({ error: STAKE_BELOW_REQUIRED });
       }
       return result.contract;
     },
@@ -185,7 +216,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         ? reply.code(413).send({ error: "PoC file exceeds the 100 KB limit" })
         : reply.code(400).send({ error: "Expected a multipart/form-data body" });
     }
-    const actor = resolveActor(identity, request, reply, body.fields.auditorId);
+    const actor = await resolveActor(identity, request, reply, body.fields.auditorId);
     if (!actor.ok) return reply;
     const findingId = body.fields.findingId;
     const auditorId = actor.id;
@@ -240,7 +271,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         ? reply.code(413).send({ error: "PoC file exceeds the 100 KB limit" })
         : reply.code(400).send({ error: "Expected a multipart/form-data body" });
     }
-    const actor = resolveActor(identity, request, reply, body.fields.auditorId);
+    const actor = await resolveActor(identity, request, reply, body.fields.auditorId);
     if (!actor.ok) return reply;
     const auditorId = actor.id;
     const { contractId, title, severity, description } = body.fields;
@@ -326,8 +357,8 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     ].map((issue) => issue.message);
   }
 
-  /** Stake gate: checked before any bytes are stored, so a rejected upload
-   * leaves nothing behind. Sends the error reply and returns false on failure. */
+  /** Stake gate: checked before any bytes are stored or any claim is taken, so
+   * a rejected request leaves nothing behind. Sends the error reply and returns false on failure. */
   async function passesStakeGate(
     route: string,
     auditorId: string,
@@ -347,10 +378,59 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     }
     const stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
     if (compareWei(stake, REQUIRED_STAKE_WEI) < 0) {
-      void reply.code(403).send({ error: "Auditor stake is below the required stake" });
+      void reply.code(403).send({ error: STAKE_BELOW_REQUIRED });
       return false;
     }
     return true;
+  }
+
+  /** True when a failed claim lock was the contract refusing an under-staked
+   * auditor. Either the send was rejected with StakeBelowRequired, or the
+   * transaction was mined and reverted (the receipt carries no reason) and the
+   * stake now reads below the requirement. A failed read counts as not refused. */
+  async function lockRefusedForStake(
+    err: unknown,
+    auditorId: string,
+    log: FastifyBaseLogger,
+  ): Promise<boolean> {
+    if (err instanceof StakeBelowRequiredError) return true;
+    if (stakeReader === null) return false;
+    try {
+      const stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
+      return compareWei(stake, REQUIRED_STAKE_WEI) < 0;
+    } catch (readErr) {
+      log.error({ err: readErr, auditorId }, "stake re-read after a failed lock failed");
+      return false;
+    }
+  }
+
+  /** Re-reads the stake after a claim's lock landed. False when it fell below
+   * the requirement: the lock and the claim are then released (an unlock that
+   * fails is left 'unlocking' for the keeper's sweep; the contract reopens
+   * either way). A failed read keeps the claim: it passed the gate, and the
+   * PoC/findings gates still apply. */
+  async function stakeStillMet(
+    contractId: string,
+    auditorId: string,
+    log: FastifyBaseLogger,
+  ): Promise<boolean> {
+    if (stakeReader === null) return true;
+    let stake: string;
+    try {
+      stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
+    } catch (err) {
+      log.error({ err, contractId, auditorId }, "stake re-read after lock failed; keeping the claim");
+      return true;
+    }
+    if (compareWei(stake, REQUIRED_STAKE_WEI) >= 0) return true;
+    log.warn({ contractId, auditorId, stake }, "stake fell below the requirement before the lock; releasing claim");
+    await chainActions?.releaseClaimLock(contractId).catch((err: unknown) => {
+      log.error({ err, contractId, auditorId }, "releasing the claim lock failed; left for the sweep");
+    });
+    await contracts.releaseClaim(contractId, auditorId).catch((err: unknown) => {
+      log.error({ err, contractId, auditorId }, "releaseClaim failed");
+    });
+    return false;
   }
 
   /** Stores the PoC bytes and returns its Pending submission. Bytes first,
@@ -389,6 +469,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
 }
 
 const NO_CLAIM = "You do not hold an active claim on this contract";
+const STAKE_BELOW_REQUIRED = "Auditor stake is below the required stake";
 
 function sandboxJob(poc: PoCSubmission): NewJob {
   return { id: `job_${randomUUID()}`, kind: "sandbox", subjectId: poc.id, createdAt: poc.submittedAt };

@@ -23,7 +23,7 @@ export function registerDeveloperNoteRoutes(app: FastifyInstance, deps: Develope
   app.put<{ Params: { id: string }; Body: Record<string, unknown> | undefined }>(
     "/api/findings/:id/note",
     async (request, reply) => {
-      const actor = resolveActor(identity, request, reply, request.body?.developerId);
+      const actor = await resolveActor(identity, request, reply, request.body?.developerId);
       if (!actor.ok) return reply;
       const developerId = actor.id;
       if (!developerId) return reply.code(400).send({ error: "developerId is required" });

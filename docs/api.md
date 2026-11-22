@@ -12,7 +12,7 @@ pipeline routes ([design](superpowers/specs/2026-10-19-analysis-pipeline-design.
 | `GET /api/contracts/:id/analysis`                      | `AnalysisStatus` of the latest analysis job (`Queued`, `Running`, `Done`, `Failed` with `error`). `404` if none.                                                                                                                                                               |
 | `GET /api/findings/:id/raw`                            | The finding's raw Slither detector JSON (each finding's `rawOutputReference` points here).                                                                                                                                                                                     |
 | `GET /api/auditor/queue?sort=deadline\|bounty\|newest` | Contracts open to claim, with `bounty {amount, currency}`. `400` for an unknown sort.                                                                                                                                                                                          |
-| `POST /api/auditor/claim`                              | JSON `{contractId, auditorId}`. Exclusive claim for `CLAIM_WINDOW_SECONDS`. `409` if already claimed, `404` if unknown.                                                                                                                                                        |
+| `POST /api/auditor/claim`                              | JSON `{contractId, auditorId}`. Exclusive claim for `CLAIM_WINDOW_SECONDS`. With a chain configured, the auditor needs the minimum stake (`AuditorStaking.REQUIRED_STAKE`, 0.1 ETH): `403` "Auditor stake is below the required stake" before any claim or on-chain lock, the same check as a PoC upload. `AuditorStaking.lockSubmission` enforces the same minimum on-chain (`StakeBelowRequired`); if the stake is withdrawn between the API's check and the lock, the claim is rolled back with the same `403`. `409` if already claimed, `404` if unknown. The claim locks the stake; after a failed PoC it stays locked until the claim lapses (the auditor may submit again on it), then the keeper releases it. |
 | `POST /api/auditor/poc`                                | Multipart `findingId`, `auditorId`, `file` (`.t.sol`, at most 100 KB). The auditor must hold the active claim (`403`) and the finding must be `Flagged` (`409`). Marks it `Submitted` and queues a sandbox job. `201` with the `PoCSubmission`.                                |
 | `POST /api/auditor/findings`                           | Multipart `contractId`, `auditorId`, `title` (≤ 120 chars), `severity`, `description` (plain text, ≤ 4000 chars), `file` (`.t.sol`, at most 100 KB): reports a finding Slither missed, with its PoC. Same claim (`403`) and stake (`403`) checks as a PoC upload; `400` with `issues`, `404` for an unknown contract, `413` if too large. Creates the finding (`source: "auditor"`, `slitherDetector: "auditor-reported"`, the description in `llmExplanation`) already `Submitted`, with its PoC and sandbox job in one transaction. `201` with `{finding, poc}`. |
 | `PUT /api/findings/:id/note`                           | JSON `{note, developerId}`: the contract's developer sets their note on a finding (plain text, trimmed, ≤ 2000 chars; `""` or `null` clears it). With a chain configured the writer is the signed-in wallet (`401` without a session) and `developerId` is optional. `403` for anyone but the contract's developer, `400` with `issues`, `404` for an unknown finding. `200` with the updated `Finding`. |
@@ -62,7 +62,7 @@ for the signed-in wallet. Sign-in follows
 | `POST /api/auth/nonce`  | JSON `{address}`. `{nonce, message}`: a SIWE message naming the web app's domain and URI, the address, the API's `CHAIN_ID`, a single-use nonce, `Issued At` and an `Expiration Time` 5 minutes on. `400` for a bad address. |
 | `POST /api/auth/login`  | JSON `{message, signature}` (optional `address`, which must match). Sets the `bbm_session` cookie and returns `{address}`. `401` when the nonce is unknown, spent or expired, or the domain, URI, chain or address differs.     |
 | `GET /api/auth/me`      | `{address}` of the session, or `401`.                                                                                                                                                                                           |
-| `POST /api/auth/logout` | Clears the cookie.                                                                                                                                                                                                              |
+| `POST /api/auth/logout` | Ends the session in the request's cookie server-side (that cookie, and any copy of it, gets `401` from then on) and clears the cookie. `200` with or without a valid session cookie.                                            |
 
 **Which domain a message names.** With `AUTH_ORIGIN` set (e.g.
 `https://bountyguard.example`), every message names that origin, whatever the
@@ -81,9 +81,21 @@ message names. A nonce is spent before the signature check is awaited, so two
 concurrent logins with one signature cannot both succeed.
 
 Nonces live in memory for 5 minutes (at most 5 open per address), so sign-in
-needs a single API replica. The session is an HMAC-signed cookie (address and
-expiry, 8 hours), `HttpOnly; SameSite=Lax`, plus `Secure` when `COOKIE_SECURE`
-is on.
+needs a single API replica. The session is an HMAC-signed cookie (address,
+expiry and a random session id, 8 hours), `HttpOnly; SameSite=Lax`, plus
+`Secure` when `COOKIE_SECURE` is on.
+
+**Logout.** Logout records the session id as revoked, and every route that
+reads the session checks for it, so a copy of the cookie stops working at
+logout rather than at expiry. Only that session ends: the wallet's other
+sessions (another browser) stay signed in. With `DATABASE_URL` the revoked
+ids are kept in Postgres (`revoked_sessions`, migration `0012`), so they
+survive a restart and are seen by every replica; without it they are held in
+memory and forgotten on restart. An entry is dropped once its session would
+have expired anyway (pruned at each logout). If the lookup fails, the request
+fails with `500` rather than being let in. Cookies signed before sessions had
+an id (address and expiry only) are refused, so wallets signed in when this
+shipped sign in again once.
 
 ## Environment variables
 

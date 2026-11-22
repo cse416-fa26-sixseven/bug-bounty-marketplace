@@ -85,7 +85,9 @@ export interface ChainActions {
    * bounty is settled (Paid or Closed) the finding can never be paid and is
    * handled as Failed (returns Rejected); if it is still open, nothing is sent
    * and VerdictDeferredError is thrown, so the verdict is retried later.
-   * Failed: unlocks the auditor's claim lock, then moves the finding to Rejected.
+   * Failed: unlocks the auditor's claim lock if the claim has expired (while
+   * it runs the auditor may still submit, so the lock stays and the expiry
+   * sweep releases it later), then moves the finding to Rejected.
    * Chain steps run first. If one throws, the finding status is unchanged and
    * the call can be retried.
    */
@@ -416,7 +418,9 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
           const outcome = passedOutcome(bounty, onchainId(findingId));
           if (outcome === "deferred") throw new VerdictDeferredError(findingId, bounty.verifiedFinding);
           if (outcome === "settled") {
-            // Never verifiable or payable: settled as a Failed verdict is.
+            // Never verifiable or payable: rejected, and the lock goes now
+            // whatever the claim's expiry, since nothing on this bounty can
+            // be verified or paid any more.
             await unlock(ref.contractId, { auditorId: ref.auditorId, settling: findingId });
             return applyFindingTransition(store, findingId, "Rejected", now().toISOString());
           }
@@ -433,9 +437,18 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
           await store.markVerificationRecorded(findingId, now());
         }
       } else {
-        // Kept while another finding of the auditor's on this contract is
-        // pending: its verification or payout still needs the stake.
-        await unlock(ref.contractId, { auditorId: ref.auditorId, settling: findingId });
+        // Kept while the claim is still running: the auditor may submit
+        // another PoC or report another finding on it until it expires, and
+        // that finding's verification and payout need the stake (unlocked, the
+        // auditor could withdraw and BountyEscrow would revert
+        // AuditorNotEligible). The expiry sweep releases it once the claim
+        // has lapsed. Also kept while another finding of the auditor's on this
+        // contract is pending, for the same reason.
+        await unlock(ref.contractId, {
+          auditorId: ref.auditorId,
+          settling: findingId,
+          expiredBy: now(),
+        });
       }
 
       return applyFindingTransition(store, findingId, target, now().toISOString());

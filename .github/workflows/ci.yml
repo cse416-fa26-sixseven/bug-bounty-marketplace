@@ -29,6 +29,7 @@ jobs:
       analysis: ${{ steps.filter.outputs.analysis }}
       sandbox: ${{ steps.filter.outputs.sandbox }}
       containers: ${{ steps.filter.outputs.containers }}
+      e2e_chain: ${{ steps.filter.outputs.e2e_chain }}
       infra: ${{ steps.filter.outputs.infra }}
       helm: ${{ steps.filter.outputs.helm }}
       workflows: ${{ steps.filter.outputs.workflows }}
@@ -121,6 +122,13 @@ jobs:
               - 'workers/**'
               - 'contracts/**'
 
+            # The scripts behind the on-chain browser E2E run (e2e-chain
+            # job). Its specs, compose files and ci.yml are already covered
+            # by `containers` / `root`, which the job's `if` also checks.
+            e2e_chain:
+              - 'scripts/demo-stack.sh'
+              - 'scripts/ci-e2e-chain.sh'
+
             # Terraform (separate toolchain, no JS deps) and the bring-up /
             # teardown scripts: static checks and offline self-tests only,
             # never touches Azure.
@@ -175,7 +183,33 @@ jobs:
         run: pnpm --filter @bbm/web run --if-present typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/web run --if-present test
+        run: pnpm --filter @bbm/web run --if-present test --coverage
+
+      # Report only (no thresholds): JUnit + v8 coverage from apps/web/reports/.
+      - name: Coverage summary
+        if: always()
+        run: |
+          f=apps/web/reports/coverage/coverage-summary.json
+          if [ -f "$f" ]; then
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**web coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-web
+          path: apps/web/reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-web
+          path: apps/web/reports/coverage/
+          if-no-files-found: ignore
 
       - name: Build
         run: pnpm --filter @bbm/web run --if-present build
@@ -216,7 +250,33 @@ jobs:
         run: pnpm --filter @bbm/shared run --if-present typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/shared run --if-present test
+        run: pnpm --filter @bbm/shared run --if-present test --coverage
+
+      # Report only (no thresholds): JUnit + v8 coverage from packages/shared/reports/.
+      - name: Coverage summary
+        if: always()
+        run: |
+          f=packages/shared/reports/coverage/coverage-summary.json
+          if [ -f "$f" ]; then
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**shared coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-shared
+          path: packages/shared/reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-shared
+          path: packages/shared/reports/coverage/
+          if-no-files-found: ignore
 
       - name: Regenerate schema (if gen:schema exists)
         run: pnpm --filter @bbm/shared run --if-present gen:schema
@@ -276,7 +336,33 @@ jobs:
         run: pnpm --filter @bbm/api run typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/api run test
+        run: pnpm --filter @bbm/api run test --coverage
+
+      # Report only (no thresholds): JUnit + v8 coverage from apps/api/reports/.
+      - name: Coverage summary
+        if: always()
+        run: |
+          f=apps/api/reports/coverage/coverage-summary.json
+          if [ -f "$f" ]; then
+            jq -r 'def pct: if type == "number" then "\(.)%" else "n/a" end;
+              .total | "**api coverage:** lines \(.lines.pct | pct) · statements \(.statements.pct | pct) · branches \(.branches.pct | pct) · functions \(.functions.pct | pct)"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-api
+          path: apps/api/reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-api
+          path: apps/api/reports/coverage/
+          if-no-files-found: ignore
 
       - name: Build
         run: pnpm --filter @bbm/api run build
@@ -342,11 +428,57 @@ jobs:
         working-directory: contracts
         run: forge test -vvv
 
+      # JUnit for the test-report job: forge prints the XML to stdout. Report
+      # only; the step above is the one that fails the job.
+      - name: Forge JUnit report
+        if: always()
+        working-directory: contracts
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          forge test --junit > reports/junit.xml
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-contracts
+          path: contracts/reports/junit.xml
+          if-no-files-found: ignore
+
       # Regression: fail when gas usage changes without the committed
       # snapshot being updated (`forge snapshot` and commit the result).
       - name: Gas snapshot check
         working-directory: contracts
         run: forge snapshot --check
+
+      # Report only and never gating: forge coverage rebuilds without the
+      # optimizer, which can fail on stack-too-deep code. Runs before Slither,
+      # whose container runs as root and can leave root-owned files behind.
+      - name: Forge coverage (report only)
+        id: forge-coverage
+        working-directory: contracts
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          forge coverage --report summary --report lcov | tee coverage-summary.txt
+          # The summary table, from its first border/header row on, in a code block.
+          {
+            echo '**contracts coverage:**'
+            echo '```'
+            sed -n '/^[╭+|]/,$p' coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always() && steps.forge-coverage.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-contracts
+          path: |
+            contracts/lcov.info
+            contracts/coverage-summary.txt
+          if-no-files-found: ignore
 
       - name: Deploy script dry run
         working-directory: contracts
@@ -413,7 +545,17 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Test (pytest)
-        run: uv run pytest -q
+        run: >-
+          uv run pytest -q --junitxml=reports/junit.xml
+          --cov=analysis --cov-report=xml:reports/coverage.xml --cov-report=term
+
+      # Report only (no thresholds).
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f reports/coverage.xml ]; then
+            python3 -c "import xml.etree.ElementTree as E; r = E.parse('reports/coverage.xml').getroot(); print(f\"**analysis coverage:** lines {float(r.get('line-rate')) * 100:.1f}%\")" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Fail if generated models are out of date
         run: |
@@ -424,7 +566,23 @@ jobs:
         run: xargs -a src/analysis/solc-versions.txt -n1 uv run solc-select install
 
       - name: Slither integration tests
-        run: uv run pytest -m slither -q
+        run: uv run pytest -m slither -q --junitxml=reports/junit-slither.xml
+
+      - name: Upload JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-analysis
+          path: workers/analysis/reports/junit*.xml
+          if-no-files-found: ignore
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-analysis
+          path: workers/analysis/reports/coverage.xml
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------
   # sandbox - builds the offline Foundry image auditors' PoCs run in, then
@@ -471,7 +629,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BBM_TAG: ci
-      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml
+      # ci-chain adds api-chain (profile `chain`, port 3002): a second API in
+      # chain mode for the chain-flows tier; `api` on 3001 stays no-chain.
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -523,6 +683,9 @@ jobs:
           $COMPOSE run --rm contracts-deploy
           cat .ci/deployments/31337.json
 
+      - name: Start chain-mode API (reads .ci/deployments, so after the deploy)
+        run: $COMPOSE up -d --wait --wait-timeout 120 --no-build api-chain
+
       - name: Smoke test
         run: |
           set -euo pipefail
@@ -561,15 +724,18 @@ jobs:
           pnpm --filter @bbm/system-tests run typecheck
 
       - name: Integration tests
-        run: pnpm --filter @bbm/system-tests run test:integration
+        env:
+          BBM_CHAIN: '1'
+          BBM_CHAIN_API_URL: http://localhost:3002
+        run: pnpm --filter @bbm/system-tests run test:integration --outputFile.junit=reports/junit-integration.xml
 
       - name: Regression tests (API goldens)
-        run: pnpm --filter @bbm/system-tests run test:regression
+        run: pnpm --filter @bbm/system-tests run test:regression --outputFile.junit=reports/junit-regression.xml
 
       - name: Smoke tests
         env:
           BBM_SMOKE_WRITE: '1'
-        run: pnpm --filter @bbm/system-tests run test:smoke
+        run: pnpm --filter @bbm/system-tests run test:smoke --outputFile.junit=reports/junit-smoke.xml
 
       # Browser cached per Playwright version; system libs only via apt if
       # Chromium can't launch (see tests/e2e/install-browser.sh).
@@ -589,6 +755,15 @@ jobs:
       - name: E2E tests (Playwright)
         run: pnpm --filter @bbm/system-tests run e2e
 
+      # JUnit from every system-test tier (vitest tiers + Playwright).
+      - name: Upload JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-system-tests
+          path: tests/reports/junit-*.xml
+          if-no-files-found: ignore
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
@@ -599,7 +774,7 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: $COMPOSE logs --no-color > compose.log
+        run: $COMPOSE --profile chain logs --no-color > compose.log
 
       - name: Upload logs on failure
         if: failure()
@@ -610,7 +785,94 @@ jobs:
 
       - name: Stop stack
         if: always()
-        run: $COMPOSE --profile deploy down -v
+        run: $COMPOSE --profile deploy --profile chain down -v
+
+  # ---------------------------------------------------------------------
+  # e2e-chain - the on-chain browser specs (tests/e2e/{lifecycle,features,
+  # flows-extra}.spec.ts, E2E_CHAIN=1) against a fresh demo stack: anvil
+  # with 60-second windows, the API in chain mode, analysis with the PoC
+  # sandbox, the web app with mocks off. scripts/ci-e2e-chain.sh runs it
+  # all (no retries), dumps compose logs on failure and tears down.
+  # Blocking: part of ci-ok's needs, so a failed on-chain run fails CI OK.
+  # ---------------------------------------------------------------------
+  e2e-chain:
+    name: e2e-chain
+    needs: changes
+    if: >-
+      needs.changes.outputs.e2e_chain == 'true' ||
+      needs.changes.outputs.containers == 'true' ||
+      needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CI: 'true'
+      E2E_COMPOSE_LOG: ${{ github.workspace }}/compose-e2e-chain.log
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # contracts/lib/forge-std for the anvil / contracts-deploy image.
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build sandbox image
+        run: docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(jq -r '.devDependencies["@playwright/test"]' tests/package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browser
+        run: tests/e2e/install-browser.sh
+
+      - name: Chain E2E (stack:demo + web + Playwright)
+        run: scripts/ci-e2e-chain.sh
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-e2e-chain
+          path: tests/reports/junit-e2e.xml
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-chain
+          path: tests/e2e/playwright-report/
+          if-no-files-found: ignore
+
+      - name: Upload compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs-e2e-chain
+          path: compose-e2e-chain.log
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------
   # infra/terraform - static checks only (no Azure credentials, no
@@ -912,6 +1174,65 @@ jobs:
           exit 0
 
   # ---------------------------------------------------------------------
+  # Test report - test counts and line coverage per suite, from the
+  # junit-* and coverage-* artifacts the jobs above uploaded
+  # (scripts/ci-test-report.py). Written to the run summary on every run,
+  # and posted as one sticky PR comment (updated in place) on pull
+  # requests from this repository. Fork PRs get a read-only token and
+  # Dependabot PRs are left out on purpose, so both get the summary but no
+  # comment. Report only: never fails on test results, a failed comment
+  # does not fail the job, and it is not part of CI OK.
+  # ---------------------------------------------------------------------
+  test-report:
+    name: Test report
+    needs: [changes, web, shared, api, contracts, analysis, containers, e2e-chain]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      # Jobs skipped by their path filter upload nothing; the report shows
+      # those suites as "not run".
+      - name: Download JUnit reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: junit-*
+          path: artifacts
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          path: artifacts
+
+      - name: Build report
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p artifacts
+          python3 scripts/ci-test-report.py artifacts --results "$RESULTS" --sha "$SHA" --run-url "$RUN_URL" > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post sticky comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: test-report
+          path: report.md
+
+  # ---------------------------------------------------------------------
   # Single required status check for branch protection: succeeds as
   # long as every needed job either succeeded or was skipped (because
   # its path filter didn't match), and fails if any of them actually
@@ -929,6 +1250,7 @@ jobs:
       - analysis
       - sandbox
       - containers
+      - e2e-chain
       - terraform-static
       - helm
       - workflows
@@ -950,6 +1272,7 @@ jobs:
             [analysis]="${{ needs.analysis.result }}"
             [sandbox]="${{ needs.sandbox.result }}"
             [containers]="${{ needs.containers.result }}"
+            [e2e-chain]="${{ needs.e2e-chain.result }}"
             [terraform-static]="${{ needs.terraform-static.result }}"
             [helm]="${{ needs.helm.result }}"
             [workflows]="${{ needs.workflows.result }}"

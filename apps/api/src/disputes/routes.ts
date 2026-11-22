@@ -27,8 +27,10 @@ export interface FindingLifecycleDeps {
     Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
   disputeResolution: Pick<DisputeResolutionPort, "getDispute">;
   auditorStaking: Pick<AuditorStakingPort, "stakeOf" | "reputation" | "activeSubmissions">;
-  /** Releases the auditor's claim lock once a dispute goes against them. */
-  chainActions?: Pick<ChainActions, "applyDisputeResolved">;
+  /** Releases the auditor's claim lock once a dispute goes against them, and
+   * (when present) lapsed claims' locks before the profile is read. */
+  chainActions?: Pick<ChainActions, "applyDisputeResolved"> &
+    Partial<Pick<ChainActions, "releaseExpiredLocks">>;
   arbiter: Address;
   auth: Auth;
   now: () => Date;
@@ -58,8 +60,14 @@ export function registerFindingLifecycleRoutes(
   } = deps;
 
   app.get("/api/auditor/profile", async (request, reply) => {
-    const address = auth.requireSession(request, reply);
+    const address = await auth.requireSession(request, reply);
     if (!address) return reply;
+    // Lazy expiry, as on the queue: a lapsed claim's lock is released before
+    // activeSubmissions is read, so the profile does not show it as locked.
+    // Best-effort: the keeper sweeps it too.
+    await deps.chainActions?.releaseExpiredLocks?.(now()).catch((err: unknown) => {
+      request.log.error({ err }, "releaseExpiredLocks failed");
+    });
     const [stake, reputation, active, pending, claimed] = await Promise.all([
       auditorStaking.stakeOf(address),
       auditorStaking.reputation(address),
@@ -82,7 +90,7 @@ export function registerFindingLifecycleRoutes(
   app.post<{ Params: { id: string } }>(
     "/api/findings/:id/false-positive",
     async (request, reply) => {
-      const address = auth.requireSession(request, reply);
+      const address = await auth.requireSession(request, reply);
       if (!address) return reply;
       const finding = await pipeline.findFinding(request.params.id, now());
       if (!finding) return reply.code(404).send({ error: "Finding not found" });
@@ -104,7 +112,7 @@ export function registerFindingLifecycleRoutes(
   app.post<{ Params: { id: string }; Body: { reason?: unknown } | undefined }>(
     "/api/findings/:id/dispute",
     async (request, reply) => {
-      const address = auth.requireSession(request, reply);
+      const address = await auth.requireSession(request, reply);
       if (!address) return reply;
       const reason = request.body?.reason;
       if (typeof reason !== "string" || reason.trim() === "") {
@@ -145,7 +153,7 @@ export function registerFindingLifecycleRoutes(
   );
 
   app.get<{ Querystring: { ruling?: string } }>("/api/arbiter/disputes", async (request, reply) => {
-    if (!requireArbiter(request, reply)) return reply;
+    if (!(await requireArbiter(request, reply))) return reply;
     const parsed = DisputeRulingSchema.safeParse(request.query.ruling);
     const list = await disputes.list(parsed.success ? parsed.data : undefined);
     return Promise.all(
@@ -164,7 +172,7 @@ export function registerFindingLifecycleRoutes(
   app.post<{ Params: { id: string }; Body: { ruling?: unknown } | undefined }>(
     "/api/arbiter/disputes/:id/rule",
     async (request, reply) => {
-      const arbiter = requireArbiter(request, reply);
+      const arbiter = await requireArbiter(request, reply);
       if (!arbiter) return reply;
       const ruling = request.body?.ruling;
       if (ruling !== "ForAuditor" && ruling !== "AgainstAuditor") {
@@ -224,11 +232,11 @@ export function registerFindingLifecycleRoutes(
   }
 
   /** The signed-in arbiter's address, or sends 401/403. */
-  function requireArbiter(
+  async function requireArbiter(
     request: Parameters<Auth["requireSession"]>[0],
     reply: Parameters<Auth["requireSession"]>[1],
-  ): Address | undefined {
-    const address = auth.requireSession(request, reply);
+  ): Promise<Address | undefined> {
+    const address = await auth.requireSession(request, reply);
     if (!address) return undefined;
     if (address !== getAddress(deps.arbiter)) {
       void reply.code(403).send({ error: "only the arbiter can do this" });

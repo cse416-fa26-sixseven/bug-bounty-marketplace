@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ArbiterDisputeView } from "@/lib/api/arbiter";
 import { DisputeCard } from "./DisputeCard";
 
@@ -65,6 +65,32 @@ describe("DisputeCard", () => {
     expect(screen.getByText(/Developer.s note/)).toBeInTheDocument();
     expect(screen.getByText("Mitigated by the pause guard.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /note/i })).not.toBeInTheDocument();
+  });
+
+  it("'Rule for auditor' and 'Rule against auditor' report their own ruling", () => {
+    const onRule = vi.fn();
+    render(<DisputeCard dispute={dispute("slither")} onRule={onRule} isRuling={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rule for auditor" }));
+    expect(onRule).toHaveBeenLastCalledWith("ForAuditor");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rule against auditor" }));
+    expect(onRule).toHaveBeenLastCalledWith("AgainstAuditor");
+    expect(onRule).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables both ruling buttons while a ruling is submitting", () => {
+    render(<DisputeCard dispute={dispute("slither")} onRule={vi.fn()} isRuling />);
+    expect(screen.getByRole("button", { name: "Rule for auditor" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rule against auditor" })).toBeDisabled();
+    expect(screen.getByText(/Submitting ruling/)).toBeInTheDocument();
+  });
+
+  it("shows who ruled instead of the buttons once ruled", () => {
+    const view = { ...dispute("slither"), ruling: "ForAuditor" as const, ruledAt: at, arbiterId: "0xarbiter" };
+    render(<DisputeCard dispute={view} onRule={vi.fn()} isRuling={false} />);
+    expect(screen.queryByRole("button", { name: /rule for auditor/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/by 0xarbiter/)).toBeInTheDocument();
   });
 
   it("labels a Slither finding's text as an AI explanation", () => {
