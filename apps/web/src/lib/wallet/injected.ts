@@ -177,7 +177,13 @@ export async function restoreInjected(info: ConfiguredChainInfo): Promise<void> 
   // A session for an account the wallet isn't sharing would keep pages
   // reading as that account: clear it.
   if (session && !address) await signOut();
-  useInjectedStore.setState({ address, chainId, error: chainId === info.chainId ? null : wrongNetwork(info.chainId) });
+  // Only a connected wallet is on the wrong network: Connect switches the
+  // chain itself, so a visitor who hasn't connected has nothing to fix yet.
+  useInjectedStore.setState({
+    address,
+    chainId,
+    error: address && chainId !== info.chainId ? wrongNetwork(info.chainId) : null,
+  });
 }
 
 /** Follows accountsChanged and chainChanged. On an account change or a
@@ -198,7 +204,13 @@ export function watchInjected(info: ConfiguredChainInfo, onIdentityChange: () =>
   };
   const onChain = (hex: string) => {
     const chainId = Number(hex);
-    useInjectedStore.setState({ chainId, error: chainId === info.chainId ? null : wrongNetwork(info.chainId) });
+    if (chainId === info.chainId) {
+      useInjectedStore.setState({ chainId, error: null });
+      return;
+    }
+    // Before connecting, another network is not an error (see restoreInjected).
+    const { address } = useInjectedStore.getState();
+    useInjectedStore.setState(address ? { chainId, error: wrongNetwork(info.chainId) } : { chainId });
   };
   provider.on("accountsChanged", onAccounts);
   provider.on("chainChanged", onChain);

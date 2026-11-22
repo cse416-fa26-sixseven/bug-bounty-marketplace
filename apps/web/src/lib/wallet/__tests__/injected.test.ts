@@ -186,6 +186,14 @@ describe("restoreInjected", () => {
     expect(useInjectedStore.getState()).toMatchObject({ chainId: 1, error: wrongNetwork(SEPOLIA.chainId) });
   });
 
+  it("does not report the wrong network before the wallet is connected", async () => {
+    // MetaMask's default is mainnet: a first-time visitor has nothing to fix yet.
+    wallet({ chainId: 1 });
+    fakeAuth();
+    await restoreInjected(SEPOLIA);
+    expect(useInjectedStore.getState()).toMatchObject({ address: null, chainId: 1, error: null });
+  });
+
   it("does not undo a connection made while it was waiting", async () => {
     const fake = wallet({ chainId: SEPOLIA.chainId });
     fake.state.authorized = true;
@@ -198,6 +206,25 @@ describe("restoreInjected", () => {
 });
 
 describe("watchInjected", () => {
+  it("ignores a change to another network before the wallet is connected", () => {
+    const fake = wallet({ chainId: SEPOLIA.chainId });
+    fakeAuth();
+    const stop = watchInjected(SEPOLIA, vi.fn());
+    fake.emit("chainChanged", "0x1");
+    expect(useInjectedStore.getState()).toMatchObject({ address: null, chainId: 1, error: null });
+    stop();
+  });
+
+  it("clears a failed connect's wrong-network error once the wallet is on the right chain", () => {
+    const fake = wallet({ chainId: 1 });
+    fakeAuth();
+    useInjectedStore.setState({ error: wrongNetwork(SEPOLIA.chainId) });
+    const stop = watchInjected(SEPOLIA, vi.fn());
+    fake.emit("chainChanged", "0xaa36a7");
+    expect(useInjectedStore.getState()).toMatchObject({ chainId: SEPOLIA.chainId, error: null });
+    stop();
+  });
+
   it("signs out when the wallet disconnects", async () => {
     const fake = wallet({ chainId: SEPOLIA.chainId });
     const auth = fakeAuth();
