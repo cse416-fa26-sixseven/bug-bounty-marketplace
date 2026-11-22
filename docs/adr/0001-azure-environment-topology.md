@@ -619,7 +619,10 @@ _Superseded by ADR 0002 §5: `ingress.host` is `<env>.<zone>`, and the keys `dns
      operator.
    - It also gets Storage Queue Data Reader on the storage account.
 2. **Key Vault access.** Key Vault Secrets User on the env vault for the api UAMI (which migrations
-   also use) and for the worker UAMI.
+   also use) and for the worker UAMI. _Amended 2026-11-16 (PR #150): the worker's Key Vault Secrets
+   User is scoped to the secrets `database-url` and `llm-api-key` only, never the vault, which also
+   holds `chain-operator-key` and `session-secret`; test (plain secrets, no Key Vault mount) gives
+   the worker no Key Vault grant._
 3. **Ingress IP.** The AKS cluster identity `id-bbm-<env>-aks` gets Network Contributor on
    `rg-bbm-<env>-data-eus2`, so the Gateway's load balancer can bind the static PIP.
 4. **Add-ons and pools.**

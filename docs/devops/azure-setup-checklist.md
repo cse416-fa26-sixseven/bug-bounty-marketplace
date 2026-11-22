@@ -60,9 +60,12 @@ decided or deferred along the way. Not committed.
 11. **Staging:**
     - [ ] Actions → `terraform` → dispatch `staging-data` / `apply`. The first data apply with your
           user in `secret_officer_user_object_ids` may need to run locally instead
-          (`./scripts/tf.sh data staging apply`).
-    - [ ] Set `llm-api-key` in the staging vault (§13), even as `placeholder-set-me`. Without it pods
-          hang in ContainerCreating and the Helm deploy rolls back.
+          (`./scripts/tf.sh data staging apply`). On a new vault this first apply fails on
+          `worker-kv-secret-llm-api-key` only: the worker's grant is scoped to that secret, which
+          doesn't exist yet.
+    - [ ] Set `llm-api-key` in the staging vault (§13), even as `placeholder-set-me`, then re-run
+          the `staging-data` / `apply`. Without the secret pods hang in ContainerCreating and the
+          Helm deploy rolls back.
     - [ ] Actions → `env-power` → `staging` / `up`. This applies compute, then deploys the last tag.
           The first time there is no last tag, so run `deploy` with `image_tag=sha-<7>` from a green
           `integration-azure` run.
