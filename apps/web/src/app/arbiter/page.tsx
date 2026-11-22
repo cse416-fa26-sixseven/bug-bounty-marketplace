@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { arbiterApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
-import { useChainCalls } from "@/lib/chain/use-chain";
+import { useChainCalls, useWalletGate } from "@/lib/chain/use-chain";
 import { DisputeCard } from "./_components/DisputeCard";
 
 type Tab = "Pending" | "ForAuditor" | "AgainstAuditor" | "All";
@@ -24,6 +24,10 @@ export default function ArbiterPage() {
   const wallet = useWallet();
   const arbiterId = wallet.address ?? FALLBACK_ARBITER_ID;
   const queryClient = useQueryClient();
+  // Testnet mode before a wallet is connected: the API would refuse the list,
+  // so ask for the wallet instead of loading. Nothing loads until the mode is known.
+  const gate = useWalletGate();
+  const walletMissing = gate === "missing";
 
   const filter = tab === "All" ? undefined : { ruling: tab };
   const queryKey = ["arbiter", "disputes", tab] as const;
@@ -32,6 +36,7 @@ export default function ArbiterPage() {
     queryKey,
     queryFn: () => arbiterApi.listDisputes(filter),
     refetchInterval: 3_000,
+    enabled: gate === "ready",
   });
 
   const chain = useChainCalls();
@@ -117,17 +122,23 @@ export default function ArbiterPage() {
       ) : null}
 
       <div className="mt-6 space-y-4">
+        {walletMissing ? (
+          <p className="text-slate-400">Connect your wallet to see disputes.</p>
+        ) : null}
+
         {disputesQuery.isLoading ? <p className="text-slate-400">Loading disputes…</p> : null}
 
-        {disputesQuery.isError ? <p className="text-red-400">Failed to load disputes.</p> : null}
+        {gate === "ready" && disputesQuery.isError ? (
+          <p className="text-red-400">Failed to load disputes.</p>
+        ) : null}
 
-        {!disputesQuery.isLoading && !disputesQuery.isError && disputes.length === 0 ? (
+        {gate === "ready" && !disputesQuery.isLoading && !disputesQuery.isError && disputes.length === 0 ? (
           <p className="text-slate-400">
             {tab === "Pending" ? "No open disputes right now." : "No disputes match this filter."}
           </p>
         ) : null}
 
-        {disputes.map((dispute) => (
+        {(gate === "ready" ? disputes : []).map((dispute) => (
           <DisputeCard
             key={dispute.id}
             dispute={dispute}

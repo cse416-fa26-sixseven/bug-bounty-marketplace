@@ -9,6 +9,11 @@ export function useChainInfo(): ChainInfo | undefined {
   return useQuery({ queryKey: ["chain"], queryFn: getChainInfo, staleTime: Infinity, retry: false }).data;
 }
 
+/** True until the first /api/chain answer (or failure): the mode is not known yet. */
+export function useChainInfoPending(): boolean {
+  return useQuery({ queryKey: ["chain"], queryFn: getChainInfo, staleTime: Infinity, retry: false }).isPending;
+}
+
 /** True when the API runs on the local anvil chain the demo accounts live on,
  * with an RPC URL the browser can use. */
 export function isLocalChain(info: ChainInfo | undefined): info is LocalChainInfo {
