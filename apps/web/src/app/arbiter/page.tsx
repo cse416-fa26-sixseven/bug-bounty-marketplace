@@ -18,6 +18,11 @@ const TABS: { id: Tab; label: string }[] = [
 
 const FALLBACK_ARBITER_ID = "arbiter_1";
 
+/** The API answers 403 to a signed-in account that is not the arbiter. */
+function isNotArbiter(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
+}
+
 export default function ArbiterPage() {
   const [tab, setTab] = useState<Tab>("Pending");
   const [notice, setNotice] = useState<string | null>(null);
@@ -35,9 +40,12 @@ export default function ArbiterPage() {
   const disputesQuery = useQuery({
     queryKey,
     queryFn: () => arbiterApi.listDisputes(filter),
-    refetchInterval: 3_000,
+    // The API's refusal of a non-arbiter account is final for this session:
+    // stop polling. Switching accounts signs out and re-enables the query.
+    refetchInterval: (query) => (isNotArbiter(query.state.error) ? false : 3_000),
     enabled: gate === "ready",
   });
+  const notArbiter = isNotArbiter(disputesQuery.error);
 
   const chain = useChainCalls();
   const ruleMutation = useMutation({
@@ -128,7 +136,11 @@ export default function ArbiterPage() {
 
         {disputesQuery.isLoading ? <p className="text-slate-400">Loading disputes…</p> : null}
 
-        {gate === "ready" && disputesQuery.isError ? (
+        {gate === "ready" && notArbiter ? (
+          <p className="text-slate-400">Only the arbiter can view and rule on disputes.</p>
+        ) : null}
+
+        {gate === "ready" && disputesQuery.isError && !notArbiter ? (
           <p className="text-red-400">Failed to load disputes.</p>
         ) : null}
 
