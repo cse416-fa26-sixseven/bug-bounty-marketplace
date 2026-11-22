@@ -311,6 +311,8 @@ for pair in northcentralus=ncus canadacentral=cac francecentral=frc eastus2=eus2
   eq "region_abbr ${pair%%=*}" "$(region_abbr "${pair%%=*}")" "${pair#*=}"
 done
 check_fails "region_abbr unknown region" region_abbr swedencentral
+check_fails "tf_plan_apply --target without an address dies" tf_plan_apply data test --target
+check_fails "tf_plan_apply unknown argument dies" tf_plan_apply data test --bogus
 eq "resolve: map" "$(resolve_location_abbr canadacentral)" "cac"
 eq "resolve: explicit abbr for unknown region" "$(resolve_location_abbr swedencentral sdc)" "sdc"
 eq "resolve: explicit abbr matching the map" "$(resolve_location_abbr northcentralus ncus)" "ncus"
@@ -620,6 +622,18 @@ has "up: acr import postgres" 'mirror/postgres:16-alpine'
 has "up: acr import curl" 'mirror/curl:8.10.1'
 has "up: prod env included" 'data prod init -reconfigure'
 has "up: llm-api-key placeholder" 'llm-api-key --value placeholder-set-me'
+has "up: vault applied alone first" 'data prod plan -target=module.keyvault.azurerm_key_vault.this -target=module.keyvault.azurerm_role_assignment.secrets_officer -target=module.keyvault.time_sleep.rbac_propagation -out=up.tfplan'
+# The worker's secret-scoped llm-api-key grant needs the secret to exist:
+# targeted vault apply, then the placeholder, then the full data apply.
+first_line() { grep -nF -- "$1" <<<"$out" | head -n1 | cut -d: -f1; }
+l_kv=$(first_line 'data prod plan -target=module.keyvault.azurerm_key_vault.this')
+l_llm=$(grep -nF -- 'llm-api-key --value placeholder-set-me' <<<"$out" | awk -F: -v a="${l_kv:-0}" '$1 > a { print $1; exit }')
+l_full=$(first_line 'data prod plan -out=up.tfplan')
+if [[ -n "$l_kv" && -n "$l_llm" && -n "$l_full" && $l_kv -lt $l_llm && $l_llm -lt $l_full ]]; then
+  ok_ "up: vault, then llm-api-key placeholder, then the full data apply"
+else
+  bad "up: vault, then llm-api-key placeholder, then the full data apply (lines: kv=$l_kv llm=$l_llm full=$l_full)"
+fi
 has "up: platform install" 'install.sh test --values'
 has "up: github_repo follows gh repo view" 'github_repo = "neworg/bbm-renamed"'
 has "up: gh admin check uses the new repo" 'gh: admin on neworg/bbm-renamed'

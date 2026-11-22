@@ -93,6 +93,8 @@
 - The analysis pod on staging/prod reads `DATABASE_URL` from Key Vault through a second
   SecretProviderClass (`bbm-kv-analysis`); the worker identity `id-bbm-<env>-worker` already holds
   Key Vault Secrets User on the whole env vault (`stacks/data/identity.tf`), so no new role.
+  _Amended 2026-11-16 (PR #150): that grant is now scoped to the two secrets this
+  SecretProviderClass mounts, `database-url` and `llm-api-key`, not the whole vault._
 
 ### 4. Sources: Azure Files until the Blob adapter lands
 
