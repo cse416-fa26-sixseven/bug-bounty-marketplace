@@ -6,7 +6,7 @@ import { injectedTxClient, prepareInjectedSend, useInjectedStore } from "@/lib/w
 import { SEED_AUDITOR_ID } from "@/mocks/db";
 import { ANVIL_ACCOUNTS } from "./accounts";
 import { chainCalls, viemTxClient, type ChainCalls } from "./calls";
-import { chainMode, isLocalChain, isOnChain, useChainInfo } from "./config";
+import { chainMode, isLocalChain, isOnChain, useChainInfo, useChainInfoPending } from "./config";
 import { useLastTx } from "./tx-store";
 
 /**
@@ -47,6 +47,18 @@ export function useAuditorId(): string {
   if (mode === "local") return ANVIL_ACCOUNTS.auditor.address;
   if (mode === "injected") return address ?? "";
   return SEED_AUDITOR_ID;
+}
+
+/** Whether a page that needs a signed-in account can load: "missing" in
+ * testnet mode while no wallet is connected (the account is the identity
+ * there, so the page should ask for the wallet instead), "unknown" until the
+ * chain mode is known, "ready" otherwise. */
+export function useWalletGate(): "unknown" | "missing" | "ready" {
+  const info = useChainInfo();
+  const pending = useChainInfoPending();
+  const address = useInjectedStore((s) => s.address);
+  if (pending) return "unknown";
+  return chainMode(info) === "injected" && !address ? "missing" : "ready";
 }
 
 /** Required auditor stake in wei: the contract's on a chain, the mock demo's
