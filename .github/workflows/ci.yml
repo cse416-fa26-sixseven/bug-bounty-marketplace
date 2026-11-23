@@ -823,7 +823,7 @@ jobs:
         run: docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
         uses: actions/setup-node@v4
