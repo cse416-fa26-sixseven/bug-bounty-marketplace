@@ -138,7 +138,7 @@ jobs:
       CI: 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The deploy job already waited for https; re-check from here.
       - name: Wait for health (up to 5 min)

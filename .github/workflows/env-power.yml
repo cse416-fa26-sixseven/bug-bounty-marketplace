@@ -95,7 +95,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).
@@ -144,7 +144,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).
@@ -249,7 +249,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).
@@ -333,7 +333,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).
@@ -491,7 +491,7 @@ jobs:
 
       - name: Checkout
         if: steps.cfg.outputs.ok == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).
@@ -610,7 +610,7 @@ jobs:
 
       - name: Checkout
         if: steps.cfg.outputs.ok == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).

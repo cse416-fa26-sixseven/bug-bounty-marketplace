@@ -35,7 +35,7 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Full history so paths-filter can diff against the correct
           # base commit on both push and pull_request events.
@@ -162,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -229,7 +229,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -315,7 +315,7 @@ jobs:
       DATABASE_URL: postgres://bbm:bbm@localhost:5432/bbm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -409,7 +409,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -527,7 +527,7 @@ jobs:
         working-directory: workers/analysis
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -597,7 +597,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build sandbox image
         run: docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
@@ -634,7 +634,7 @@ jobs:
       COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.ci-chain.yml
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -811,7 +811,7 @@ jobs:
       E2E_COMPOSE_LOG: ${{ github.workspace }}/compose-e2e-chain.log
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # contracts/lib/forge-std for the anvil / contracts-deploy image.
           submodules: recursive
@@ -898,7 +898,7 @@ jobs:
       TF_IN_AUTOMATION: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -963,7 +963,7 @@ jobs:
       KUBECONFORM_VERSION: v0.6.7
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # ct compares against target-branch (main).
           fetch-depth: 0
@@ -1087,7 +1087,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: actionlint
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3 -color
@@ -1109,7 +1109,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Dependency review
         uses: actions/dependency-review-action@v5
@@ -1130,7 +1130,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -1193,7 +1193,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           sparse-checkout: scripts
 
@@ -1318,7 +1318,7 @@ jobs:
 #        working-directory: workers/<service>
 #    steps:
 #      - name: Checkout
-#        uses: actions/checkout@v4
+#        uses: actions/checkout@v7
 #
 #      - name: Install uv
 #        uses: astral-sh/setup-uv@v3
@@ -1344,7 +1344,7 @@ jobs:
 #        working-directory: workers/<service>
 #    steps:
 #      - name: Checkout
-#        uses: actions/checkout@v4
+#        uses: actions/checkout@v7
 #
 #      - name: Install Rust toolchain
 #        uses: dtolnay/rust-toolchain@stable

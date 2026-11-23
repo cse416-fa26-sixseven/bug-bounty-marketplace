@@ -197,7 +197,7 @@ jobs:
           [[ -n "$ACR_NAME" ]] || { echo "::error::Repo variable ACR_NAME is not set."; exit 1; }
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Empty ref = the workflow's own commit (github.sha).
           ref: ${{ inputs.ref }}
