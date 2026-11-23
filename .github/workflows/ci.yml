@@ -744,7 +744,7 @@ jobs:
         run: echo "version=$(jq -r '.devDependencies["@playwright/test"]' tests/package.json)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.pw.outputs.version }}
@@ -839,7 +839,7 @@ jobs:
         run: echo "version=$(jq -r '.devDependencies["@playwright/test"]' tests/package.json)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.pw.outputs.version }}
@@ -912,7 +912,7 @@ jobs:
           tflint_version: v0.53.0
 
       - name: Cache Terraform providers and TFLint plugins
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ github.workspace }}/.terraform-plugin-cache
