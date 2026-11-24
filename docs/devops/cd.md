@@ -91,8 +91,9 @@ it's still waiting (see Concurrency), and GitHub fails a job that has waited 30 
 
 #### Every other approval gate
 
-`approval-notify.yml` covers the gates CD doesn't: Terraform's `Apply global` and dispatch applies
-(`infra-global`, `prod`), env-power's prod actions, the janitor's ACR purge (`infra-global`),
+`approval-notify.yml` covers the gates CD doesn't: Terraform's `Apply global` and dispatch plans and
+applies on the global and prod stacks, env-power's prod `resume` / `down` / `up`, manual and
+env-power prod deploys (waiting and rejected), the janitor's ACR purge (`infra-global`),
 `contracts-deploy.yml` (`contracts-sepolia`), and any gate added later. It posts to the same webhook:
 
 1. **Approval needed**: workflow, job, who started the run, commit, and the reviewers.
