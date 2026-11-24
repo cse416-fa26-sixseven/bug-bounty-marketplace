@@ -34,4 +34,5 @@ one-command bring-up), which supersedes parts of 0001.
 - [tests/README.md](../../tests/README.md): which test tiers run in which workflow and environment.
 - Workflows in [`.github/workflows/`](../../.github/workflows/): `ci.yml` (Azure-free, `CI OK`
   gate), `_build-push.yml`, `_ephemeral-env.yml`, `integration-azure.yml`, `preview.yml`,
-  `terraform.yml`, `deploy.yml`, `cd.yml`, `env-power.yml`, `contracts-deploy.yml`, `infra-janitor.yml`.
+  `terraform.yml`, `deploy.yml`, `cd.yml`, `env-power.yml`, `contracts-deploy.yml`, `infra-janitor.yml`,
+  `approval-notify.yml`.

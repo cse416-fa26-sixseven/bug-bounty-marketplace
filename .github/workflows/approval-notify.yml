@@ -1,0 +1,222 @@
+name: Approval notify
+
+# ---------------------------------------------------------------------
+# Discord notices for every Environment approval gate (docs/devops/cd.md,
+# "Discord notifications"):
+#
+#   waiting   a job is parked on an Environment's required reviewers
+#   approved  a reviewer approved it (who, comment)
+#   rejected  a reviewer rejected it (who, comment)
+#
+# Trigger: a job with `environment:` creates a GitHub deployment, and
+# GitHub records its progress as deployment statuses. A gated job goes
+#   waiting (often twice) -> queued -> in_progress -> success | failure
+# and a gate that is rejected, cancelled or times out goes
+#   waiting -> error
+# An ungated job passes through `waiting` and `queued` too (for about a
+# second), so the statuses alone don't prove a gate. The run does:
+#   waiting  -> the environment is in the run's pending deployments
+#   queued   -> the run has an `approved` review for the environment
+#   error    -> the run has a `rejected` review for the environment
+#               (`failure` is treated the same, in case GitHub records a
+#               rejection that way: no rejection has happened here yet)
+# So nothing here names an environment or a workflow: a gate added later
+# is covered as soon as its Environment gets required reviewers.
+#
+# Left to the workflows that already post a richer message:
+#   - CD's prod gate: `promote` posts the waiting notice (tag, staging
+#     URL) and `summary` the outcome, including a rejection.
+#   - deploy.yml's prod job posts its own "approved" notice.
+#
+# Cost: this workflow starts for every deployment status of every
+# environment. Other states skip at the job `if`; `waiting` / `queued` /
+# `error` / `failure` of an ungated job start the job, which exits after
+# two or three API calls without posting.
+#
+# The run uses the workflow file at the deployment's commit, so a gated
+# run from a branch that doesn't have this file posts nothing.
+#
+# Optional and non-blocking, like the CD notices: skipped without the
+# DISCORD_WEBHOOK_URL secret, and an API or Discord failure only warns.
+# ---------------------------------------------------------------------
+
+on:
+  deployment_status:
+
+run-name: "Approval notify: ${{ github.event.deployment.environment }} ${{ github.event.deployment_status.state }}"
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Notify Discord
+    if: contains(fromJSON('["waiting", "queued", "error", "failure"]'), github.event.deployment_status.state)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # The deployment's status history (was it gated? first of its state?).
+      deployments: read
+      # The gated job and run, and the run's approvals (who approved/rejected).
+      actions: read
+    steps:
+      - name: Notify Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          STATE: ${{ github.event.deployment_status.state }}
+          STATUS_ID: ${{ github.event.deployment_status.id }}
+          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
+          ENV_NAME: ${{ github.event.deployment.environment }}
+          REF: ${{ github.event.deployment.ref }}
+          SHA: ${{ github.event.deployment.sha }}
+          LOG_URL: ${{ github.event.deployment_status.log_url }}
+        run: |
+          set -uo pipefail
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping"
+            exit 0
+          fi
+
+          statuses=$(gh api "repos/$REPO/deployments/$DEPLOYMENT_ID/statuses?per_page=100") || {
+            echo "::warning::could not read the statuses of deployment $DEPLOYMENT_ID"
+            exit 0
+          }
+          # GitHub often records the same state twice: only the first one posts.
+          first=$(jq -r --arg s "$STATE" '[.[] | select(.state == $s) | .id] | min // empty' <<<"$statuses")
+          if [[ "$first" != "$STATUS_ID" ]]; then
+            echo "status $STATUS_ID is a repeat of '$STATE' (first: ${first:-none}); skipping"
+            exit 0
+          fi
+          # `error` / `failure` after the job was released is the job's own result, not a gate outcome.
+          states=$(jq -r '[.[].state] | unique | join(" ")' <<<"$statuses")
+          if [[ "$STATE" == error || "$STATE" == failure ]] &&
+            [[ " $states " == *" queued "* || " $states " == *" in_progress "* ]]; then
+            echo "deployment $DEPLOYMENT_ID ended '$STATE' after it started; skipping"
+            exit 0
+          fi
+
+          # log_url is .../actions/runs/<run id>/job/<job id> of the gated job.
+          if [[ ! "$LOG_URL" =~ /actions/runs/([0-9]+)/.*job/([0-9]+) ]]; then
+            echo "::warning::deployment status has no Actions job URL ('$LOG_URL')"
+            exit 0
+          fi
+          run_id=${BASH_REMATCH[1]}
+          job_id=${BASH_REMATCH[2]}
+
+          # Gate check first, so an ungated job costs one or two API calls.
+          decision='{}'
+          reviewers=""
+          if [[ "$STATE" == waiting ]]; then
+            # Gated only if the run lists this environment as pending review.
+            # One retry: the list can trail the status by a moment.
+            pending=""
+            for attempt in 1 2; do
+              list=$(gh api "repos/$REPO/actions/runs/$run_id/pending_deployments") || {
+                echo "::warning::could not read the pending deployments of run $run_id; no notice posted"
+                exit 0
+              }
+              pending=$(jq -c --arg e "$ENV_NAME" '[.[] | select(.environment.name == $e)] | first // empty' <<<"$list")
+              [[ -n "$pending" || "$attempt" == 2 ]] && break
+              sleep 3
+            done
+            if [[ -z "$pending" ]]; then
+              echo "$ENV_NAME is not pending review in run $run_id (ungated, or already reviewed); skipping"
+              exit 0
+            fi
+            reviewers=$(jq -r '[.reviewers[]?.reviewer | .login // .slug // .name] | map(select(. != null)) | join(", ")' <<<"$pending")
+          else
+            want=approved
+            [[ "$STATE" == queued ]] || want=rejected
+            reviews=$(gh api "repos/$REPO/actions/runs/$run_id/approvals") || {
+              echo "::warning::could not read the reviews of run $run_id; no notice posted"
+              exit 0
+            }
+            decision=$(jq -c --arg s "$want" --arg e "$ENV_NAME" \
+              '[.[] | select(.state == $s and any(.environments[]; .name == $e))] | last // {}' <<<"$reviews")
+            if [[ "$(jq -r '.user.login // empty' <<<"$decision")" == "" ]]; then
+              echo "no '$want' review of $ENV_NAME in run $run_id (ungated, cancelled, superseded or timed out); skipping"
+              exit 0
+            fi
+          fi
+
+          # A real gate. Without the run and the job the skip rules below can't
+          # be trusted, so a failed lookup posts nothing instead of a duplicate.
+          if ! run=$(gh api "repos/$REPO/actions/runs/$run_id") || ! job=$(gh api "repos/$REPO/actions/jobs/$job_id"); then
+            echo "::warning::could not read run $run_id / job $job_id; no notice posted"
+            exit 0
+          fi
+          job_name=$(jq -r '.name // "unknown job"' <<<"$job")
+          # The run's own name is its run-name (CD: "CD <sha>: <title>"), so
+          # identify the workflow by file and show the workflow's name.
+          wf_path=$(jq -r '.path // ""' <<<"$run")
+          wf_id=$(jq -r '.workflow_id // empty' <<<"$run")
+          workflow=""
+          if [[ -n "$wf_id" ]]; then
+            workflow=$(gh api "repos/$REPO/actions/workflows/$wf_id" --jq '.name // ""' 2>/dev/null) || workflow=""
+          fi
+          workflow=${workflow:-${wf_path##*/}}
+          workflow=${workflow:-unknown workflow}
+          run_url="$SERVER/$REPO/actions/runs/$run_id"
+
+          case "$STATE" in
+            waiting)
+              if [[ "$wf_path" == .github/workflows/cd.yml* ]]; then
+                echo "CD's promote job posts the prod approval notice; skipping"
+                exit 0
+              fi
+              kind=waiting
+              title="Approval needed: $ENV_NAME"; color=16760576
+              text="**$workflow** is waiting on the \`$ENV_NAME\` environment. Open the run, click **Review deployments**, tick **$ENV_NAME**, then **Approve and deploy** (or **Reject**)."
+              ;;
+            queued)
+              if [[ "$ENV_NAME" == prod && "$job_name" =~ (^|/\ )deploy\ \(prod\)$ ]]; then
+                echo "deploy.yml posts the prod approval itself; skipping"
+                exit 0
+              fi
+              kind=approved
+              title="Approved: $ENV_NAME"; color=3447003
+              text="**$workflow** was approved for \`$ENV_NAME\` and is starting."
+              ;;
+            *)
+              if [[ "$wf_path" == .github/workflows/cd.yml* ]]; then
+                echo "CD's summary job posts the prod outcome; skipping"
+                exit 0
+              fi
+              kind=rejected
+              title="Rejected: $ENV_NAME"; color=9807270
+              text="**$workflow** was rejected for \`$ENV_NAME\`. The gated job did not run."
+              ;;
+          esac
+
+          body=$(jq -n --arg title "$title" --argjson color "$color" --arg text "$text" \
+            --arg run_url "$run_url" --arg job "$job_name" --arg kind "$kind" --arg reviewers "$reviewers" \
+            --arg ref "$REF" --arg sha "${SHA::7}" --arg commit "$SERVER/$REPO/commit/$SHA" \
+            --argjson run "$run" --argjson d "$decision" '
+              def text: if (. // "") == "" then "-" else . end;
+              {
+              allowed_mentions: {parse: []},
+              embeds: [{
+                title: $title,
+                url: $run_url,
+                color: $color,
+                description: $text,
+                fields: ([
+                  {name: "Job", value: ($job | text)[0:200], inline: true},
+                  {name: "Started by", value: "\($run.triggering_actor.login // "unknown") (\($run.event // "unknown"))", inline: true},
+                  {name: "Commit", value: "[`\($sha)`](\($commit)) on `\($ref[0:100])`", inline: true},
+                  {name: "Run", value: ($run.display_title | text)[0:200]}
+                ]
+                + (if $reviewers != "" then [{name: "Reviewers", value: $reviewers[0:200], inline: true}] else [] end)
+                + (if $kind == "approved" then [{name: "Approved by", value: $d.user.login, inline: true}] else [] end)
+                + (if $kind == "rejected" then [{name: "Rejected by", value: $d.user.login, inline: true}] else [] end)
+                + (if ($d.comment // "") != "" then [{name: "Comment", value: $d.comment[0:1000]}] else [] end))
+              }]
+            }') || {
+            echo "::warning::could not build the Discord message"
+            exit 0
+          }
+          curl -fsS --retry 3 --max-time 15 -H 'Content-Type: application/json' \
+            -d "$body" "$WEBHOOK" >/dev/null \
+            || echo "::warning::could not post the $kind notice to Discord"

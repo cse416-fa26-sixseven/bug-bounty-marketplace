@@ -239,6 +239,7 @@ test cluster through `_ephemeral-env.yml`, and `infra-janitor.yml` deletes expir
 | `env-power.yml`        | on-demand power: `status`, `pause`, `resume`, `down`, `up`, plus schedules              |
 | `contracts-deploy.yml` | dispatch-only Sepolia deploy via `Deploy.s.sol`, dry run by default                     |
 | `infra-janitor.yml`    | every 6 h: sweep expired ephemeral resources and orphaned state, ACR purge              |
+| `approval-notify.yml`  | Discord notice for any Environment approval gate: waiting, approved, rejected           |
 
 ### 6. Cluster platform
 
