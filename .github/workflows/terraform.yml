@@ -487,3 +487,68 @@ jobs:
           STACK: ${{ steps.target.outputs.stack }}
           TF_ENV: ${{ steps.target.outputs.env }}
         run: ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" apply tfplan
+
+  # ---------------------------------------------------------------------
+  # Discord notices for the reviewer gates above (_approval-notify.yml):
+  # "approval needed" when the run reaches it, then the outcome (rejected,
+  # or the job's result and who approved). Ungated environments post
+  # nothing. The gated jobs never depend on these.
+  # ---------------------------------------------------------------------
+  notify-apply-global:
+    name: Notify / apply global
+    needs: [gate, changes]
+    if: needs.changes.outputs.global == 'true'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: infra-global
+      phase: waiting
+      job: apply global
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  notify-apply-global-outcome:
+    name: Notify / apply global
+    needs: apply-global
+    if: always() && needs.apply-global.result != 'skipped'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: infra-global
+      phase: outcome
+      job: apply global
+      result: ${{ needs.apply-global.result }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  # `environment` is the dispatch job's expression, verbatim.
+  notify-dispatch:
+    name: Notify / ${{ inputs.action }} ${{ inputs.stack }}
+    needs: gate
+    if: github.event_name == 'workflow_dispatch' && needs.gate.outputs.enabled == 'true'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: ${{ inputs.stack == 'global' && 'infra-global' || (startsWith(inputs.stack, 'test-') && 'test-infra' || (startsWith(inputs.stack, 'staging-') && 'staging' || 'prod')) }}
+      phase: waiting
+      job: ${{ inputs.action }} ${{ inputs.stack }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  notify-dispatch-outcome:
+    name: Notify / ${{ inputs.action }} ${{ inputs.stack }}
+    needs: dispatch
+    if: always() && needs.dispatch.result != 'skipped'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: ${{ inputs.stack == 'global' && 'infra-global' || (startsWith(inputs.stack, 'test-') && 'test-infra' || (startsWith(inputs.stack, 'staging-') && 'staging' || 'prod')) }}
+      phase: outcome
+      job: ${{ inputs.action }} ${{ inputs.stack }}
+      result: ${{ needs.dispatch.result }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

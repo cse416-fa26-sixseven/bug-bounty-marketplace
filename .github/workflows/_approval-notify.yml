@@ -1,0 +1,182 @@
+name: _approval-notify
+
+# ---------------------------------------------------------------------
+# Reusable stage: Discord notices for a job gated by an Environment's
+# required reviewers (docs/devops/cd.md, "Discord notifications").
+# A workflow adds two calls around its gated job:
+#
+#   notify-<job>:            phase: waiting   same `needs` / `if` as the gated
+#                                             job, NOT needed by it
+#   notify-<job>-outcome:    phase: outcome   needs: <job>, `if: always() && ...`,
+#                                             result: needs.<job>.result
+#
+#   waiting  "Approval needed": posted when the run reaches the gated job.
+#   outcome  "Rejected" (who, comment), or the job's result with who
+#            approved it. Nothing when the gate was never reviewed
+#            (cancelled, superseded, timed out).
+#
+# The caller passes the gated job's `environment:` expression verbatim.
+# Whether that environment is gated is read from its protection rules, so
+# an ungated one (test-infra, staging, prod-power) posts nothing and
+# callers need no list of gated environments.
+#
+# The calling job must grant `actions: read` (the run's reviews) and pass
+# DISCORD_WEBHOOK_URL. Optional and non-blocking: skipped without the
+# secret, and an API or Discord failure only warns. The gated job must
+# not `need` the waiting call, so a notifier problem can't hold it up.
+#
+# CD's prod gate has its own richer notices (cd.yml `promote` / `summary`).
+# ---------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: The gated job's GitHub Environment.
+        type: string
+        required: true
+      phase:
+        description: waiting (before the gated job) | outcome (after it).
+        type: string
+        required: true
+      job:
+        description: What is being gated, for the message (e.g. "apply prod-compute").
+        type: string
+        required: true
+      result:
+        description: "phase outcome: needs.<gated job>.result, or 'skipped' when the job ran but did nothing."
+        type: string
+        default: ''
+      job_ran:
+        description: >-
+          phase outcome, optional: 'false' when the gated job never started. Needed when one run
+          has two gates on the same environment (env-power up, then its redeploy): the run's
+          reviews don't say which gate they answered, so without this an earlier gate's approval
+          would be reported for a later gate that was cancelled unreviewed.
+        type: string
+        default: ''
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        description: Discord channel webhook; without it nothing is posted.
+        required: false
+
+permissions: {}
+
+jobs:
+  notify:
+    name: ${{ inputs.phase }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # The run's reviews (who approved / rejected).
+      actions: read
+    steps:
+      - name: Notify Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW: ${{ github.workflow }}
+          ACTOR: ${{ github.triggering_actor }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ENV_NAME: ${{ inputs.environment }}
+          PHASE: ${{ inputs.phase }}
+          JOB: ${{ inputs.job }}
+          RESULT: ${{ inputs.result }}
+          JOB_RAN: ${{ inputs.job_ran }}
+        run: |
+          set -uo pipefail
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping"
+            exit 0
+          fi
+          run_url="$SERVER/$REPO/actions/runs/$RUN_ID"
+          who=""
+          comment=""
+
+          case "$PHASE" in
+            waiting)
+              # Gated = the environment has a required-reviewers rule.
+              rules=$(gh api "repos/$REPO/environments/$ENV_NAME" --jq '[.protection_rules[]?.type] | join(" ")') || {
+                echo "::warning::could not read the protection rules of $ENV_NAME; no notice posted"
+                exit 0
+              }
+              if [[ " $rules " != *" required_reviewers "* ]]; then
+                echo "$ENV_NAME has no required reviewers; nothing to announce"
+                exit 0
+              fi
+              who=$(gh api "repos/$REPO/environments/$ENV_NAME" --jq \
+                '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?.reviewer
+                  | .login // .slug // .name] | map(select(. != null)) | join(", ")') || who=""
+              title="Approval needed: $ENV_NAME"; color=16760576; who_label="Reviewers"
+              text="**$WORKFLOW** ($JOB) is waiting on the \`$ENV_NAME\` environment. Open the run, click **Review deployments**, tick **$ENV_NAME**, then **Approve and deploy** (or **Reject**)."
+              ;;
+            outcome)
+              reviews=$(gh api "repos/$REPO/actions/runs/$RUN_ID/approvals") || {
+                echo "::warning::could not read the reviews of run $RUN_ID; no notice posted"
+                exit 0
+              }
+              # The last review of this environment decides.
+              review=$(jq -c --arg e "$ENV_NAME" \
+                '[.[] | select(any(.environments[]; .name == $e))] | last // {}' <<<"$reviews")
+              state=$(jq -r '.state // ""' <<<"$review")
+              who=$(jq -r '.user.login // ""' <<<"$review")
+              comment=$(jq -r '.comment // ""' <<<"$review")
+              if [[ "$state" == approved && "$JOB_RAN" == false ]]; then
+                echo "the last $ENV_NAME approval in run $RUN_ID was for an earlier gate; this job never started"
+                state=""
+              fi
+              case "$state/$RESULT" in
+                rejected/*)
+                  title="Rejected: $ENV_NAME"; color=9807270; who_label="Rejected by"
+                  text="**$WORKFLOW** ($JOB) was rejected for \`$ENV_NAME\`. The gated job did not run." ;;
+                approved/success)
+                  title="Done: $ENV_NAME"; color=3066993; who_label="Approved by"
+                  text="**$WORKFLOW** ($JOB) succeeded on \`$ENV_NAME\`." ;;
+                approved/skipped)
+                  title="Skipped: $ENV_NAME"; color=9807270; who_label="Approved by"
+                  text="**$WORKFLOW** ($JOB) was approved for \`$ENV_NAME\` but did nothing (the environment is paused or down?). Check the run." ;;
+                approved/cancelled)
+                  title="Cancelled: $ENV_NAME"; color=9807270; who_label="Approved by"
+                  text="**$WORKFLOW** ($JOB) was approved for \`$ENV_NAME\`, then cancelled." ;;
+                approved/*)
+                  title="Failed: $ENV_NAME"; color=15158332; who_label="Approved by"
+                  text="**$WORKFLOW** ($JOB) was approved for \`$ENV_NAME\` and ended \`${RESULT:-unknown}\`. Check the run." ;;
+                *)
+                  echo "no review of $ENV_NAME in run $RUN_ID (ungated, cancelled, superseded or timed out); nothing to announce"
+                  exit 0 ;;
+              esac
+              ;;
+            *)
+              echo "::warning::unknown phase '$PHASE'"
+              exit 0
+              ;;
+          esac
+
+          body=$(jq -n --arg title "$title" --argjson color "$color" --arg text "$text" --arg run_url "$run_url" \
+            --arg actor "$ACTOR" --arg event "$EVENT" --arg ref "$REF_NAME" --arg sha "${SHA::7}" \
+            --arg commit "$SERVER/$REPO/commit/$SHA" --arg who_label "$who_label" --arg who "$who" --arg comment "$comment" '{
+              allowed_mentions: {parse: []},
+              embeds: [{
+                title: $title,
+                url: $run_url,
+                color: $color,
+                description: $text,
+                fields: ([
+                  {name: "Started by", value: "\($actor) (\($event))", inline: true},
+                  {name: "Commit", value: "[`\($sha)`](\($commit)) on `\($ref[0:100])`", inline: true}
+                ]
+                + (if $who != "" then [{name: $who_label, value: $who[0:200], inline: true}] else [] end)
+                + (if $comment != "" then [{name: "Comment", value: $comment[0:1000]}] else [] end))
+              }]
+            }') || {
+            echo "::warning::could not build the Discord message"
+            exit 0
+          }
+          curl -fsS --retry 3 --max-time 15 -H 'Content-Type: application/json' \
+            -d "$body" "$WEBHOOK" >/dev/null \
+            || echo "::warning::could not post the $PHASE notice to Discord"
