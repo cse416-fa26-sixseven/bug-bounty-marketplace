@@ -89,6 +89,27 @@ gh secret set DISCORD_WEBHOOK_URL   # paste the URL at the prompt
 An unanswered approval isn't a problem: the next green main build cancels the older CD run while
 it's still waiting (see Concurrency), and GitHub fails a job that has waited 30 days for approval.
 
+#### Every other approval gate
+
+`approval-notify.yml` covers the gates CD doesn't: Terraform's `Apply global` and dispatch applies
+(`infra-global`, `prod`), env-power's prod actions, the janitor's ACR purge (`infra-global`),
+`contracts-deploy.yml` (`contracts-sepolia`), and any gate added later. It posts to the same webhook:
+
+1. **Approval needed**: workflow, job, who started the run, commit, and the reviewers.
+2. **Approved**: who approved, with their comment.
+3. **Rejected**: who rejected, with their comment. A gate that is cancelled or times out posts nothing.
+
+It runs on `deployment_status`, which GitHub emits for every job with an `environment:`. Ungated
+jobs pass through the same `waiting` and `queued` states, so the workflow asks the run itself:
+the environment must be in the run's pending deployments (waiting) or have an approved or rejected
+review. No environment or workflow name is listed in it; giving an Environment required reviewers
+is enough. It leaves alone what is already posted above: CD's prod gate (waiting and outcome) and
+`deploy.yml`'s prod "approved" notice.
+
+Two limits: the workflow file is read from the deployment's commit, so a gated run on a branch
+without `approval-notify.yml` posts nothing; and every environment job in any workflow also starts
+a few short `Approval notify` runs that skip or exit without posting.
+
 ## Paused or down envs
 
 `cd.yml` calls `deploy.yml` with `resume_if_paused: true`:
