@@ -644,6 +644,6 @@ jobs:
       # outputs.result: 'deployed' | 'skipped' (green, but the env was paused or
       # down), empty when the job never started (its gate was never approved).
       result: ${{ (needs.deploy.result == 'success' && needs.deploy.outputs.result == 'skipped') && 'skipped' || needs.deploy.result }}
-      job_ran: ${{ needs.deploy.outputs.result != '' }}
+      job_ran: ${{ needs.deploy.outputs.result != '' && 'true' || 'false' }}
     secrets:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
