@@ -252,7 +252,7 @@ bootstrap repo variables exist.
 | `env-power.yml`         | manual, schedules                             | `status` / `pause` / `resume` / `down` / `up` for test/staging/prod, nightly auto-pause            |
 | `contracts-deploy.yml`  | manual                                        | deploy the contracts to Sepolia (dry run by default)                                               |
 | `infra-janitor.yml`     | every 6 h, weekly, manual                     | delete expired ephemeral namespaces, weekly ACR purge                                              |
-| `approval-notify.yml`   | any Environment deployment status             | Discord notice when a job waits on a reviewer, is approved or is rejected                          |
+| `_approval-notify.yml`  | called by gated workflows                     | reusable: Discord notice when a job waits on a reviewer, and its outcome                           |
 
 ## Infrastructure and environments
 

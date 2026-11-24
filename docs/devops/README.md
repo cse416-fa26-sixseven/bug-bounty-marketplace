@@ -35,4 +35,4 @@ one-command bring-up), which supersedes parts of 0001.
 - Workflows in [`.github/workflows/`](../../.github/workflows/): `ci.yml` (Azure-free, `CI OK`
   gate), `_build-push.yml`, `_ephemeral-env.yml`, `integration-azure.yml`, `preview.yml`,
   `terraform.yml`, `deploy.yml`, `cd.yml`, `env-power.yml`, `contracts-deploy.yml`, `infra-janitor.yml`,
-  `approval-notify.yml`.
+  `_approval-notify.yml`.

@@ -632,3 +632,46 @@ jobs:
         env:
           ENV_NAME: ${{ matrix.env }}
         run: infra/terraform/scripts/env-power.sh "$ENV_NAME" repause-db
+
+  # ---------------------------------------------------------------------
+  # Discord notices for the reviewer gates on manual power actions (_approval-notify.yml):
+  # "approval needed" when the run reaches it, then the outcome (rejected,
+  # or the job's result and who approved). Ungated environments post
+  # nothing. The gated jobs never depend on these.
+  # ---------------------------------------------------------------------
+  # One pair for power / down / up (one of them runs per dispatch).
+  # `environment` is the power job's expression, which equals the down / up
+  # one for those actions. Only prod resume / down / up is gated; the
+  # redeploy after `up` is announced by deploy.yml itself.
+  notify-power:
+    name: Notify / ${{ inputs.action }} (${{ inputs.env }})
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.action != 'status' &&
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: ${{ inputs.env == 'test' && 'test-infra' || ((inputs.env == 'prod' && inputs.action == 'pause') && 'prod-power' || inputs.env) }}
+      phase: waiting
+      job: ${{ inputs.action }} ${{ inputs.env }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  notify-power-outcome:
+    name: Notify / ${{ inputs.action }} (${{ inputs.env }})
+    needs: [power, down, up]
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' &&
+      (needs.power.result != 'skipped' || needs.down.result != 'skipped' || needs.up.result != 'skipped')
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: ${{ inputs.env == 'test' && 'test-infra' || ((inputs.env == 'prod' && inputs.action == 'pause') && 'prod-power' || inputs.env) }}
+      phase: outcome
+      job: ${{ inputs.action }} ${{ inputs.env }}
+      result: ${{ needs.power.result != 'skipped' && needs.power.result || (needs.down.result != 'skipped' && needs.down.result || needs.up.result) }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

@@ -608,3 +608,39 @@ jobs:
             echo "- Smoke: $([[ "$SMOKE" == true ]] && echo passed || echo skipped)"
             echo "- $tag_line"
           } >>"$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Discord notices for the prod reviewer gate (_approval-notify.yml) on
+  # manual deploys and env-power redeploys. Under CD, cd.yml's `promote`
+  # and `summary` jobs post instead. The deploy job never depends on these.
+  # ---------------------------------------------------------------------
+  notify:
+    name: Notify
+    if: >-
+      inputs.env == 'prod' && github.workflow != 'CD' &&
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: ${{ inputs.env }}
+      phase: waiting
+      job: deploy ${{ inputs.image_tag || 'the last deployed tag' }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  notify-outcome:
+    name: Notify
+    needs: deploy
+    if: always() && inputs.env == 'prod' && github.workflow != 'CD' && needs.deploy.result != 'skipped'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: ${{ inputs.env }}
+      phase: outcome
+      job: deploy ${{ inputs.image_tag || 'the last deployed tag' }}
+      result: ${{ needs.deploy.result }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

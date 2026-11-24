@@ -188,3 +188,39 @@ jobs:
             contracts/deployments/
           if-no-files-found: ignore
           retention-days: 90
+
+  # ---------------------------------------------------------------------
+  # Discord notices for the reviewer gate on the deploy (_approval-notify.yml):
+  # "approval needed" when the run reaches it, then the outcome (rejected,
+  # or the job's result and who approved). Ungated environments post
+  # nothing. The gated job never depends on these.
+  # ---------------------------------------------------------------------
+  notify-deploy:
+    name: Notify / deploy
+    if: >-
+      vars.AZURE_SUBSCRIPTION_ID != '' &&
+      vars.AZURE_LOCATION != '' && vars.AZURE_LOCATION_ABBR != ''
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: contracts-${{ inputs.network }}
+      phase: waiting
+      job: ${{ inputs.network }}, ${{ inputs.broadcast && 'broadcast' || 'dry run' }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  notify-deploy-outcome:
+    name: Notify / deploy
+    needs: deploy
+    if: always() && needs.deploy.result != 'skipped'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: contracts-${{ inputs.network }}
+      phase: outcome
+      job: ${{ inputs.network }}, ${{ inputs.broadcast && 'broadcast' || 'dry run' }}
+      result: ${{ needs.deploy.result }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

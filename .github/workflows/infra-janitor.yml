@@ -336,3 +336,38 @@ jobs:
         run: |
           echo "::warning::Could not read deployed tags from staging/prod; ACR purge skipped."
           exit 1
+
+  # ---------------------------------------------------------------------
+  # Discord notices for the reviewer gate on the ACR purge (_approval-notify.yml):
+  # "approval needed" when the run reaches it, then the outcome (rejected,
+  # or the job's result and who approved). Ungated environments post
+  # nothing. The gated job never depends on these.
+  # ---------------------------------------------------------------------
+  notify-acr-purge:
+    name: Notify / ACR purge
+    needs: [gate, protected-tags]
+    if: ${{ always() && needs.gate.outputs.acr_purge == 'true' && needs.protected-tags.result == 'success' }}
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: infra-global
+      phase: waiting
+      job: ACR purge
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  notify-acr-purge-outcome:
+    name: Notify / ACR purge
+    needs: acr-purge
+    if: always() && needs.acr-purge.result != 'skipped'
+    permissions:
+      actions: read
+    uses: ./.github/workflows/_approval-notify.yml
+    with:
+      environment: infra-global
+      phase: outcome
+      job: ACR purge
+      result: ${{ needs.acr-purge.result }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

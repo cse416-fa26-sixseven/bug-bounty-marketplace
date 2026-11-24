@@ -91,25 +91,30 @@ it's still waiting (see Concurrency), and GitHub fails a job that has waited 30 
 
 #### Every other approval gate
 
-`approval-notify.yml` covers the gates CD doesn't: Terraform's `Apply global` and dispatch plans and
-applies on the global and prod stacks, env-power's prod `resume` / `down` / `up`, manual and
-env-power prod deploys (waiting and rejected), the janitor's ACR purge (`infra-global`),
-`contracts-deploy.yml` (`contracts-sepolia`), and any gate added later. It posts to the same webhook:
+The other gates use a shared stage, the reusable workflow `_approval-notify.yml`, and post to the
+same webhook:
 
-1. **Approval needed**: workflow, job, who started the run, commit, and the reviewers.
-2. **Approved**: who approved, with their comment.
-3. **Rejected**: who rejected, with their comment. A gate that is cancelled or times out posts nothing.
+1. **Approval needed** (`phase: waiting`, when the run reaches the gated job): workflow, what is
+   gated, who started the run, commit, and the reviewers.
+2. **Outcome** (`phase: outcome`, after the gated job): **Rejected** (by whom, with the comment),
+   or **Done** / **Failed** / **Cancelled** with who approved. A gate that was never reviewed
+   (cancelled, superseded, timed out) posts nothing. The approval itself isn't announced when it
+   happens; the outcome message names the approver.
 
-It runs on `deployment_status`, which GitHub emits for every job with an `environment:`. Ungated
-jobs pass through the same `waiting` and `queued` states, so the workflow asks the run itself:
-the environment must be in the run's pending deployments (waiting) or have an approved or rejected
-review. No environment or workflow name is listed in it; giving an Environment required reviewers
-is enough. It leaves alone what is already posted above: CD's prod gate (waiting and outcome) and
-`deploy.yml`'s prod "approved" notice.
+| workflow               | gated job                                             | environment            |
+| ---------------------- | ----------------------------------------------------- | ---------------------- |
+| `terraform.yml`        | `Apply global`; dispatch plan / apply                 | `infra-global`, `prod` |
+| `env-power.yml`        | prod `resume` / `down` / `up`                         | `prod`                 |
+| `deploy.yml`           | manual prod deploy, env-power redeploy (not under CD) | `prod`                 |
+| `infra-janitor.yml`    | `ACR purge`                                           | `infra-global`         |
+| `contracts-deploy.yml` | `deploy`                                              | `contracts-sepolia`    |
 
-Two limits: the workflow file is read from the deployment's commit, so a gated run on a branch
-without `approval-notify.yml` posts nothing; and every environment job in any workflow also starts
-a few short `Approval notify` runs that skip or exit without posting.
+To cover a new gated job, add two calls next to it (see the header of `_approval-notify.yml`): one
+with the gated job's `needs` / `if` and `phase: waiting`, one that `needs` it with `phase: outcome`
+and `result: needs.<job>.result`. Both pass the job's `environment:` expression, grant
+`actions: read` and pass `DISCORD_WEBHOOK_URL`. The stage reads the environment's protection
+rules, so a call for an ungated environment (`staging`, `test-infra`, `prod-power`) posts nothing.
+The gated job never `needs` the calls, so the notifier can't hold it up.
 
 ## Paused or down envs
 
