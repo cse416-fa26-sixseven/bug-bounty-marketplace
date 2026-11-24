@@ -116,6 +116,17 @@ and `result: needs.<job>.result`. Both pass the job's `environment:` expression,
 rules, so a call for an ungated environment (`staging`, `test-infra`, `prod-power`) posts nothing.
 The gated job never `needs` the calls, so the notifier can't hold it up.
 
+Known limits of the "approval needed" notice, which is posted when the run reaches the gate and not
+by the gate itself:
+
+- **Re-run failed jobs** asks for approval again without a new notice (the waiting call already
+  succeeded and isn't re-run). **Re-run all jobs** posts one.
+- A job queued behind its concurrency group (`env-prod`, `tf-global`, the ACR purge) is announced
+  before **Review deployments** appears.
+- A dispatch from a branch other than `main` to `prod` or `infra-global` is announced, then fails
+  on the environment's branch policy with nothing to approve.
+- An admin bypass of the gate records no review, so no outcome follows.
+
 ## Paused or down envs
 
 `cd.yml` calls `deploy.yml` with `resume_if_paused: true`:

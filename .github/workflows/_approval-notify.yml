@@ -44,7 +44,15 @@ on:
         type: string
         required: true
       result:
-        description: 'phase outcome: needs.<gated job>.result.'
+        description: "phase outcome: needs.<gated job>.result, or 'skipped' when the job ran but did nothing."
+        type: string
+        default: ''
+      job_ran:
+        description: >-
+          phase outcome, optional: 'false' when the gated job never started. Needed when one run
+          has two gates on the same environment (env-power up, then its redeploy): the run's
+          reviews don't say which gate they answered, so without this an earlier gate's approval
+          would be reported for a later gate that was cancelled unreviewed.
         type: string
         default: ''
     secrets:
@@ -79,6 +87,7 @@ jobs:
           PHASE: ${{ inputs.phase }}
           JOB: ${{ inputs.job }}
           RESULT: ${{ inputs.result }}
+          JOB_RAN: ${{ inputs.job_ran }}
         run: |
           set -uo pipefail
           if [[ -z "$WEBHOOK" ]]; then
@@ -117,6 +126,10 @@ jobs:
               state=$(jq -r '.state // ""' <<<"$review")
               who=$(jq -r '.user.login // ""' <<<"$review")
               comment=$(jq -r '.comment // ""' <<<"$review")
+              if [[ "$state" == approved && "$JOB_RAN" == false ]]; then
+                echo "the last $ENV_NAME approval in run $RUN_ID was for an earlier gate; this job never started"
+                state=""
+              fi
               case "$state/$RESULT" in
                 rejected/*)
                   title="Rejected: $ENV_NAME"; color=9807270; who_label="Rejected by"
@@ -124,6 +137,9 @@ jobs:
                 approved/success)
                   title="Done: $ENV_NAME"; color=3066993; who_label="Approved by"
                   text="**$WORKFLOW** ($JOB) succeeded on \`$ENV_NAME\`." ;;
+                approved/skipped)
+                  title="Skipped: $ENV_NAME"; color=9807270; who_label="Approved by"
+                  text="**$WORKFLOW** ($JOB) was approved for \`$ENV_NAME\` but did nothing (the environment is paused or down?). Check the run." ;;
                 approved/cancelled)
                   title="Cancelled: $ENV_NAME"; color=9807270; who_label="Approved by"
                   text="**$WORKFLOW** ($JOB) was approved for \`$ENV_NAME\`, then cancelled." ;;
