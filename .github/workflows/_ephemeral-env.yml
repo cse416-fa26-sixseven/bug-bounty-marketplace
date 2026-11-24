@@ -143,13 +143,13 @@ jobs:
 
       - name: Checkout
         if: inputs.action == 'deploy'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # delete only needs the test env's region. Read it from the default
       # branch, not the PR ref: a closed PR's merge ref or branch may be gone.
       - name: Checkout region files (default branch)
         if: inputs.action == 'delete'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch || 'main' }}
           sparse-checkout: |

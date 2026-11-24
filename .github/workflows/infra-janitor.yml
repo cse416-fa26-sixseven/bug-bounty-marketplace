@@ -125,7 +125,7 @@ jobs:
     steps:
       # Not bound to an Environment: the staging/prod regions come from their tfvars.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Plan output and az errors print full resource IDs; keep the
       # subscription ID out of the public logs (ADR 0003).
@@ -185,7 +185,7 @@ jobs:
       APPLY: ${{ needs.gate.outputs.apply }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup kubelogin
         uses: azure/use-kubelogin@v1
